@@ -7,7 +7,7 @@
   if (!document.documentElement || !document.body) return null;
   window.__antigravityChineseHelper?.uninstall?.();
 
-  const VERSION = '0.3.5';
+  const VERSION = '0.3.6';
   let strings = dictionary.strings || dictionary;
   let stopped = false;
   let flushTask = null;
@@ -52,10 +52,13 @@
   const shadow = host.attachShadow({mode:'open'});
   const style = document.createElement('style');
   style.textContent = `
-    :host { display:inline-flex; align-items:center; gap:4px; flex:0 0 auto; vertical-align:middle; margin-inline-start:3px; color:var(--secondary-foreground,#b6bbc4); }
+    :host { display:inline-flex; align-items:center; flex-wrap:wrap; gap:3px 4px; flex:0 1 auto; min-width:0; max-width:100%; vertical-align:middle; margin-inline-start:3px; color:var(--secondary-foreground,#b6bbc4); }
     *, *::before, *::after { box-sizing:border-box; }
     [hidden] { display:none !important; }
-    .ring-item { display:inline-flex; align-items:center; }
+    .ring-item { display:inline-flex; align-items:center; flex:0 0 auto; }
+    .metric { display:inline-flex; align-items:baseline; flex:0 0 auto; gap:3px; white-space:nowrap; font:10px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    .metric-label { color:var(--muted-foreground,#9199a6); }
+    .metric-value { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-variant-numeric:tabular-nums; }
     button { position:relative; display:inline-grid; place-items:center; width:24px; height:24px; padding:2px; border:0; border-radius:50%; color:inherit; background:transparent; cursor:pointer; font:inherit; }
     button:hover, button[aria-expanded="true"] { background:var(--secondary,rgba(128,128,128,.15)); color:var(--foreground,#e8e8eb); }
     button:focus-visible { outline:1px solid var(--foreground,#e8e8eb); outline-offset:2px; }
@@ -77,6 +80,7 @@
   let active = null;
   let disposed = false;
   let current = null;
+  let currentMetrics = null;
   const numericKeys = ['used', 'maxContext', 'modelCapacity', 'compactionReference'];
   const clampFraction = value => Math.max(0, Math.min(1, value));
   const fractionText = value => value === null ? '—' : `${Math.round(value * 100)}%`;
@@ -199,6 +203,20 @@
   const quotaRows = [['remaining', '剩余比例']];
   const fiveHour = createRing('five-hour', '5 小时额度', quotaRows);
   const weekly = createRing('weekly', '每周额度', quotaRows);
+  const metricDefinitions = [
+    ['ttftMs', '首字', '最近10条回复的平均首字延迟', value => `${(value / 1000).toFixed(2)}s`],
+    ['tps', 'TPS', '最近10条回复的平均生成速度', value => value.toFixed(1)],
+    ['conversationTokens', 'Token', '对话Token使用量', formatTokens],
+    ['cacheHitRate', '缓存', '缓存命中率', value => `${(value * 100).toFixed(1)}%`],
+  ];
+  const metrics = metricDefinitions.map(([key, label, title, format]) => {
+    const item = document.createElement('span'); item.className = 'metric'; item.dataset.metric = key;
+    item.title = title;
+    const name = document.createElement('span'); name.className = 'metric-label'; name.textContent = label;
+    const value = document.createElement('span'); value.className = 'metric-value'; value.textContent = '—';
+    item.append(name, value); shadow.appendChild(item);
+    return {key, value, format};
+  });
   listen(host, 'pointerdown', event => event.stopPropagation());
   listen(host, 'mousedown', event => event.stopPropagation());
   listen(host, 'click', event => event.stopPropagation());
@@ -223,17 +241,31 @@
       next[key] = typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
     }
     next.weeklyQuota = normalizeQuota(snapshot?.weeklyQuota); next.fiveHourQuota = normalizeQuota(snapshot?.fiveHourQuota);
-    if (current && numericKeys.every(key => current[key] === next[key]) &&
-        sameQuota(current.weeklyQuota, next.weeklyQuota) && sameQuota(current.fiveHourQuota, next.fiveHourQuota)) return false;
-    current = next;
-    const limit = next.maxContext > 0 ? next.maxContext : next.compactionReference > 0 ? next.compactionReference : null;
-    const usedFraction = next.used !== null && limit !== null ? clampFraction(next.used / limit) : null;
-    const text = fractionText(usedFraction);
-    renderFraction(context, usedFraction);
-    for (const key of numericKeys) writeText(context.values[key].value, next[key] === null ? '—' : formatTokens(next[key]));
-    writeText(context.values.ratio.value, text);
-    writeAttribute(context.button, 'aria-label', `上下文已用：${text}；已用 ${next.used === null ? '未返回' : formatTokens(next.used)}；压缩阈值 ${next.compactionReference === null ? '未返回' : formatTokens(next.compactionReference)}；总可用 ${limit === null ? '未返回' : formatTokens(limit)}`);
-    updateQuota(weekly, next.weeklyQuota); updateQuota(fiveHour, next.fiveHourQuota);
+    const nextMetrics = {};
+    for (const {key} of metrics) {
+      const value = snapshot?.metrics?.[key];
+      nextMetrics[key] = typeof value === 'number' && Number.isFinite(value) && value >= 0
+        ? key === 'cacheHitRate' ? clampFraction(value) : value : null;
+    }
+    const ringsChanged = !current || !numericKeys.every(key => current[key] === next[key]) ||
+      !sameQuota(current.weeklyQuota, next.weeklyQuota) || !sameQuota(current.fiveHourQuota, next.fiveHourQuota);
+    const metricsChanged = !currentMetrics || metrics.some(({key}) => currentMetrics[key] !== nextMetrics[key]);
+    if (!ringsChanged && !metricsChanged) return false;
+    if (ringsChanged) {
+      current = next;
+      const limit = next.maxContext > 0 ? next.maxContext : next.compactionReference > 0 ? next.compactionReference : null;
+      const usedFraction = next.used !== null && limit !== null ? clampFraction(next.used / limit) : null;
+      const text = fractionText(usedFraction);
+      renderFraction(context, usedFraction);
+      for (const key of numericKeys) writeText(context.values[key].value, next[key] === null ? '—' : formatTokens(next[key]));
+      writeText(context.values.ratio.value, text);
+      writeAttribute(context.button, 'aria-label', `上下文已用：${text}；已用 ${next.used === null ? '未返回' : formatTokens(next.used)}；压缩阈值 ${next.compactionReference === null ? '未返回' : formatTokens(next.compactionReference)}；总可用 ${limit === null ? '未返回' : formatTokens(limit)}`);
+      updateQuota(weekly, next.weeklyQuota); updateQuota(fiveHour, next.fiveHourQuota);
+    }
+    if (metricsChanged) {
+      currentMetrics = nextMetrics;
+      for (const {key, value, format} of metrics) writeText(value, nextMetrics[key] === null ? '—' : format(nextMetrics[key]));
+    }
     if (active) positionTooltip(active);
     return true;
   }
@@ -426,6 +458,58 @@
     }
     return usageTotal(meta?.usage);
   }
+  function usageParts(usage) {
+    if (!usage) return null;
+    const input = count(usage.inputTokens), output = count(usage.outputTokens), cache = count(usage.cacheReadTokens ?? 0);
+    return input === null || output === null || cache === null ? null : {input, output, cache};
+  }
+  function modelMetrics(generator) {
+    const meta = generator?.metadata?.case === 'chatModel' ? generator.metadata.value : null;
+    if (!meta) return null;
+    // Match native d7: a generator contributes one selected usage, never both
+    // its top-level usage and the repeated retry snapshots.
+    const selected = [...(meta.retryInfos ?? [])].reverse().find(retry => retry.usage)?.usage ?? meta.usage;
+    const duration = value => value ? count(Number(value.seconds ?? 0) * 1000 + Number(value.nanos ?? 0) / 1000000) : null;
+    const parts = usageParts(selected), streamingMs = duration(meta.streamingDuration);
+    return {parts, ttftMs:duration(meta.timeToFirstToken), streamingMs,
+      tps:streamingMs > 0 && parts?.output > 0 ? parts.output * 1000 / streamingMs : null};
+  }
+  function conversationMetrics(instance) {
+    if (!instance.historyStats) {
+      const totals = {input:0, output:0, cache:0};
+      for (const parts of instance.usageHistory.values()) for (const key of ['input', 'output', 'cache']) totals[key] += parts[key];
+      const replies = [...instance.usageHistory].filter(([, value]) => value.tps !== null && value.tps !== undefined)
+        .sort((a, b) => b[0] - a[0]).slice(0, 10).map(([, value]) => value);
+      const average = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+      instance.historyStats = {totals,
+        ttftMs:average(replies.map(value => value.ttftMs).filter(value => value !== null && value !== undefined)),
+        tps:average(replies.map(value => value.tps)), samples:replies.length};
+    }
+    const native = instance.state?.cost;
+    const stats = instance.historyStats;
+    const totals = native ?? (instance.historyReady || instance.state?.generation === 0 ? stats.totals : null);
+    const input = totals ? totals.input + totals.cache : 0;
+    return {ttftMs:instance.historyReady ? stats.ttftMs : null,
+      tps:instance.historyReady ? stats.tps : null, samples:instance.historyReady ? stats.samples : 0,
+      conversationTokens:totals ? input + totals.output : null,
+      cacheHitRate:input > 0 ? totals.cache / input : null};
+  }
+  function storeUsage(instance, index, values) {
+    const previous = instance.usageHistory.get(index), next = {...previous, ...values};
+    // PROD_UI may omit timing already received from the metadata endpoint.
+    if (previous?.tps > 0 && !(next.tps > 0)) {
+      next.tps = previous.tps; next.ttftMs = previous.ttftMs;
+    }
+    if (previous && ['input', 'output', 'cache', 'ttftMs', 'tps'].every(key => previous[key] === next[key])) return;
+    instance.usageHistory.set(index, next); instance.historyStats = null;
+  }
+  function captureUsage(instance, state) {
+    const record = instance.record, usage = state?.usage;
+    if (record && usage?.parts && record.steps.includes(usage.step) &&
+        (usage.model === undefined || String(usage.model) === String(record.model))) {
+      storeUsage(instance, record.generation - 1, usage.parts);
+    }
+  }
   function scalarState(state) {
     const slice = state?.trajectorySlice ?? {};
     const metas = slice.generatorMetadatasInSlice ?? [];
@@ -436,12 +520,16 @@
     for (let i = steps.length - 1; i >= 0; i--) {
       const usage = steps[i].metadata?.modelUsage, total = usageTotal(usage);
       if (total !== null) {
-        latestUsage = {step:start + i, total, model:usage.model};
+        latestUsage = {step:start + i, total, model:usage.model, parts:usageParts(usage)};
         break;
       }
     }
+    const cumulative = state?.costSummary?.total?.cumulativeTotal;
+    const cost = cumulative ? {input:count(cumulative.input?.tokens ?? 0),
+      cache:count(cumulative.cacheRead?.tokens ?? 0), output:count(cumulative.output?.tokens ?? 0)} : null;
     return {id:state?.conversationId, generation:count(slice.totalGeneratorMetadataLength) ?? 0,
-      generator, usage:latestUsage, idle:state?.fullyIdle === true};
+      generator, usage:latestUsage, idle:state?.fullyIdle === true,
+      cost:cost && Object.values(cost).every(value => value !== null) ? cost : null};
   }
   function disposeSubscription(subscription) {
     if (typeof subscription === 'function') subscription();
@@ -455,7 +543,8 @@
     placement.after(view.host);
     const instance = {anchor, view, provider:null, client:null, selected:null, subscription:null,
       epoch:0, queued:false, disposed:false, state:null, record:null, models:null, config:null,
-      wanted:null, requested:null, requestedKeys:new Set(), requestBase:null, inFlight:false, lastError:null, snapshot:null};
+      wanted:null, requested:null, requestedKeys:new Set(), requestBase:null, inFlight:false, lastError:null, snapshot:null,
+      usageHistory:new Map(), historyNext:0, historyReady:false, historyStats:null};
     instances.set(anchor, instance);
     rebind(instance);
     return instance;
@@ -496,7 +585,7 @@
       outputReserve:output, estimatedTokens:record?.estimated ?? null,
       compactionBasisLabel:config ? (config.modelCount ? '模型报告用量' : '后端估算') : null,
       snapshotLabel, modelLabel:label ?? null,
-      selectedLabel:instance.selected?.label ?? null, ...quotaValues(instance,label)};
+      selectedLabel:instance.selected?.label ?? null, metrics:conversationMetrics(instance), ...quotaValues(instance,label)};
     instance.snapshot = snapshot;
     viewUpdate(instance, snapshot);
   }
@@ -520,9 +609,12 @@
     const meta = generator?.metadata?.case === 'chatModel' ? generator.metadata.value : null;
     if (!meta) return false;
     const context = meta.chatStartMetadata?.contextWindowMetadata;
+    const metrics = modelMetrics(generator);
+    if (metrics.parts) storeUsage(instance, generation - 1, {...metrics.parts, ttftMs:metrics.ttftMs, tps:metrics.tps});
     instance.record = {generation, model:meta.model, label:meta.modelDisplayName || null, responseLabel:meta.responseModel || null,
       steps:Array.from(generator.stepIndices ?? []), usage:usageFrom(meta), estimated:count(context?.estimatedTokensUsed),
       maxContext:positive(context?.maxContextTokens), planner:generator.plannerConfig, customCapacity:positive(generator.plannerConfig?.customModelInfoOverride?.maxTokens)};
+    captureUsage(instance, instance.state);
     requestConfig(instance, generator.plannerConfig, epoch);
     instance.lastError = null;
     return true;
@@ -534,18 +626,30 @@
     const epoch = instance.epoch, wanted = instance.wanted;
     instance.requested = wanted.key; instance.requestedKeys.add(wanted.key);
     try {
-      const response = await instance.client.getCascadeTrajectoryGeneratorMetadata({cascadeId:wanted.id,
-        generatorMetadataOffset:Math.max(0, wanted.generation - 1), includeMessages:false});
-      if (!valid(instance, epoch)) return;
-      if (instance.wanted?.id === wanted.id && instance.wanted?.generation === wanted.generation) {
+      let offset = Math.min(instance.historyNext, Math.max(0, wanted.generation - 1));
+      do {
+        const response = await instance.client.getCascadeTrajectoryGeneratorMetadata({cascadeId:wanted.id,
+          generatorMetadataOffset:offset, includeMessages:false});
+        if (!valid(instance, epoch) || instance.state?.id !== wanted.id) return;
         const records = response?.generatorMetadata ?? [];
-        for (let i = records.length - 1; i >= 0; i--) {
-          if (acceptRecord(instance, records[i], wanted.generation, epoch)) break;
+        if (!records.length) break;
+        for (let i = 0; i < records.length; i++) {
+          const metrics = modelMetrics(records[i]);
+          if (metrics?.parts) storeUsage(instance, offset + i, {...metrics.parts, ttftMs:metrics.ttftMs, tps:metrics.tps});
         }
+        if (offset <= instance.historyNext) instance.historyNext = Math.max(instance.historyNext, offset + records.length);
+        for (let i = records.length - 1; i >= 0; i--) {
+          if (offset + i < (instance.state?.generation ?? 0) && acceptRecord(instance, records[i], offset + i + 1, epoch)) break;
+        }
+        offset += records.length;
+      } while (offset < wanted.generation);
+      if (instance.historyNext >= wanted.generation) instance.historyReady = true;
+      if (valid(instance, epoch) && instance.state?.id === wanted.id) {
+        captureUsage(instance, instance.state);
         render(instance);
       }
     } catch {
-      if (valid(instance, epoch)) { instance.lastError = 'metadata'; render(instance); }
+      if (valid(instance, epoch) && instance.state?.id === wanted.id) { instance.lastError = 'metadata'; render(instance); }
     } finally {
       if (valid(instance, epoch)) {
         instance.inFlight = false;
@@ -559,11 +663,13 @@
     try { state = instance.provider?.getState?.(); } catch { instance.lastError = 'state'; }
     const next = scalarState(state);
     const viewId = instance.anchor.closest('[data-cascade-id]')?.getAttribute('data-cascade-id');
-    if (next.id && viewId && next.id !== viewId) { instance.record = null; instance.state = null; instance.config = null; render(instance); return; }
+    if (next.id && viewId && next.id !== viewId) { instance.record = null; instance.state = null; instance.config = null; instance.usageHistory.clear(); instance.historyNext = 0; instance.historyReady = false; instance.historyStats = null; render(instance); return; }
     if (instance.state?.id && next.id !== instance.state.id) {
       // A reused native provider must not carry the previous conversation's data.
       instance.record = null; instance.config = null; instance.requested = null;
+      instance.usageHistory.clear(); instance.historyNext = 0; instance.historyReady = false; instance.historyStats = null;
     }
+    captureUsage(instance, next);
     instance.state = next;
     const quotaEvent = `${next.id}:${next.generation}:${next.idle}`;
     if (instance.quotaEvent !== quotaEvent) {
@@ -606,6 +712,7 @@
       instance.epoch++;
       instance.provider = next.provider; instance.client = next.client;
       instance.state = instance.record = instance.config = instance.wanted = instance.requested = null;
+      instance.usageHistory.clear(); instance.historyNext = 0; instance.historyReady = false; instance.historyStats = null;
       instance.requestedKeys.clear(); instance.requestBase = null;
       instance.configPending = null; instance.configAttempted = null; instance.inFlight = false; instance.models = null;
       const epoch = instance.epoch;
