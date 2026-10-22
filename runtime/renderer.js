@@ -113,7 +113,7 @@
     .metrics-line:focus-visible { outline:1px solid var(--foreground,#e8e8eb); outline-offset:2px; }
     .metric { display:inline-flex; align-items:baseline; flex:0 0 auto; gap:3px; white-space:nowrap; font:10px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
     .metric-label { color:var(--muted-foreground,#9199a6); }
-    .metric-value { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-variant-numeric:tabular-nums; }
+    .metric-value { flex:none; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-variant-numeric:tabular-nums; text-align:right; }
     .metric-subagent { color:var(--muted-foreground,#9199a6); }
     :host([data-compact]) .metric-subagent { display:none; }
     ${tooltipStyles}
@@ -141,9 +141,12 @@
   const numericKeys = ['used', 'maxContext', 'modelCapacity', 'compactionReference'];
   const clampFraction = value => Math.max(0, Math.min(1, value));
   const fractionText = value => value === null ? '—' : `${Math.round(value * 100)}%`;
-  function formatTokens(value) {
-    if (value >= 1000000) return `${Number((value / 1000000).toFixed(1))}M`;
-    return `${(value / 1000).toFixed(2)}K`;
+  function formatTokens(value, digits) {
+    if (value >= 1000000) {
+      const formatted = (value / 1000000).toFixed(digits ?? 1);
+      return `${digits === undefined ? Number(formatted) : formatted}M`;
+    }
+    return `${(value / 1000).toFixed(digits ?? 2)}K`;
   }
   function listen(target, type, listener, options, collection = permanentListeners) {
     target.addEventListener(type, listener, options);
@@ -351,10 +354,10 @@
   const fiveHour = createRing('five-hour', '5 小时额度', quotaRows);
   const weekly = createRing('weekly', '每周额度', quotaRows);
   const metricDefinitions = [
-    ['ttftMs', '首字', value => `${(value / 1000).toFixed(2)}s`],
+    ['ttftMs', '首字', value => `${(value / 1000).toFixed(1)}s`],
     ['tps', 'TPS', value => value.toFixed(1)],
-    ['inputTokens', '输入', formatTokens],
-    ['outputTokens', '输出', formatTokens],
+    ['inputTokens', '输入', value => formatTokens(value, 1)],
+    ['outputTokens', '输出', value => formatTokens(value, 1)],
     ['cacheHitRate', '缓存', value => `${(value * 100).toFixed(1)}%`],
   ];
   const metricsGroup = document.createElement('span'); metricsGroup.className = 'metrics-group';
@@ -373,6 +376,14 @@
   }
   const subagentHeading = tableHead.lastChild;
   const tableBody = metricsTable.createTBody();
+  function writeMetric(node, cell, value, format, parenthesized) {
+    const formatted = value == null ? '—' : format(value);
+    const text = formatted.replace(/\.0(?=\D|$)/, '');
+    writeText(cell, text);
+    writeText(node, parenthesized ? `(${text})` : text);
+    // Keep the one-decimal slot even when its trailing zero is not displayed.
+    node.style.width = `${formatted.length + (parenthesized ? 2 : 0)}ch`;
+  }
   const metrics = metricDefinitions.map(([key, label, format]) => {
     const item = document.createElement('span'); item.className = 'metric'; item.dataset.metric = key;
     const name = document.createElement('span'); name.className = 'metric-label'; name.textContent = label;
@@ -462,12 +473,10 @@
       currentSubagentMetrics = nextSubagentMetrics;
       subagentHeading.hidden = !nextSubagentMetrics;
       for (const {key, value, subagent, mainCell, subagentCell, format} of metrics) {
-        const mainText = nextMetrics[key] === null ? '—' : format(nextMetrics[key]);
-        const childText = nextSubagentMetrics?.[key] == null ? '—' : format(nextSubagentMetrics[key]);
-        writeText(value, mainText); writeText(mainCell, mainText); writeText(subagentCell, childText);
+        writeMetric(value, mainCell, nextMetrics[key], format, false);
+        writeMetric(subagent, subagentCell, nextSubagentMetrics?.[key], format, true);
         subagent.hidden = !nextSubagentMetrics || key === 'ttftMs';
         subagentCell.hidden = !nextSubagentMetrics;
-        writeText(subagent, `(${childText})`);
       }
       fitMetrics();
     }
