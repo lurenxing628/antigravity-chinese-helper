@@ -7,14 +7,16 @@
   if (!document.documentElement || !document.body) return null;
   window.__antigravityChineseHelper?.uninstall?.();
 
-  const VERSION = '0.3.7';
-  let strings = dictionary.strings || dictionary;
+  const VERSION = '0.3.10';
+  let strings, normalizedStrings;
+  setStrings(dictionary);
   let stopped = false;
   let flushTask = null;
   let cleanupTimer = null;
   let batches = 0;
-  const createContextRingView = (function createContextRingView(document, anchor) {
+  const createContextRingView = (function createContextRingView(document, anchor, actions) {
   'use strict';
+  actions ??= {};
 
   const window = document.defaultView;
   // LGb is the app's own quota ring. Retain its React and global Tailwind styles.
@@ -50,25 +52,49 @@
   host.setAttribute('data-ch-keep', 'true');
   host.setAttribute('data-testid', 'context-usage-ring');
   const shadow = host.attachShadow({mode:'open'});
+  const tooltipStyles = `
+    .tooltip { position:fixed; inset:auto; z-index:2147483000; width:260px; max-width:calc(100vw - 16px); max-height:calc(100vh - 16px); margin:0; padding:6px 0; border:0; color:var(--foreground,#e8e8eb); background:transparent; overflow:auto; font:12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; text-align:left; user-select:text; }
+    .panel { padding:12px 13px; border:1px solid var(--border,#3e4149); border-radius:11px; background:var(--card,#191b20); box-shadow:0 8px 28px rgba(0,0,0,.25); }
+    .heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:9px; }
+    .title { font-size:13px; font-weight:600; }
+  `;
   const style = document.createElement('style');
   style.textContent = `
     :host { display:inline-flex; align-items:center; gap:4px; flex:0 0 auto; vertical-align:middle; margin-inline-start:3px; color:var(--secondary-foreground,#b6bbc4); }
     *, *::before, *::after { box-sizing:border-box; }
     [hidden] { display:none !important; }
     .ring-item { display:inline-flex; align-items:center; flex:0 0 auto; }
-    button { position:relative; display:inline-grid; place-items:center; width:24px; height:24px; padding:2px; border:0; border-radius:50%; color:inherit; background:transparent; cursor:pointer; font:inherit; }
+    button { color:inherit; cursor:pointer; font:inherit; }
+    .ring-trigger { position:relative; display:inline-grid; place-items:center; width:24px; height:24px; padding:2px; border:0; border-radius:50%; background:transparent; }
     button:hover, button[aria-expanded="true"] { background:var(--secondary,rgba(128,128,128,.15)); color:var(--foreground,#e8e8eb); }
     button:focus-visible { outline:1px solid var(--foreground,#e8e8eb); outline-offset:2px; }
     slot, .native-fallback { grid-area:1/1; }
     .native-fallback { display:block; width:20px; height:20px; border:2px solid var(--muted-foreground,#7d8795); border-radius:50%; opacity:.35; }
     .percentage { position:absolute; inset:0; z-index:3; display:grid; place-items:center; font:600 6.5px/1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:-.35px; font-variant-numeric:tabular-nums; pointer-events:none; }
-    .tooltip { position:fixed; inset:auto; z-index:2147483000; width:260px; max-width:calc(100vw - 16px); max-height:calc(100vh - 16px); margin:0; padding:6px 0; border:0; color:var(--foreground,#e8e8eb); background:transparent; overflow:auto; font:12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; text-align:left; user-select:text; }
-    .panel { padding:12px 13px; border:1px solid var(--border,#3e4149); border-radius:11px; background:var(--card,#191b20); box-shadow:0 8px 28px rgba(0,0,0,.25); }
-    .heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:9px; }
-    .title { font-size:13px; font-weight:600; }
+    ${tooltipStyles}
     dl { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:5px 14px; margin:0; }
     dt { color:var(--muted-foreground,#9199a6); }
     dd { min-width:0; margin:0; text-align:right; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+    .context-settings { display:grid; gap:9px; margin-bottom:12px; padding-bottom:12px; border-bottom:1px solid var(--border,#3e4149); }
+    .setting-hint { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; color:var(--muted-foreground,#9199a6); font-size:10px; line-height:1.4; }
+    .setting-reference { display:grid; gap:3px; }
+    .setting-reference:not(:first-child) { text-align:right; }
+    .setting-reference:nth-child(2) { text-align:center; }
+    .setting-reference-value { color:var(--secondary-foreground,#b6bbc4); font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; font-variant-numeric:tabular-nums; }
+    .setting-effective { grid-column:1/-1; text-align:right; }
+    .setting-controls { display:flex; align-items:center; gap:6px; }
+    .setting-input { position:relative; display:flex; flex:1; min-width:0; align-items:center; }
+    .setting-input input { width:100%; min-width:0; height:30px; padding:5px 22px 5px 8px; border:1px solid var(--border,#3e4149); border-radius:6px; color:inherit; background:var(--input,#111318); font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; appearance:textfield; }
+    .setting-input input::-webkit-inner-spin-button, .setting-input input::-webkit-outer-spin-button { appearance:none; margin:0; }
+    .setting-input input:focus { outline:1px solid var(--ring,#8b9bff); }
+    .setting-input span { position:absolute; right:8px; color:var(--muted-foreground,#9199a6); font-size:11px; pointer-events:none; }
+    .setting-actions { display:flex; flex:none; gap:6px; }
+    .setting-actions button { height:30px; padding:5px 8px; border:1px solid var(--border,#3e4149); border-radius:6px; background:transparent; white-space:nowrap; font-size:11px; }
+    .setting-actions button[type="submit"] { min-width:52px; color:var(--card,#191b20); background:var(--foreground,#e8e8eb); border-color:transparent; font-weight:600; }
+    .setting-actions button[type="submit"]:hover { opacity:.85; }
+    button:disabled, input:disabled { cursor:default; opacity:.55; }
+    .setting-status { margin:0; font-size:11px; overflow-wrap:anywhere; }
+    .setting-status[data-error="true"] { color:var(--destructive,#f48282); }
   `;
   shadow.appendChild(style);
   const metricsHost = document.createElement('span');
@@ -79,11 +105,26 @@
   const metricsShadow = metricsHost.attachShadow({mode:'open'});
   const metricsStyle = document.createElement('style');
   metricsStyle.textContent = `
-    :host { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:3px 10px; flex:0 1 auto; min-width:min(100%,330px); max-width:100%; margin-inline-start:auto; color:var(--secondary-foreground,#b6bbc4); }
+    :host { display:flex; align-items:center; justify-content:flex-end; flex:1 1 0%; min-width:min(100%,var(--main-metrics-width,0px)); max-width:100%; margin-inline-start:auto; color:var(--secondary-foreground,#b6bbc4); }
     *, *::before, *::after { box-sizing:border-box; }
+    [hidden] { display:none !important; }
+    .metrics-group { display:inline-flex; flex:none; }
+    .metrics-line { display:inline-flex; align-items:baseline; gap:10px; width:max-content; margin:0; padding:2px 0; border:0; border-radius:3px; color:inherit; background:transparent; cursor:default; }
+    .metrics-line:focus-visible { outline:1px solid var(--foreground,#e8e8eb); outline-offset:2px; }
     .metric { display:inline-flex; align-items:baseline; flex:0 0 auto; gap:3px; white-space:nowrap; font:10px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
     .metric-label { color:var(--muted-foreground,#9199a6); }
     .metric-value { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-variant-numeric:tabular-nums; }
+    .metric-subagent { color:var(--muted-foreground,#9199a6); }
+    :host([data-compact]) .metric-subagent { display:none; }
+    ${tooltipStyles}
+    .tooltip { width:300px; }
+    table { width:100%; table-layout:fixed; border-collapse:collapse; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    th, td { padding:4px 0; text-align:center; font-weight:400; }
+    th { color:var(--muted-foreground,#9199a6); }
+    th:first-child { width:44px; text-align:left; }
+    thead th { padding:0 0 8px; border-bottom:1px solid var(--border,#3e4149); font-size:11px; font-weight:500; }
+    tbody tr:first-child > * { padding-top:8px; }
+    td { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
   `;
   metricsShadow.appendChild(metricsStyle);
 
@@ -93,6 +134,10 @@
   let disposed = false;
   let current = null;
   let currentMetrics = null;
+  let currentSubagentMetrics = null;
+  let currentSetting = null;
+  let settingDirty = false;
+  let applyFeedbackTimer = null;
   const numericKeys = ['used', 'maxContext', 'modelCapacity', 'compactionReference'];
   const clampFraction = value => Math.max(0, Math.min(1, value));
   const fractionText = value => value === null ? '—' : `${Math.round(value * 100)}%`;
@@ -142,7 +187,11 @@
         if (!event.composedPath().includes(ring.item)) dismiss(ring);
       }, true, ring.openListeners);
       listen(document, 'keydown', event => {
-        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismiss(ring); }
+        if (event.key === 'Escape') {
+          event.preventDefault(); event.stopPropagation();
+          if (ring.tooltip.contains(ring.tooltip.getRootNode().activeElement)) ring.button.focus({preventScroll:true});
+          dismiss(ring);
+        }
       }, true, ring.openListeners);
     } else {
       for (const remove of ring.openListeners) remove();
@@ -155,7 +204,7 @@
   function createRing(key, title, rows) {
     const item = document.createElement('span'); item.className = 'ring-item';
     const button = document.createElement('button');
-    button.type = 'button'; button.className = 'no-focus-agent-input'; button.dataset.ring = key;
+    button.type = 'button'; button.className = 'ring-trigger no-focus-agent-input'; button.dataset.ring = key;
     button.setAttribute('aria-label', `${title}：未返回`); button.setAttribute('aria-expanded', 'false');
     button.setAttribute('aria-describedby', `context-${key}-tooltip`);
     const mount = document.createElement('span');
@@ -168,7 +217,11 @@
     button.append(slot, fallback, percentage); item.appendChild(button);
     shadow.appendChild(item);
     const tooltip = document.createElement('div'); tooltip.className = 'tooltip no-focus-agent-input';
-    tooltip.id = `context-${key}-tooltip`; tooltip.setAttribute('role', 'tooltip'); tooltip.hidden = true;
+    tooltip.id = `context-${key}-tooltip`; tooltip.setAttribute('role', key === 'context' ? 'dialog' : 'tooltip'); tooltip.hidden = true;
+    if (key === 'context') {
+      button.setAttribute('aria-haspopup', 'dialog'); button.setAttribute('aria-controls', tooltip.id);
+      button.removeAttribute('aria-describedby'); tooltip.setAttribute('aria-label', '上下文用量与设置');
+    }
     const usePopover = typeof tooltip.showPopover === 'function';
     if (usePopover) tooltip.setAttribute('popover', 'manual');
     const panel = document.createElement('div'); panel.className = 'panel';
@@ -182,22 +235,28 @@
     }
     panel.append(heading, details); tooltip.appendChild(panel); item.appendChild(tooltip);
     const root = native ? native.ReactDOM.createRoot(mount) : null;
-    const ring = {key, item, button, percentage, tooltip, values, root, usePopover,
+    const ring = {key, item, button, percentage, tooltip, panel, values, root, usePopover,
       lastFraction:Symbol('initial'), open:false, hovered:false, focused:false, pinned:false, openListeners:[]};
     rings.push(ring);
-    listen(item, 'pointerenter', () => { ring.hovered = true; setOpen(ring, true); });
-    listen(item, 'pointerleave', () => { ring.hovered = false; setOpen(ring, ring.focused || ring.pinned); });
-    listen(button, 'focus', () => { ring.focused = true; setOpen(ring, true); });
-    listen(button, 'blur', () => { ring.focused = false; setOpen(ring, ring.hovered || ring.pinned); });
-    listen(button, 'pointerdown', event => { event.preventDefault(); event.stopPropagation(); });
-    listen(button, 'mousedown', event => { event.preventDefault(); event.stopPropagation(); });
-    listen(button, 'click', event => {
+    bindTooltip(ring);
+    renderFraction(ring, null);
+    return ring;
+  }
+  function bindTooltip(ring) {
+    listen(ring.item, 'pointerenter', () => { ring.hovered = true; setOpen(ring, true); });
+    listen(ring.item, 'pointerleave', () => { ring.hovered = false; setOpen(ring, ring.focused || ring.pinned); });
+    listen(ring.item, 'focusin', () => { ring.focused = true; setOpen(ring, true); });
+    listen(ring.item, 'focusout', event => {
+      if (event.relatedTarget && ring.item.contains(event.relatedTarget)) return;
+      ring.focused = false; setOpen(ring, ring.hovered || ring.pinned);
+    });
+    listen(ring.button, 'pointerdown', event => { event.preventDefault(); event.stopPropagation(); });
+    listen(ring.button, 'mousedown', event => { event.preventDefault(); event.stopPropagation(); });
+    listen(ring.button, 'click', event => {
       event.preventDefault(); event.stopPropagation();
       if (ring.pinned) dismiss(ring); else { ring.pinned = true; setOpen(ring, true); }
     });
-    listen(button, 'keydown', event => { if (event.key === 'Enter' || event.key === ' ') event.stopPropagation(); });
-    renderFraction(ring, null);
-    return ring;
+    listen(ring.button, 'keydown', event => { if (event.key === 'Enter' || event.key === ' ') event.stopPropagation(); });
   }
   function renderFraction(ring, fraction) {
     writeText(ring.percentage, native ? fractionText(fraction) : '—');
@@ -209,27 +268,138 @@
   }
 
   const context = createRing('context', '上下文用量', [
-    ['used', '当前已用上下文'], ['compactionReference', '压缩阈值'], ['maxContext', '总可用上下文'],
-    ['modelCapacity', '模型实际上下文'], ['ratio', '使用比例'],
+    ['used', '当前已用上下文'], ['compactionReference', '压缩阈值'],
+    ['modelCapacity', '总可用上下文'], ['ratio', '使用比例'],
   ]);
+  const settingForm = document.createElement('form'); settingForm.className = 'context-settings';
+  const settingTitle = document.createElement('strong'); settingTitle.className = 'title'; settingTitle.textContent = '上下文长度';
+  const settingControls = document.createElement('div'); settingControls.className = 'setting-controls';
+  const settingInputRow = document.createElement('label'); settingInputRow.className = 'setting-input';
+  const settingInput = document.createElement('input');
+  settingInput.type = 'number'; settingInput.min = '0.001'; settingInput.step = 'any'; settingInput.inputMode = 'decimal';
+  settingInput.setAttribute('aria-label', '上下文长度，单位 K'); settingInput.setAttribute('data-testid', 'context-limit-input');
+  const settingUnit = document.createElement('span'); settingUnit.textContent = 'K';
+  settingInputRow.append(settingInput, settingUnit);
+  const settingHint = document.createElement('div'); settingHint.className = 'setting-hint';
+  const settingReferences = {};
+  for (const [key, label] of [['current', '当前上下文'], ['defaultLimit', '默认上下文'], ['maxLimit', '最大上下文']]) {
+    const item = document.createElement('span'); item.className = 'setting-reference';
+    const name = document.createElement('span'); name.textContent = label;
+    const value = document.createElement('span'); value.className = 'setting-reference-value'; value.textContent = '—';
+    item.append(name, value); settingHint.appendChild(item); settingReferences[key] = value;
+  }
+  const settingEffective = document.createElement('span'); settingEffective.className = 'setting-effective'; settingEffective.hidden = true;
+  settingHint.appendChild(settingEffective);
+  const settingButtons = document.createElement('div'); settingButtons.className = 'setting-actions';
+  const settingApply = document.createElement('button'); settingApply.type = 'submit'; settingApply.textContent = '应用';
+  settingApply.setAttribute('data-testid', 'context-limit-apply');
+  const settingReset = document.createElement('button'); settingReset.type = 'button'; settingReset.textContent = '恢复默认';
+  settingReset.setAttribute('data-testid', 'context-limit-reset');
+  settingButtons.append(settingApply, settingReset);
+  settingControls.append(settingInputRow, settingButtons);
+  const settingStatus = document.createElement('p'); settingStatus.className = 'setting-status'; settingStatus.setAttribute('role', 'status');
+  settingForm.append(settingTitle, settingControls, settingHint, settingStatus);
+  context.panel.prepend(settingForm);
+  function clearApplyFeedback() {
+    window.clearTimeout(applyFeedbackTimer); applyFeedbackTimer = null;
+    writeText(settingApply, '应用');
+  }
+  listen(settingInput, 'input', () => { clearApplyFeedback(); settingDirty = true; settingInput.setCustomValidity(''); });
+  listen(settingForm, 'submit', async event => {
+    event.preventDefault(); event.stopPropagation();
+    const tokens = Math.round(Number(settingInput.value) * 1000);
+    if (!Number.isSafeInteger(tokens) || tokens <= 0 || tokens > 4294967295) {
+      settingInput.setCustomValidity('请输入大于 0 且不超过 4294967.295 K 的上下文上限'); settingInput.reportValidity(); return;
+    }
+    if (settingApply.disabled) return;
+    const modelKey = currentSetting?.modelKey;
+    clearApplyFeedback(); writeText(settingApply, '应用中');
+    const applied = await actions.setContextLimit(tokens);
+    if (disposed || currentSetting?.modelKey !== modelKey) return;
+    writeText(settingApply, applied ? '已应用' : '应用');
+    if (applied) applyFeedbackTimer = window.setTimeout(clearApplyFeedback, 1800);
+  });
+  listen(settingReset, 'click', () => { clearApplyFeedback(); if (!settingReset.disabled) actions.setContextLimit?.(null); });
+  // Editing and Enter belong to this card, not the chat composer around it.
+  for (const type of ['keydown', 'keyup', 'keypress']) listen(context.tooltip, type, event => event.stopPropagation());
+  function updateSetting(setting, actualContext) {
+    const modelChanged = currentSetting?.modelKey !== setting?.modelKey;
+    const limitChanged = currentSetting?.customLimit !== setting?.customLimit || currentSetting?.effectiveLimit !== setting?.effectiveLimit;
+    if (modelChanged) clearApplyFeedback();
+    if (modelChanged || limitChanged || !settingDirty) {
+      const tokens = setting?.customLimit ?? setting?.effectiveLimit ?? setting?.defaultLimit;
+      settingInput.value = tokens > 0 ? String(tokens / 1000) : '';
+      settingInput.setCustomValidity(''); settingDirty = false;
+    }
+    currentSetting = setting ? {...setting} : null;
+    const pending = !setting || setting.pending;
+    const unavailable = setting?.supported === false;
+    settingInput.disabled = pending || unavailable;
+    settingApply.disabled = pending || unavailable || typeof actions.setContextLimit !== 'function';
+    settingReset.disabled = pending || unavailable || setting.customLimit === null || typeof actions.setContextLimit !== 'function';
+    for (const [key, value] of Object.entries({current:actualContext, defaultLimit:setting?.defaultLimit, maxLimit:setting?.maxLimit})) {
+      writeText(settingReferences[key], value > 0 ? formatTokens(value) : '—');
+    }
+    const adjusted = setting?.customLimit !== null && setting?.effectiveLimit > 0 && setting.effectiveLimit !== setting.customLimit;
+    settingEffective.hidden = !adjusted;
+    writeText(settingEffective, adjusted ? `实际 ${formatTokens(setting.effectiveLimit)}` : '');
+    writeText(settingStatus, setting?.error ?? '');
+    settingStatus.hidden = !setting?.error;
+    writeAttribute(settingStatus, 'data-error', String(Boolean(setting?.error)));
+  }
   const quotaRows = [['remaining', '剩余比例']];
   const fiveHour = createRing('five-hour', '5 小时额度', quotaRows);
   const weekly = createRing('weekly', '每周额度', quotaRows);
   const metricDefinitions = [
-    ['ttftMs', '首字', '最近10条完成回复的平均首字时间', value => `${(value / 1000).toFixed(2)}s`],
-    ['tps', 'TPS', '最近10条回复的平均TPS（含首字等待）', value => value.toFixed(1)],
-    ['inputTokens', '输入', '对话输入Token使用量（含缓存输入）', formatTokens],
-    ['outputTokens', '输出', '对话输出Token使用量', formatTokens],
-    ['cacheHitRate', '缓存', '缓存命中率', value => `${(value * 100).toFixed(1)}%`],
+    ['ttftMs', '首字', value => `${(value / 1000).toFixed(2)}s`],
+    ['tps', 'TPS', value => value.toFixed(1)],
+    ['inputTokens', '输入', formatTokens],
+    ['outputTokens', '输出', formatTokens],
+    ['cacheHitRate', '缓存', value => `${(value * 100).toFixed(1)}%`],
   ];
-  const metrics = metricDefinitions.map(([key, label, title, format]) => {
+  const metricsGroup = document.createElement('span'); metricsGroup.className = 'metrics-group';
+  const metricsLine = document.createElement('button'); metricsLine.type = 'button'; metricsLine.className = 'metrics-line no-focus-agent-input';
+  metricsLine.setAttribute('aria-label', '查看用量统计'); metricsLine.setAttribute('aria-expanded', 'false');
+  metricsLine.setAttribute('aria-describedby', 'conversation-metrics-tooltip');
+  const metricsTooltip = document.createElement('div'); metricsTooltip.className = 'tooltip no-focus-agent-input';
+  metricsTooltip.id = 'conversation-metrics-tooltip'; metricsTooltip.setAttribute('role', 'tooltip'); metricsTooltip.hidden = true;
+  const metricsPopover = typeof metricsTooltip.showPopover === 'function';
+  if (metricsPopover) metricsTooltip.setAttribute('popover', 'manual');
+  const metricsPanel = document.createElement('div'); metricsPanel.className = 'panel';
+  const metricsTable = document.createElement('table');
+  const tableHead = metricsTable.createTHead().insertRow();
+  for (const label of ['', '主代理', '子代理']) {
+    const cell = document.createElement('th'); cell.scope = 'col'; cell.textContent = label; tableHead.appendChild(cell);
+  }
+  const subagentHeading = tableHead.lastChild;
+  const tableBody = metricsTable.createTBody();
+  const metrics = metricDefinitions.map(([key, label, format]) => {
     const item = document.createElement('span'); item.className = 'metric'; item.dataset.metric = key;
-    item.title = title;
     const name = document.createElement('span'); name.className = 'metric-label'; name.textContent = label;
     const value = document.createElement('span'); value.className = 'metric-value'; value.textContent = '—';
-    item.append(name, value); metricsShadow.appendChild(item);
-    return {key, value, format};
+    const subagent = document.createElement('span'); subagent.className = 'metric-value metric-subagent'; subagent.hidden = true;
+    item.append(name, value, subagent); metricsLine.appendChild(item);
+    const row = tableBody.insertRow(), term = document.createElement('th');
+    term.scope = 'row'; term.textContent = label; row.appendChild(term);
+    const mainCell = row.insertCell(), subagentCell = row.insertCell();
+    return {key, value, subagent, mainCell, subagentCell, format};
   });
+  metricsPanel.appendChild(metricsTable); metricsTooltip.appendChild(metricsPanel);
+  metricsGroup.append(metricsLine, metricsTooltip); metricsShadow.appendChild(metricsGroup);
+  const metricsCard = {item:metricsGroup, button:metricsLine, tooltip:metricsTooltip, usePopover:metricsPopover,
+    open:false, hovered:false, focused:false, pinned:false, openListeners:[]};
+  bindTooltip(metricsCard);
+  function fitMetrics() {
+    if (disposed || !metricsHost.isConnected) return;
+    metricsHost.setAttribute('data-compact', '');
+    const mainWidth = Math.ceil(metricsLine.getBoundingClientRect().width);
+    metricsHost.style.setProperty('--main-metrics-width', `${mainWidth}px`);
+    metricsHost.removeAttribute('data-compact');
+    if (metricsLine.getBoundingClientRect().width > metricsHost.getBoundingClientRect().width + .5) metricsHost.setAttribute('data-compact', '');
+    if (metricsCard.open) positionTooltip(metricsCard);
+  }
+  const metricsResize = new window.ResizeObserver(fitMetrics);
+  metricsResize.observe(metricsHost);
   listen(host, 'pointerdown', event => event.stopPropagation());
   listen(host, 'mousedown', event => event.stopPropagation());
   listen(host, 'click', event => event.stopPropagation());
@@ -257,30 +427,49 @@
       next[key] = typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
     }
     next.weeklyQuota = normalizeQuota(snapshot?.weeklyQuota); next.fiveHourQuota = normalizeQuota(snapshot?.fiveHourQuota);
-    const nextMetrics = {};
+    const nextMetrics = {}, nextSubagentMetrics = snapshot?.subagentMetrics ? {} : null;
     for (const {key} of metrics) {
-      const value = snapshot?.metrics?.[key];
-      nextMetrics[key] = typeof value === 'number' && Number.isFinite(value) && value >= 0
-        ? key === 'cacheHitRate' ? clampFraction(value) : value : null;
+      for (const [source, target] of [[snapshot?.metrics, nextMetrics], [snapshot?.subagentMetrics, nextSubagentMetrics]]) {
+        if (!target) continue;
+        const value = source?.[key];
+        target[key] = typeof value === 'number' && Number.isFinite(value) && value >= 0
+          ? key === 'cacheHitRate' ? clampFraction(value) : value : null;
+      }
     }
     const ringsChanged = !current || !numericKeys.every(key => current[key] === next[key]) ||
       !sameQuota(current.weeklyQuota, next.weeklyQuota) || !sameQuota(current.fiveHourQuota, next.fiveHourQuota);
-    const metricsChanged = !currentMetrics || metrics.some(({key}) => currentMetrics[key] !== nextMetrics[key]);
-    if (!ringsChanged && !metricsChanged) return false;
+    const metricsChanged = !currentMetrics || Boolean(currentSubagentMetrics) !== Boolean(nextSubagentMetrics) ||
+      metrics.some(({key}) => currentMetrics[key] !== nextMetrics[key] || currentSubagentMetrics?.[key] !== nextSubagentMetrics?.[key]);
+    const setting = snapshot?.contextSetting ?? null;
+    const settingChanged = !current || current.maxContext !== next.maxContext || ['modelKey', 'modelLabel', 'defaultLimit', 'customLimit', 'effectiveLimit', 'maxLimit', 'pending', 'error', 'supported']
+      .some(key => currentSetting?.[key] !== setting?.[key]);
+    if (!ringsChanged && !metricsChanged && !settingChanged) return false;
+    if (settingChanged) updateSetting(setting, next.maxContext);
     if (ringsChanged) {
       current = next;
       const limit = next.maxContext > 0 ? next.maxContext : next.compactionReference > 0 ? next.compactionReference : null;
       const usedFraction = next.used !== null && limit !== null ? clampFraction(next.used / limit) : null;
       const text = fractionText(usedFraction);
       renderFraction(context, usedFraction);
-      for (const key of numericKeys) writeText(context.values[key].value, next[key] === null ? '—' : formatTokens(next[key]));
-      writeText(context.values.ratio.value, text);
-      writeAttribute(context.button, 'aria-label', `上下文已用：${text}；已用 ${next.used === null ? '未返回' : formatTokens(next.used)}；压缩阈值 ${next.compactionReference === null ? '未返回' : formatTokens(next.compactionReference)}；总可用 ${limit === null ? '未返回' : formatTokens(limit)}`);
+      for (const [key, field] of Object.entries(context.values)) {
+        writeText(field.value, key === 'ratio' ? text : next[key] === null ? '—' : formatTokens(next[key]));
+      }
+      writeAttribute(context.button, 'aria-label', `上下文已用：${text}；已用 ${next.used === null ? '未返回' : formatTokens(next.used)}；压缩阈值 ${next.compactionReference === null ? '未返回' : formatTokens(next.compactionReference)}`);
       updateQuota(weekly, next.weeklyQuota); updateQuota(fiveHour, next.fiveHourQuota);
     }
     if (metricsChanged) {
       currentMetrics = nextMetrics;
-      for (const {key, value, format} of metrics) writeText(value, nextMetrics[key] === null ? '—' : format(nextMetrics[key]));
+      currentSubagentMetrics = nextSubagentMetrics;
+      subagentHeading.hidden = !nextSubagentMetrics;
+      for (const {key, value, subagent, mainCell, subagentCell, format} of metrics) {
+        const mainText = nextMetrics[key] === null ? '—' : format(nextMetrics[key]);
+        const childText = nextSubagentMetrics?.[key] == null ? '—' : format(nextSubagentMetrics[key]);
+        writeText(value, mainText); writeText(mainCell, mainText); writeText(subagentCell, childText);
+        subagent.hidden = !nextSubagentMetrics || key === 'ttftMs';
+        subagentCell.hidden = !nextSubagentMetrics;
+        writeText(subagent, `(${childText})`);
+      }
+      fitMetrics();
     }
     if (active) positionTooltip(active);
     return true;
@@ -294,6 +483,8 @@
       if (disposed) return;
       if (active) dismiss(active);
       disposed = true;
+      window.clearTimeout(applyFeedbackTimer);
+      metricsResize.disconnect();
       for (const remove of permanentListeners) remove();
       permanentListeners.length = 0;
       for (const ring of rings) ring.root?.unmount();
@@ -307,15 +498,27 @@
   const selector = '[data-testid="model-selector-trigger"]';
   const instances = new Map();
   const clients = new WeakMap();
+  const contextLimits = new Map();
+  const contextSettings = new Map();
+  const storagePrefix = 'antigravityChineseHelper.contextLimit.';
   let layoutSequence = 0;
   let stopped = false;
   const quotaHubs = new Map();
   const appWindow = document.defaultView;
-  const nativeQuotaReader = Object.getOwnPropertyNames(appWindow).map(key => Object.getOwnPropertyDescriptor(appWindow,key)?.value)
-    .find(value => typeof value === 'function' && (() => {
+  const nativeGlobals = Object.getOwnPropertyNames(appWindow).map(key => Object.getOwnPropertyDescriptor(appWindow,key)?.value);
+  const nativeQuotaReader = nativeGlobals.find(value => typeof value === 'function' && (() => {
       const source = Function.prototype.toString.call(value);
       return source.includes('retrieveUserQuotaSummary') && source.includes('Promise.resolve') && /5E3|5000/.test(source);
     })());
+  const messageSchema = nativeGlobals.find(value => value?.kind === 'message' && value.typeName === 'exa.language_server_pb.SendUserCascadeMessageRequest');
+  const checkpointSchema = messageSchema?.fields.find(field => field.localName === 'cascadeConfig')?.message
+    ?.fields.find(field => field.localName === 'checkpointConfig')?.message;
+  const createMessage = nativeGlobals.find(value => typeof value === 'function' && (() => {
+    const source = Function.prototype.toString.call(value);
+    return ['Object.create', '$typeName', '.members', '.localName', '.typeName', '.fieldKind'].every(part => source.includes(part));
+  })());
+  const createCheckpoint = checkpointSchema && createMessage ? () => createMessage(checkpointSchema) : null;
+  const copyMessage = (message, changes) => Object.assign(Object.create(Object.getPrototypeOf(message)), message, changes);
   function quotaFamily(label) {
     if (/gemini/i.test(label ?? '')) return 'gemini';
     if (/claude|gpt|openai|\bo[134]\b/i.test(label ?? '')) return '3p';
@@ -400,6 +603,33 @@
 
   const positive = value => { const n = Number(value); return Number.isFinite(n) && n > 0 ? n : null; };
   const count = value => { const n = Number(value); return Number.isFinite(n) && n >= 0 ? n : null; };
+  const storage = appWindow.nativeStorage;
+  let storageError = null, storageLoaded = false;
+  function readStoredLimits(items) {
+    const changed = [];
+    for (const [key, value] of Object.entries(items ?? {})) {
+      if (!key.startsWith(storagePrefix)) continue;
+      const modelKey = key.slice(storagePrefix.length), tokens = value === null ? null : Number(value);
+      if (Number.isSafeInteger(tokens) && tokens > 0 && tokens <= 4294967295) contextLimits.set(modelKey, tokens);
+      else contextLimits.delete(modelKey);
+      changed.push(modelKey);
+    }
+    return changed;
+  }
+  const storageReady = Promise.resolve().then(() => {
+    if (typeof storage?.getItems !== 'function' || typeof storage?.updateItems !== 'function') throw new Error();
+    return storage.getItems();
+  }).then(readStoredLimits).catch(() => { storageError = '无法读取已保存设置，请重新加载助手后重试'; })
+    .finally(() => { storageLoaded = true; });
+  const storageSubscription = storage?.onChanged?.(changes => {
+    storageReady.then(() => {
+      if (stopped) return;
+      for (const key of readStoredLimits(changes)) {
+        const setting = contextSettings.get(key);
+        if (setting && !setting.applying) refreshContextSetting(setting);
+      }
+    });
+  });
   const currentFiber = element => {
     const key = Object.keys(element).find(key => key.startsWith('__reactFiber$'));
     let fiber = key && element[key];
@@ -409,23 +639,69 @@
     return fiber;
   };
   function bindings(element) {
-    let fiber = currentFiber(element), provider, client, selected, quotaService;
+    let fiber = currentFiber(element), provider, client, selected, quotaService, summaryStore, agentRegistry;
     while (fiber) {
       const props = fiber.memoizedProps, value = props?.value;
       provider ??= value?.cascadeContext?.state?.agentStateProvider;
       selected ??= value?.selectedModel;
+      if (typeof value?.store?.getState === 'function' && typeof value.store.subscribe === 'function') summaryStore ??= value.store;
+      if (typeof value?.getAgentStates === 'function' && typeof value.peek === 'function' && typeof value.subscribe === 'function') agentRegistry ??= value;
       const services = props?.services ?? (value?.core ? value : null);
       quotaService ??= services?.core?.cloudCodeService;
       const raw = services?.core?.authService?._lsClient;
       if (raw && !client) client = typeof raw.getState === 'function' ? raw.getState() : raw;
       fiber = fiber.return;
     }
-    return {provider, client, selected, quotaService};
+    return {provider, client, selected, quotaService, summaryStore, agentRegistry};
   }
   function clientCache(client) {
     let cache = clients.get(client);
-    if (!cache) { cache = {catalog: null, configs: new Map()}; clients.set(client, cache); }
+    if (!cache) { cache = {catalog:null, models:null, configs:new Map(), users:new Set(), hooks:[]}; clients.set(client, cache); }
     return cache;
+  }
+  function bindContextClient(instance, client) {
+    if (!client) return;
+    const cache = clientCache(client);
+    cache.users.add(instance);
+    if (cache.users.size !== 1 || !createCheckpoint) return;
+    for (const method of ['sendUserCascadeMessage', 'sendAllQueuedMessages']) {
+      const descriptor = Object.getOwnPropertyDescriptor(client, method), original = descriptor?.value;
+      if (!descriptor?.writable || typeof original !== 'function') continue;
+      const wrapper = function contextLimitedRequest(...args) {
+        const send = () => {
+          const request = args[0], planner = request?.cascadeConfig?.plannerConfig;
+          const model = cache.models?.get(String(planner?.planModel)) ?? cache.models?.get(planner?.modelName);
+          const modelKey = model?.key ?? (planner?.planModel ? String(planner.planModel) : null);
+          const limit = contextLimits.get(modelKey);
+          if (!stopped && cache.users.size && limit !== undefined) {
+            // The native resolver clamps this to model capacity minus output;
+            // TrajectoryToChatMessages uses the enabled checkpoint budget.
+            // Native protobuf messages carry scalar defaults on their prototype.
+            const existing = request.cascadeConfig.checkpointConfig;
+            const checkpointConfig = existing ? copyMessage(existing, {maxTokenLimit:limit}) : Object.assign(createCheckpoint(), {maxTokenLimit:limit});
+            args[0] = copyMessage(request, {cascadeConfig:copyMessage(request.cascadeConfig, {checkpointConfig})});
+          }
+          return original.apply(this, args);
+        };
+        // Preserve the first send after restart: saved preferences must load first.
+        const readyToSend = () => {
+          const planner = args[0]?.cascadeConfig?.plannerConfig;
+          return !planner?.planModel && planner?.modelName && !cache.models ? catalog(client).then(send) : send();
+        };
+        return storageLoaded ? readyToSend() : storageReady.then(readyToSend);
+      };
+      client[method] = wrapper;
+      cache.hooks.push({method, original, wrapper});
+    }
+  }
+  function releaseContextClient(instance) {
+    const client = instance.client;
+    if (!client) return;
+    const cache = clientCache(client);
+    cache.users.delete(instance);
+    if (cache.users.size) return;
+    for (const {method, original, wrapper} of cache.hooks) if (client[method] === wrapper) client[method] = original;
+    cache.hooks.length = 0;
   }
   function catalog(client) {
     const cache = clientCache(client);
@@ -434,10 +710,11 @@
         const values = result?.response?.models ?? result?.models ?? {};
         const models = new Map();
         for (const [name, value] of Object.entries(values)) {
-          const model = {capacity:positive(value.maxTokens), output:positive(value.maxOutputTokens), label:value.displayName || name};
+          const model = {key:String(value.model ?? name), id:value.model, capacity:positive(value.maxTokens), output:positive(value.maxOutputTokens), label:value.displayName || name};
           models.set(String(value.model), model);
           models.set(name, model);
         }
+        cache.models = models;
         return models;
       }).catch(error => { cache.catalog = null; throw error; });
     }
@@ -448,10 +725,12 @@
       planner?.maxOutputTokens, planner?.customModelInfoOverride?.maxTokens,
       planner?.customModelInfoOverride?.maxOutputTokens].join('|');
   }
-  function resolvedConfig(client, planner) {
-    const cache = clientCache(client), key = configKey(planner);
+  function resolvedConfig(client, planner, checkpointLimit = null) {
+    const cache = clientCache(client), key = configKey(planner) + (checkpointLimit === null ? '' : `|checkpoint:${checkpointLimit}`);
     if (!cache.configs.has(key)) {
-      const promise = Promise.resolve().then(() => client.getResolvedCascadeConfig({overrideConfig:{plannerConfig:planner}}))
+      const overrideConfig = {plannerConfig:planner};
+      if (checkpointLimit !== null) overrideConfig.checkpointConfig = {maxTokenLimit:checkpointLimit};
+      const promise = Promise.resolve().then(() => client.getResolvedCascadeConfig({overrideConfig}))
         .then(result => {
           const config = result?.cascadeConfig;
           const checkpoint = config?.checkpointConfig;
@@ -462,6 +741,90 @@
       cache.configs.set(key, promise);
     }
     return cache.configs.get(key);
+  }
+  function publishContextSettings() {
+    if (!stopped) for (const instance of instances.values()) render(instance);
+  }
+  function checkedContextLimit(config) {
+    if (!config.enabled || config.limit === null) throw new Error('该模型未返回可用的上下文上限');
+    return config.limit;
+  }
+  function refreshContextSetting(setting) {
+    const revision = ++setting.revision, view = setting.view;
+    view.pending = true; view.error = null;
+    const ready = (async () => {
+      try {
+        await storageReady;
+        const planner = {planModel:setting.model.id};
+        const custom = contextLimits.get(view.modelKey) ?? null;
+        if (!stopped && setting.revision === revision) view.customLimit = custom;
+        const baseline = await resolvedConfig(setting.client, planner);
+        const config = custom === null ? baseline : await resolvedConfig(setting.client, planner, custom);
+        const effective = checkedContextLimit(config);
+        if (stopped || setting.revision !== revision) return;
+        view.defaultLimit = checkedContextLimit(baseline);
+        view.maxLimit = setting.model.capacity === null ? null : Math.max(0, setting.model.capacity - (baseline.output ?? 0));
+        view.customLimit = custom; view.effectiveLimit = effective;
+        view.error = createCheckpoint ? storageError : '当前版本的上下文配置接口不可用';
+      } catch {
+        if (!stopped && setting.revision === revision) view.error = '无法读取该模型的上下文设置，请重新加载助手后重试';
+      } finally {
+        if (!stopped && setting.revision === revision) { view.pending = false; publishContextSettings(); }
+      }
+    })();
+    setting.ready = ready;
+    return ready;
+  }
+  function contextSetting(instance) {
+    const model = instance.models?.get(String(selectedModel(instance)));
+    if (!model || !instance.client) return null;
+    let setting = contextSettings.get(model.key);
+    if (!setting) {
+      setting = {model, client:instance.client, revision:0, applying:false, view:{
+        modelKey:model.key, modelLabel:model.label, defaultLimit:null, customLimit:null,
+        effectiveLimit:null, maxLimit:null, pending:true, error:null, supported:Boolean(createCheckpoint)}};
+      contextSettings.set(model.key, setting);
+      refreshContextSetting(setting);
+    } else if (setting.client !== instance.client && !clientCache(setting.client).users.size && !setting.applying) {
+      setting.client = instance.client; setting.model = model;
+      refreshContextSetting(setting);
+    }
+    return {...setting.view};
+  }
+  async function setContextLimit(instance, tokens) {
+    const current = contextSetting(instance), setting = current && contextSettings.get(current.modelKey);
+    if (!setting || setting.applying || stopped || instance.disposed) return false;
+    if (tokens !== null && (!Number.isSafeInteger(tokens) || tokens <= 0 || tokens > 4294967295)) {
+      setting.view.error = '请输入大于 0 且不超过 4294967.295 K 的上下文上限'; publishContextSettings(); return false;
+    }
+    await setting.ready;
+    if (stopped || instance.disposed || setting.applying) return false;
+    const revision = ++setting.revision, view = setting.view;
+    setting.applying = true; view.pending = true; view.error = null; publishContextSettings();
+    let error = '无法确认该上限，原设置已保留';
+    try {
+      if (storageError) throw new Error();
+      if (clientCache(instance.client).hooks.length !== 2) {
+        error = '当前窗口的发送接口不可用，请重新加载助手后重试'; throw new Error();
+      }
+      const config = await resolvedConfig(setting.client, {planModel:setting.model.id}, tokens);
+      const effective = checkedContextLimit(config);
+      if (stopped || setting.revision !== revision) return false;
+      error = '保存失败，原设置已保留，请重试';
+      await storage.updateItems({[storagePrefix + view.modelKey]:tokens === null ? null : String(tokens)});
+      if (stopped || setting.revision !== revision) return false;
+      if (tokens === null) contextLimits.delete(view.modelKey); else contextLimits.set(view.modelKey, tokens);
+      view.customLimit = tokens; view.effectiveLimit = effective;
+      if (tokens === null) view.defaultLimit = effective;
+      return true;
+    } catch {
+      if (!stopped && setting.revision === revision) view.error = error;
+      return false;
+    } finally {
+      if (!stopped && setting.revision === revision) {
+        setting.applying = false; view.pending = false; publishContextSettings();
+      }
+    }
   }
   function usageTotal(usage) {
     if (!usage) return null;
@@ -494,26 +857,54 @@
     return {parts, ttftMs, streamingMs,
       tps:streamingMs > 0 && ttftMs !== null && parts?.output > 0 ? parts.output * 1000 / (ttftMs + streamingMs) : null};
   }
-  function conversationMetrics(instance) {
-    if (!instance.historyStats) {
+  function historyStats(history) {
+    if (!history.historyStats) {
       const totals = {input:0, output:0, cache:0};
-      for (const parts of instance.usageHistory.values()) for (const key of ['input', 'output', 'cache']) totals[key] += parts[key];
-      const replies = [...instance.usageHistory].filter(([, value]) => value.tps !== null && value.tps !== undefined)
+      for (const parts of history.usageHistory.values()) for (const key of ['input', 'output', 'cache']) totals[key] += parts[key];
+      const replies = [...history.usageHistory].filter(([, value]) => value.tps !== null && value.tps !== undefined)
         .sort((a, b) => b[0] - a[0]).slice(0, 10).map(([, value]) => value);
       const average = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
-      instance.historyStats = {totals,
+      history.historyStats = {totals,
         ttftMs:average(replies.map(value => value.ttftMs).filter(value => value !== null && value !== undefined)),
         tps:average(replies.map(value => value.tps)), samples:replies.length};
     }
-    const native = instance.state?.cost;
-    const stats = instance.historyStats;
-    const totals = native ?? (instance.historyReady || instance.state?.generation === 0 ? stats.totals : null);
+    return history.historyStats;
+  }
+  function metricsFrom(totals, timing) {
     const input = totals ? totals.input + totals.cache : 0;
-    return {ttftMs:instance.historyReady ? stats.ttftMs : null,
-      tps:instance.historyReady ? stats.tps : null, samples:instance.historyReady ? stats.samples : 0,
+    return {ttftMs:timing?.ttftMs ?? null, tps:timing?.tps ?? null, samples:timing?.samples ?? 0,
       inputTokens:totals ? input : null, outputTokens:totals?.output ?? null,
       conversationTokens:totals ? input + totals.output : null,
       cacheHitRate:input > 0 ? totals.cache / input : null};
+  }
+  function conversationMetrics(instance) {
+    const stats = historyStats(instance), state = instance.state;
+    let native = state?.cost;
+    if (native && state.subagentCost) {
+      native = Object.fromEntries(['input', 'output', 'cache'].map(key => [key, native[key] - state.subagentCost[key]]));
+      if (Object.values(native).some(value => value < 0)) native = null;
+    } else if (instance.subagents.size) native = null;
+    const totals = native ?? (instance.historyReady || state?.generation === 0 ? stats.totals : null);
+    return metricsFrom(totals, instance.historyReady ? stats : null);
+  }
+  function subagentMetrics(instance) {
+    if (!instance.subagents.size) return null;
+    let complete = true, samples = 0, tps = 0, ttftMs = 0;
+    const totals = {input:0, output:0, cache:0};
+    for (const child of instance.subagents.values()) {
+      const ready = child.historyReady || (child.state?.hasTrajectory && child.state.generation === 0);
+      if (!ready) { complete = false; continue; }
+      const stats = historyStats(child);
+      for (const key of ['input', 'output', 'cache']) totals[key] += stats.totals[key];
+      samples += stats.samples;
+      tps += (stats.tps ?? 0) * stats.samples;
+      ttftMs += (stats.ttftMs ?? 0) * stats.samples;
+    }
+    // Each child's own generators are counted once, including nested children.
+    // Indices are local to a trajectory, so combine its last-ten sample totals.
+    const metrics = metricsFrom(instance.state?.subagentCost ?? (complete ? totals : null),
+      {samples, tps:samples ? tps / samples : null, ttftMs:samples ? ttftMs / samples : null});
+    return {count:instance.subagents.size, ...metrics};
   }
   function storeUsage(instance, index, values) {
     const previous = instance.usageHistory.get(index), next = {...previous, ...values};
@@ -545,16 +936,64 @@
         break;
       }
     }
-    const cumulative = state?.costSummary?.total?.cumulativeTotal;
-    const cost = cumulative ? {input:count(cumulative.input?.tokens ?? 0),
-      cache:count(cumulative.cacheRead?.tokens ?? 0), output:count(cumulative.output?.tokens ?? 0)} : null;
+    const costParts = section => {
+      if (!section) return null;
+      const parts = {input:count(section.input?.tokens ?? 0), cache:count(section.cacheRead?.tokens ?? 0), output:count(section.output?.tokens ?? 0)};
+      return Object.values(parts).every(value => value !== null) ? parts : null;
+    };
     return {id:state?.conversationId, generation:count(slice.totalGeneratorMetadataLength) ?? 0,
-      generator, usage:latestUsage, idle:state?.fullyIdle === true,
-      cost:cost && Object.values(cost).every(value => value !== null) ? cost : null};
+      generator, usage:latestUsage, idle:state?.fullyIdle === true, hasTrajectory:Boolean(state?.trajectorySlice),
+      cost:costParts(state?.costSummary?.total?.cumulativeTotal), subagentCost:costParts(state?.costSummary?.total?.subagent)};
   }
   function disposeSubscription(subscription) {
     if (typeof subscription === 'function') subscription();
     else subscription?.dispose?.();
+  }
+  function createHistory() {
+    return {state:null, record:null, revision:0, disposed:false,
+      wanted:null, requested:null, requestedKeys:new Set(), requestBase:null, inFlight:false,
+      usageHistory:new Map(), historyNext:0, historyReady:false, historyStats:null};
+  }
+  function resetHistory(history) {
+    history.revision++;
+    history.state = history.record = history.wanted = history.requested = history.requestBase = null;
+    history.requestedKeys.clear(); history.inFlight = false;
+    history.usageHistory.clear(); history.historyNext = 0; history.historyReady = false; history.historyStats = null;
+  }
+  function releaseSubagent(child) {
+    child.disposed = true;
+    disposeSubscription(child.subscription);
+    child.hold.unsubscribe();
+  }
+  function releaseSubagents(instance) {
+    for (const child of instance.subagents.values()) releaseSubagent(child);
+    instance.subagents.clear();
+  }
+  function syncSubagents(instance) {
+    const id = instance.state?.id;
+    const byParent = instance.summaryStore?.getState?.().trajectorySummaries?.indexes?.byParent ?? {};
+    const descendants = new Set(), visited = new Set([id]), pending = id ? [id] : [];
+    while (pending.length) {
+      for (const childId of Object.keys(byParent[pending.pop()] ?? {})) {
+        if (visited.has(childId)) continue;
+        visited.add(childId); descendants.add(childId); pending.push(childId);
+      }
+    }
+    for (const [childId, child] of instance.subagents) {
+      if (!descendants.has(childId) || !instance.agentRegistry) {
+        releaseSubagent(child); instance.subagents.delete(childId);
+      }
+    }
+    if (!instance.agentRegistry) return;
+    for (const childId of descendants) {
+      if (instance.subagents.has(childId)) continue;
+      const hold = instance.agentRegistry.subscribe(childId);
+      if (!hold) continue;
+      const child = {...createHistory(), provider:hold.agentStateProvider, hold, subscription:null};
+      instance.subagents.set(childId, child);
+      child.subscription = child.provider.onDidChange(() => queueUpdate(instance));
+    }
+    for (const child of instance.subagents.values()) updateHistory(instance, child, scalarState(child.provider.getState()));
   }
   function releaseLayout(instance) {
     const layout = instance.layout;
@@ -591,11 +1030,11 @@
     if (view.metricsHost.parentElement !== toolbar) toolbar.appendChild(view.metricsHost);
   }
   function mount(anchor) {
-    const view = createView(document, anchor);
-    const instance = {anchor, view, provider:null, client:null, selected:null, subscription:null,
-      epoch:0, queued:false, disposed:false, state:null, record:null, models:null, config:null,
-      wanted:null, requested:null, requestedKeys:new Set(), requestBase:null, inFlight:false, lastError:null, snapshot:null,
-      usageHistory:new Map(), historyNext:0, historyReady:false, historyStats:null};
+    let instance;
+    const view = createView(document, anchor, {setContextLimit:tokens => setContextLimit(instance, tokens)});
+    instance = {...createHistory(), anchor, view, provider:null, client:null, selected:null, subscription:null,
+      summaryStore:null, summarySubscription:null, agentRegistry:null, subagents:new Map(),
+      epoch:0, queued:false, models:null, config:null, lastError:null, snapshot:null};
     instances.set(anchor, instance);
     rebind(instance);
     return instance;
@@ -617,7 +1056,9 @@
     // to model capacity minus the planner output limit. The converter then uses
     // the smaller model/checkpoint budget; tokenThreshold and overhead are not
     // subtracted from that budget. Respect the actual request window as well.
-    let compaction = config?.enabled ? config.limit : null;
+    // Returned metadata is the budget of that actual call, including a saved
+    // checkpoint override. Future settings must never rewrite this history.
+    let compaction = config?.enabled ? record?.maxContext ?? config.limit : null;
     if (compaction !== null) {
       if (capacity !== null) compaction = Math.min(compaction, Math.max(0, capacity - (output ?? 0)));
       if (maxContext !== null) compaction = Math.min(compaction, maxContext);
@@ -636,7 +1077,8 @@
       outputReserve:output, estimatedTokens:record?.estimated ?? null,
       compactionBasisLabel:config ? (config.modelCount ? '模型报告用量' : '后端估算') : null,
       snapshotLabel, modelLabel:label ?? null,
-      selectedLabel:instance.selected?.label ?? null, metrics:conversationMetrics(instance), ...quotaValues(instance,label)};
+      selectedLabel:instance.selected?.label ?? null, contextSetting:contextSetting(instance),
+      metrics:conversationMetrics(instance), subagentMetrics:subagentMetrics(instance), ...quotaValues(instance,label)};
     instance.snapshot = snapshot;
     viewUpdate(instance, snapshot);
   }
@@ -656,57 +1098,88 @@
       if (valid(instance, epoch) && instance.configPending === key) { instance.configPending = null; instance.lastError = 'config'; render(instance); }
     });
   }
-  function acceptRecord(instance, generator, generation, epoch) {
+  function acceptHistoryRecord(history, generator, generation) {
     const meta = generator?.metadata?.case === 'chatModel' ? generator.metadata.value : null;
+    if (!meta) return null;
+    const metrics = modelMetrics(generator);
+    if (metrics.parts) storeUsage(history, generation - 1, {...metrics.parts, ttftMs:metrics.ttftMs, tps:metrics.tps});
+    history.record = {generation, model:meta.model, steps:Array.from(generator.stepIndices ?? [])};
+    captureUsage(history, history.state);
+    return meta;
+  }
+  function acceptRecord(instance, generator, generation, epoch) {
+    const meta = acceptHistoryRecord(instance, generator, generation);
     if (!meta) return false;
     const context = meta.chatStartMetadata?.contextWindowMetadata;
-    const metrics = modelMetrics(generator);
-    if (metrics.parts) storeUsage(instance, generation - 1, {...metrics.parts, ttftMs:metrics.ttftMs, tps:metrics.tps});
-    instance.record = {generation, model:meta.model, label:meta.modelDisplayName || null, responseLabel:meta.responseModel || null,
-      steps:Array.from(generator.stepIndices ?? []), usage:usageFrom(meta), estimated:count(context?.estimatedTokensUsed),
-      maxContext:positive(context?.maxContextTokens), planner:generator.plannerConfig, customCapacity:positive(generator.plannerConfig?.customModelInfoOverride?.maxTokens)};
-    captureUsage(instance, instance.state);
+    Object.assign(instance.record, {label:meta.modelDisplayName || null, responseLabel:meta.responseModel || null,
+      usage:usageFrom(meta), estimated:count(context?.estimatedTokensUsed),
+      maxContext:positive(context?.maxContextTokens), planner:generator.plannerConfig, customCapacity:positive(generator.plannerConfig?.customModelInfoOverride?.maxTokens)});
     requestConfig(instance, generator.plannerConfig, epoch);
     instance.lastError = null;
     return true;
   }
-  async function requestLatest(instance) {
-    if (instance.inFlight || !instance.wanted || instance.requestedKeys.has(instance.wanted.key) || !instance.client ||
+  async function requestLatest(instance, history = instance) {
+    if (history.inFlight || !history.wanted || history.requestedKeys.has(history.wanted.key) || !instance.client ||
         typeof instance.client.getCascadeTrajectoryGeneratorMetadata !== 'function') return;
-    instance.inFlight = true;
-    const epoch = instance.epoch, wanted = instance.wanted;
-    instance.requested = wanted.key; instance.requestedKeys.add(wanted.key);
+    history.inFlight = true;
+    const epoch = instance.epoch, revision = history.revision, wanted = history.wanted;
+    const current = () => valid(instance, epoch) && !history.disposed && history.revision === revision && history.state?.id === wanted.id;
+    history.requested = wanted.key; history.requestedKeys.add(wanted.key);
     try {
-      let offset = Math.min(instance.historyNext, Math.max(0, wanted.generation - 1));
+      let offset = Math.min(history.historyNext, Math.max(0, wanted.generation - 1));
       do {
         const response = await instance.client.getCascadeTrajectoryGeneratorMetadata({cascadeId:wanted.id,
           generatorMetadataOffset:offset, includeMessages:false});
-        if (!valid(instance, epoch) || instance.state?.id !== wanted.id) return;
+        if (!current()) return;
         const records = response?.generatorMetadata ?? [];
         if (!records.length) break;
         for (let i = 0; i < records.length; i++) {
           const metrics = modelMetrics(records[i]);
-          if (metrics?.parts) storeUsage(instance, offset + i, {...metrics.parts, ttftMs:metrics.ttftMs, tps:metrics.tps});
+          if (metrics?.parts) storeUsage(history, offset + i, {...metrics.parts, ttftMs:metrics.ttftMs, tps:metrics.tps});
         }
-        if (offset <= instance.historyNext) instance.historyNext = Math.max(instance.historyNext, offset + records.length);
+        if (offset <= history.historyNext) history.historyNext = Math.max(history.historyNext, offset + records.length);
         for (let i = records.length - 1; i >= 0; i--) {
-          if (offset + i < (instance.state?.generation ?? 0) && acceptRecord(instance, records[i], offset + i + 1, epoch)) break;
+          if (offset + i >= (history.state?.generation ?? 0)) continue;
+          const accepted = history === instance ? acceptRecord(instance, records[i], offset + i + 1, epoch)
+            : acceptHistoryRecord(history, records[i], offset + i + 1);
+          if (accepted) break;
         }
         offset += records.length;
       } while (offset < wanted.generation);
-      if (instance.historyNext >= wanted.generation) instance.historyReady = true;
-      if (valid(instance, epoch) && instance.state?.id === wanted.id) {
-        captureUsage(instance, instance.state);
+      if (history.historyNext >= wanted.generation) history.historyReady = true;
+      if (current()) {
+        captureUsage(history, history.state);
         render(instance);
       }
     } catch {
-      if (valid(instance, epoch) && instance.state?.id === wanted.id) { instance.lastError = 'metadata'; render(instance); }
+      if (current()) { if (history === instance) instance.lastError = 'metadata'; render(instance); }
     } finally {
-      if (valid(instance, epoch)) {
-        instance.inFlight = false;
-        if (instance.wanted && !instance.requestedKeys.has(instance.wanted.key)) requestLatest(instance);
+      if (current()) {
+        history.inFlight = false;
+        if (history.wanted && !history.requestedKeys.has(history.wanted.key)) requestLatest(instance, history);
       }
     }
+  }
+  function updateHistory(instance, history, next) {
+    if (history.state?.id && next.id !== history.state.id) resetHistory(history);
+    captureUsage(history, next);
+    history.state = next;
+    const inMemory = next.generator;
+    if (inMemory?.metadata?.case === 'chatModel') {
+      if (history === instance) acceptRecord(instance, inMemory, next.generation, instance.epoch);
+      else acceptHistoryRecord(history, inMemory, next.generation);
+    } else if (history.record?.generation === next.generation && inMemory?.stepIndices?.length) history.record.steps = Array.from(inMemory.stepIndices);
+    if (next.id && next.id !== '_new' && next.generation > 0) {
+      const hasCurrentUsage = next.usage && inMemory?.stepIndices?.includes(next.usage.step);
+      const base = `${next.id}:${next.generation}`;
+      if (history.requestBase !== base) { history.requestBase = base; history.requestedKeys.clear(); }
+      const retryUsage = history.record?.generation !== next.generation && hasCurrentUsage &&
+        history.requestedKeys.has(`${base}:start`) && !history.inFlight;
+      const phase = next.idle ? 'idle' : retryUsage ? 'usage' : 'start';
+      const key = `${base}:${phase}`;
+      history.wanted = {id:next.id, generation:next.generation, key};
+      if (!history.requestedKeys.has(key)) requestLatest(instance, history);
+    } else history.wanted = null;
   }
   function update(instance) {
     if (instance.disposed || stopped) return;
@@ -714,14 +1187,15 @@
     try { state = instance.provider?.getState?.(); } catch { instance.lastError = 'state'; }
     const next = scalarState(state);
     const viewId = instance.anchor.closest('[data-cascade-id]')?.getAttribute('data-cascade-id');
-    if (next.id && viewId && next.id !== viewId) { instance.record = null; instance.state = null; instance.config = null; instance.usageHistory.clear(); instance.historyNext = 0; instance.historyReady = false; instance.historyStats = null; render(instance); return; }
+    if (next.id && viewId && next.id !== viewId) {
+      releaseSubagents(instance); resetHistory(instance); instance.config = null; render(instance); return;
+    }
     if (instance.state?.id && next.id !== instance.state.id) {
       // A reused native provider must not carry the previous conversation's data.
-      instance.record = null; instance.config = null; instance.requested = null;
-      instance.usageHistory.clear(); instance.historyNext = 0; instance.historyReady = false; instance.historyStats = null;
+      releaseSubagents(instance); instance.config = null;
     }
-    captureUsage(instance, next);
-    instance.state = next;
+    updateHistory(instance, instance, next);
+    syncSubagents(instance);
     const quotaEvent = `${next.id}:${next.generation}:${next.idle}`;
     if (instance.quotaEvent !== quotaEvent) {
       const finished = next.idle && instance.quotaIdle === false;
@@ -729,21 +1203,8 @@
     }
     const epoch = instance.epoch;
     const inMemory = next.generator;
-    if (inMemory?.metadata?.case === 'chatModel') acceptRecord(instance, inMemory, next.generation, epoch);
-    else if (instance.record?.generation === next.generation && inMemory?.stepIndices?.length) instance.record.steps = Array.from(inMemory.stepIndices);
     const planner = instance.record?.planner ?? inMemory?.plannerConfig ?? (instance.selected ? {planModel:selectedModel(instance)} : null);
     requestConfig(instance, planner, epoch);
-    if (next.id && next.id !== '_new' && next.generation > 0) {
-      const hasCurrentUsage = next.usage && inMemory?.stepIndices?.includes(next.usage.step);
-      const base = `${next.id}:${next.generation}`;
-      if (instance.requestBase !== base) { instance.requestBase = base; instance.requestedKeys.clear(); }
-      const retryUsage = instance.record?.generation !== next.generation && hasCurrentUsage &&
-        instance.requestedKeys.has(`${base}:start`) && !instance.inFlight;
-      const phase = next.idle ? 'idle' : retryUsage ? 'usage' : 'start';
-      const key = `${base}:${phase}`;
-      instance.wanted = {id:next.id, generation:next.generation, key};
-      if (!instance.requestedKeys.has(key)) requestLatest(instance);
-    } else instance.wanted = null;
     render(instance);
   }
   function queueUpdate(instance) {
@@ -755,20 +1216,25 @@
     if (stopped || instance.disposed || !instance.anchor.isConnected) return;
     placeView(instance);
     const next = bindings(instance.anchor);
-    const changed = next.provider !== instance.provider || next.client !== instance.client;
+    const changed = next.provider !== instance.provider || next.client !== instance.client ||
+      next.summaryStore !== instance.summaryStore || next.agentRegistry !== instance.agentRegistry;
     const previousModel = selectedModel(instance);
     instance.selected = next.selected;
     if (changed) {
       disposeSubscription(instance.subscription);
-      instance.subscription = null;
+      disposeSubscription(instance.summarySubscription);
+      releaseSubagents(instance);
+      releaseContextClient(instance);
+      instance.subscription = instance.summarySubscription = null;
       instance.epoch++;
       instance.provider = next.provider; instance.client = next.client;
-      instance.state = instance.record = instance.config = instance.wanted = instance.requested = null;
-      instance.usageHistory.clear(); instance.historyNext = 0; instance.historyReady = false; instance.historyStats = null;
-      instance.requestedKeys.clear(); instance.requestBase = null;
-      instance.configPending = null; instance.configAttempted = null; instance.inFlight = false; instance.models = null;
+      instance.summaryStore = next.summaryStore; instance.agentRegistry = next.agentRegistry;
+      bindContextClient(instance, next.client);
+      resetHistory(instance); instance.config = null;
+      instance.configPending = null; instance.configAttempted = null; instance.models = null;
       const epoch = instance.epoch;
       if (typeof next.provider?.onDidChange === 'function') instance.subscription = next.provider.onDidChange(() => queueUpdate(instance));
+      if (next.summaryStore) instance.summarySubscription = next.summaryStore.subscribe(() => queueUpdate(instance));
       if (next.client && typeof next.client.getAvailableModels === 'function') {
         catalog(next.client).then(models => {
           if (!valid(instance, epoch)) return;
@@ -784,6 +1250,9 @@
     if (instance.disposed) return;
     instance.disposed = true; instance.epoch++;
     disposeSubscription(instance.subscription);
+    disposeSubscription(instance.summarySubscription);
+    releaseSubagents(instance);
+    releaseContextClient(instance);
     releaseQuota(instance);
     releaseLayout(instance);
     instance.view.dispose(); instances.delete(instance.anchor);
@@ -808,7 +1277,10 @@
       for (const instance of dirty) rebind(instance);
     },
     cleanup() { for (const instance of instances.values()) if (!instance.anchor.isConnected) disposeInstance(instance); },
-    dispose() { stopped = true; for (const instance of instances.values()) disposeInstance(instance); },
+    dispose() {
+      stopped = true; disposeSubscription(storageSubscription);
+      for (const instance of instances.values()) disposeInstance(instance);
+    },
     status() { return [...instances.values()].map(instance => ({bound:Boolean(instance.provider && instance.client), ...instance.snapshot})); },
     get size() { return instances.size; }
   };
@@ -861,7 +1333,7 @@
     Starting: '正在启动',
     Started: '已启动',
     Waiting: '等待中',
-    Working: '处理中',
+    Working: '等待中',
     Thinking: '正在思考',
     Compacting: '正在压缩',
     Exploring: '正在查看',
@@ -1109,18 +1581,35 @@
   const hardExcluded = `${liveStatus},script,style,svg,iframe,webview,pre,code,.monaco-editor,.xterm,.cm-editor,[data-ch-keep],[data-testid="project-header"],[data-testid="breadcrumb-segment"],[data-testid="settings-nav-item-Account"]`;
   const projectPlaceholders = new Set(['No Project','Select Project','Select Workspace','New Workspace']);
   const generatedControl = '[data-testid="worked-for-collapsible"],[data-testid="thinking-collapsible-trigger"],[data-testid="turn-cards-container"] .files-changed-header';
+  const inputStatusControl = 'div.select-none:has(> [data-screenshot-volatile])';
+  const permissionScopeLabels = {once:'Allow once',session:'Allow for this session',always:'Always allow',decline:'Decline'};
   // The app also reads aria-label as an operation key (e.g. Cancel on blur).
   // Preserve that contract and translate only display text and display attributes.
   const attrs = ['title', 'placeholder', 'data-placeholder', 'aria-placeholder', 'alt'];
   const attrSelector = attrs.map(a => `[${a}]`).join(',');
-  const protectedCandidates = `${generatedControl},button,${attrSelector}`;
+  const protectedCandidates = `${generatedControl},button,${attrSelector},p,form,${inputStatusControl}`;
   const observation = {subtree:true, childList:true, characterData:true, attributes:true, attributeFilter:[...attrs,'data-context-window','data-cascade-id']};
   const parentMessageButton = el => {const button=el.closest('button');const text=button?.textContent.trim();return Boolean(button && (text==='Message from Parent Agent' || text===strings['Message from Parent Agent']));};
   const inLiveStatus = node => (node?.nodeType===Node.ELEMENT_NODE ? node : node?.parentElement)?.closest(liveStatus);
 
+  function sourceText(node) {
+    const record = texts.get(node);
+    return record && node.data === record.translated ? record.original : node.data;
+  }
+  function isComputerUseControl(el) {
+    const root = el.closest('form')?.parentElement ?? (el.tagName === 'P' ? el.parentElement : null);
+    const prompt = root?.querySelector(':scope > p');
+    if (!prompt || !root.querySelector(':scope > form select#scope')) return false;
+    const text = [...prompt.childNodes].filter(node => node.nodeType === Node.TEXT_NODE).map(sourceText).join('').trim();
+    return computerUseAppName(text) !== null;
+  }
+  function isInputStatus(el) {
+    const status = el.closest(inputStatusControl);
+    return Boolean(status && [...status.childNodes].some(node => node.nodeType === Node.TEXT_NODE && sourceText(node).trim() === 'Waiting for user input'));
+  }
   function textAllowed(el) {
     if (!el || inLiveStatus(el) || el.closest(textExcluded) || el.closest(named)) return false;
-    if (el.closest(authored)) return Boolean(el.closest(generatedControl)) || parentMessageButton(el);
+    if (el.closest(authored)) return Boolean(el.closest(generatedControl)) || parentMessageButton(el) || isComputerUseControl(el) || isInputStatus(el);
     // Tool output, terminal panes and diffs contain user files and commands.
     if (el.closest('[data-testid*="terminal-output"],[data-testid*="diff-content"],[data-testid*="file-content"]')) return false;
     return true;
@@ -1134,6 +1623,16 @@
     if (el.closest('[contenteditable]:not([contenteditable="false"])') && !['data-placeholder','aria-placeholder'].includes(attr)) return false;
     return true;
   }
+  function computerUseAppName(text) {
+    return /^Allow Computer Use to use ["“](.+)["”]\?$/.exec(text)?.[1] ?? null;
+  }
+  function normalizeTranslationKey(value) {
+    return value.trim().replace(/\s+/g, ' ').replace(/[‘’]/g, "'").replace(/[“”]/g, '"');
+  }
+  function setStrings(next) {
+    strings = next.strings || next;
+    normalizedStrings = new Map(Object.entries(strings).map(([key, value]) => [normalizeTranslationKey(key), value]));
+  }
   function duration(value) {
     return value.replace(/\b(\d+)\s*(days?|hours?|minutes?|seconds?|d|h|m|s)\b/g, (_,n,unit) => `${n}${({d:'天',day:'天',days:'天',h:'小时',hour:'小时',hours:'小时',m:'分钟',minute:'分钟',minutes:'分钟',s:'秒',second:'秒',seconds:'秒'})[unit]}`).replace(/,\s*|\s+and\s+/g,' ');
   }
@@ -1141,7 +1640,12 @@
     const originalValue = raw.trim();
     const value = originalValue.replace(/\s+/g, ' ');
     if (!value) return null;
-    let translated = Object.prototype.hasOwnProperty.call(strings, value) ? strings[value] : null;
+    // Prefer the original key; normalize quotes only for dictionary lookup so
+    // model names and other dynamic values retain their original punctuation.
+    let translated = Object.prototype.hasOwnProperty.call(strings, value)
+      ? strings[value] : normalizedStrings.get(normalizeTranslationKey(value));
+    const appName = computerUseAppName(value);
+    if (!translated && appName !== null) translated = `是否允许电脑操作功能使用“${appName}”？`;
     if (!translated) {
       const dynamic = [
         [/^Worked for (\d[\d\w .]*)$/, m => `耗时 ${duration(m[1])}`],
@@ -1153,6 +1657,12 @@
         [/^Select project, current: (.+)$/, m => `选择项目，当前：${projectPlaceholders.has(m[1])?(strings[m[1]]||m[1]):m[1]}`],
         [/^Agent permissions preset selector, current: (.+)$/, m => `选择智能体权限预设，当前：${m[1]}`],
         [/^Load older messages, showing (\d+) of (\d+)$/, m => `加载更早的消息，已显示 ${m[1]} / ${m[2]}`],
+        [/^(.+?) Sends immediately$/, m => `${m[1]} 立即发送`],
+        [/^(.+?) Queues after the turn$/, m => `${m[1]} 排队，当前轮次结束后发送`],
+        [/^(\d+) active conversations?$/, m => `${m[1]} 个进行中对话`],
+        [/^(\d+) archived conversations?$/, m => `${m[1]} 个已归档对话`],
+        [/^(\d+) active conversations? and (\d+) archived conversations?$/, m => `${m[1]} 个进行中对话和 ${m[2]} 个已归档对话`],
+        [/^(.+) is now available to paid Pro plan subscribers\.$/, m => `${m[1]} 现已向付费 Pro 套餐订阅者开放。`],
         [/^Cancel \((.+)\)$/, m => `取消（${m[1]}）`],
         [/^You have used some of your weekly limit, it will fully refresh in (.+)\.$/, m => `本周额度已使用一部分，将在 ${duration(m[1])}后全部恢复。`],
         [/^You have used some of your 5-hour limit, it will fully refresh in (.+)\.$/, m => `5 小时额度已使用一部分，将在 ${duration(m[1])}后全部恢复。`],
@@ -1213,7 +1723,11 @@
     if(node.parentElement.closest('[data-testid="project-selector-trigger"]') && !projectPlaceholders.has(node.data.trim())) return;
     const previous = texts.get(node);
     if (previous && node.data === previous.translated) return;
-    const translated = translate(node.data);
+    // Localize the displayed scope label while retaining the native option value.
+    const option = node.parentElement;
+    const label = option.tagName === 'OPTION' && isComputerUseControl(option)
+      ? permissionScopeLabels[option.value] : null;
+    const translated = translate(label ?? node.data);
     if (!translated) { texts.delete(node); return; }
     texts.set(node, {original:node.data, translated});
     node.data = translated;
@@ -1376,7 +1890,7 @@
     version:VERSION,
     status:()=>({version:VERSION,active:!stopped,textNodes:texts.size,attributes:[...attributes.values()].reduce((n,m)=>n+m.size,0),batches,entries:Object.keys(strings).length,nativeMenuAdapters:nativeMenuHooks.filter(h=>h.kind==='menu').length,defaultPromptAdapters:nativeMenuHooks.filter(h=>h.kind==='default-prompt').length,statusAdapters:statusFormatters?.count??0,contextUsage:contextRings.status()}),
     collectUnknown,
-    refresh(next) { clearPending();restore();strings=next.strings||next;statusFormatters?.setStrings(strings);pendingRoots.add(document.body);flush();return api.status(); },
+    refresh(next) { clearPending();restore();setStrings(next);statusFormatters?.setStrings(strings);pendingRoots.add(document.body);flush();return api.status(); },
     uninstall() {
       stopped=true;clearPending();restore();contextRings.dispose();
       for(const hook of nativeMenuHooks){const owner=hook.owner||window;if(owner[hook.key]===hook.wrapper)owner[hook.key]=hook.original;}
