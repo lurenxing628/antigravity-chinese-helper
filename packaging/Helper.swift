@@ -55,26 +55,19 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func nodeExecutable() -> URL? {
-        let userHome = FileManager.default.homeDirectoryForCurrentUser.path
-        let candidates = [
-            userHome + "/.local/bin/node",
-            "/opt/homebrew/bin/node",
-            "/usr/local/bin/node",
-            "/usr/bin/node"
-        ]
-        return candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }).map(URL.init(fileURLWithPath:))
+        NodeRuntime.executable(workingDirectory: runtimeFolder)
     }
 
     private func startRunner() {
         guard runner == nil, !stopping, !isQuitting else { return }
-        guard let node = nodeExecutable() else {
-            lastError = "未找到 Node.js，打开说明查看运行要求"
-            refreshStatus()
-            return
-        }
         let script = runtimeFolder.appendingPathComponent("runner.mjs")
         guard FileManager.default.fileExists(atPath: script.path) else {
             lastError = "请先运行“安装汉化助手.command”安装运行文件"
+            refreshStatus()
+            return
+        }
+        guard let node = nodeExecutable() else {
+            lastError = "未找到 Node.js 22 或更新版本，打开说明查看运行要求"
             refreshStatus()
             return
         }
@@ -90,11 +83,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         do {
             try FileManager.default.createDirectory(at: supportFolder, withIntermediateDirectories: true)
             let logURL = supportFolder.appendingPathComponent("helper.log")
-            if !FileManager.default.fileExists(atPath: logURL.path) {
-                FileManager.default.createFile(atPath: logURL.path, contents: nil)
-            }
-            runnerLog = try FileHandle(forWritingTo: logURL)
-            try runnerLog?.seekToEnd()
+            runnerLog = try HelperLog.open(at: logURL)
             process.standardOutput = runnerLog
             process.standardError = runnerLog
             process.terminationHandler = { [weak self] finished in
@@ -234,6 +223,11 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
 @main
 enum HelperApplication {
     static func main() {
+        if CommandLine.arguments.contains("--watch-antigravity") {
+            let watcher = AppWatcher()
+            withExtendedLifetime(watcher) { watcher.run() }
+            return
+        }
         let application = NSApplication.shared
         let delegate = HelperDelegate()
         application.delegate = delegate

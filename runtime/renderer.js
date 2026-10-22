@@ -7,7 +7,7 @@
   if (!document.documentElement || !document.body) return null;
   window.__antigravityChineseHelper?.uninstall?.();
 
-  const VERSION = '0.3.10';
+  const VERSION = '0.3.11';
   let strings, normalizedStrings;
   setStrings(dictionary);
   let stopped = false;
@@ -138,6 +138,7 @@
   let currentSetting = null;
   let settingDirty = false;
   let applyFeedbackTimer = null;
+  let quotaResetTimer = null;
   const numericKeys = ['used', 'maxContext', 'modelCapacity', 'compactionReference'];
   const clampFraction = value => Math.max(0, Math.min(1, value));
   const fractionText = value => value === null ? '—' : `${Math.round(value * 100)}%`;
@@ -203,6 +204,7 @@
       ring.tooltip.hidden = true;
       if (active === ring) active = null;
     }
+    refreshQuotaCountdown();
   }
   function createRing(key, title, rows) {
     const item = document.createElement('span'); item.className = 'ring-item';
@@ -350,7 +352,7 @@
     settingStatus.hidden = !setting?.error;
     writeAttribute(settingStatus, 'data-error', String(Boolean(setting?.error)));
   }
-  const quotaRows = [['remaining', '剩余比例']];
+  const quotaRows = [['remaining', '剩余比例'], ['resetAt', '额度重置']];
   const fiveHour = createRing('five-hour', '5 小时额度', quotaRows);
   const weekly = createRing('weekly', '每周额度', quotaRows);
   const metricDefinitions = [
@@ -420,14 +422,43 @@
 
   function normalizeQuota(quota) {
     const fraction = quota?.remainingFraction;
+    const resetAtMs = quota?.resetAtMs;
     return {remainingFraction:typeof fraction === 'number' && Number.isFinite(fraction) ? clampFraction(fraction) : null,
+      resetAtMs:typeof resetAtMs === 'number' && Number.isFinite(resetAtMs) && resetAtMs > 0 ? resetAtMs : null,
       disabled:quota?.disabled === true};
   }
-  const sameQuota = (a, b) => a.remainingFraction === b.remainingFraction && a.disabled === b.disabled;
+  const sameQuota = (a, b) => a.remainingFraction === b.remainingFraction && a.resetAtMs === b.resetAtMs && a.disabled === b.disabled;
+  function quotaResetText(quota, now = Date.now()) {
+    if (!quota || quota.disabled || quota.resetAtMs === null) return '—';
+    const reset = new Date(quota.resetAtMs), today = new Date(now);
+    const pad = value => String(value).padStart(2, '0');
+    const sameDay = reset.toDateString() === today.toDateString();
+    const year = reset.getFullYear() === today.getFullYear() ? '' : `${reset.getFullYear()}/`;
+    const date = sameDay ? '' : `${year}${pad(reset.getMonth() + 1)}/${pad(reset.getDate())} `;
+    const time = `${date}${pad(reset.getHours())}:${pad(reset.getMinutes())}`;
+    if (quota.resetAtMs <= now) return `${time}（已到重置时间）`;
+    const totalMinutes = Math.ceil((quota.resetAtMs - now) / 60000);
+    const days = Math.floor(totalMinutes / 1440), hours = Math.floor(totalMinutes % 1440 / 60), minutes = totalMinutes % 60;
+    const remaining = [days && `${days}天`, hours && `${hours}小时`, minutes && `${minutes}分`].filter(Boolean).join('');
+    return `${time}（${remaining}后）`;
+  }
+  function refreshQuotaCountdown() {
+    window.clearTimeout(quotaResetTimer); quotaResetTimer = null;
+    if (!active?.values?.resetAt) return;
+    const quota = current?.[active.key === 'weekly' ? 'weeklyQuota' : 'fiveHourQuota'];
+    const now = Date.now();
+    writeText(active.values.resetAt.value, quotaResetText(quota, now));
+    positionTooltip(active);
+    if (!quota?.disabled && quota?.resetAtMs > now) {
+      const delay = (quota.resetAtMs - now) % 60000 || 60000;
+      quotaResetTimer = window.setTimeout(refreshQuotaCountdown, delay);
+    }
+  }
   function updateQuota(ring, quota) {
     const fraction = quota.disabled ? null : quota.remainingFraction;
     const text = fractionText(fraction);
     renderFraction(ring, fraction); writeText(ring.values.remaining.value, text);
+    writeText(ring.values.resetAt.value, quotaResetText(quota));
     writeAttribute(ring.button, 'aria-label', `${ring.key === 'weekly' ? '每周额度' : '5 小时额度'}：剩余 ${text}`);
   }
   function update(snapshot) {
@@ -481,6 +512,7 @@
       fitMetrics();
     }
     if (active) positionTooltip(active);
+    refreshQuotaCountdown();
     return true;
   }
 

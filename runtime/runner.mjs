@@ -108,31 +108,39 @@ async function loadBundle() {
   })()`;
   // Syntax validation never executes the renderer in Node.
   new Function(expression);
-  return { expression, sourceMtime: sourceStat.mtimeMs, dictionaryMtime: dictionaryStat.mtimeMs, loadedAt: new Date().toISOString() };
+  return { expression, dictionary, sourceMtime: sourceStat.mtimeMs, dictionaryMtime: dictionaryStat.mtimeMs, loadedAt: new Date().toISOString() };
 }
 
-async function installNow(session, replace) {
+async function installNow(session, mode) {
   if (session.closing || stopping) return false;
   const { client } = session;
+  const activeBundle = bundle;
   if (!(await evaluate(client, `Boolean(${knownApp})`))) return false;
-  if (replace) {
+  if (mode !== 'ensure') {
     if (session.scriptId) await client.call('Page.removeScriptToEvaluateOnNewDocument', { identifier: session.scriptId });
     session.scriptId = null;
+  }
+  if (mode === 'replace') {
     await evaluate(client, `(() => { if (${knownApp}) { globalThis.${helperKey}?.uninstall?.(); delete globalThis.${helperKey}; } })()`);
   }
   if (!session.scriptId) {
-    const result = await client.call('Page.addScriptToEvaluateOnNewDocument', { source: bundle.expression });
+    const result = await client.call('Page.addScriptToEvaluateOnNewDocument', { source: activeBundle.expression });
     session.scriptId = result.identifier;
   }
   if (session.closing || stopping) return false;
-  await evaluate(client, bundle.expression);
+  if (mode === 'refresh') {
+    await evaluate(client, `(() => { if (${knownApp}) globalThis.${helperKey}?.refresh(${JSON.stringify(activeBundle.dictionary)}); })()`);
+  }
+  // Also installs into a document that navigated while the script was replaced.
+  await evaluate(client, activeBundle.expression);
   const info = await evaluate(client, `(() => { const helper = globalThis.${helperKey}; return { active: Boolean(helper), version: typeof helper?.version === 'string' ? helper.version : null }; })()`);
   session.version = info?.version ?? null;
+  if (info?.active) session.sourceMtime = activeBundle.sourceMtime;
   return Boolean(info?.active);
 }
 
-function install(session, replace = false) {
-  session.operation = (session.operation ?? Promise.resolve()).catch(() => {}).then(() => installNow(session, replace));
+function install(session, mode = 'ensure') {
+  session.operation = (session.operation ?? Promise.resolve()).catch(() => {}).then(() => installNow(session, mode));
   return session.operation;
 }
 
@@ -289,7 +297,7 @@ function reload() {
     bundle = nextBundle;
     bundleError = null;
     await Promise.all([...sessions.values()].map(async (session) => {
-      try { await install(session, true); }
+      try { await install(session, session.sourceMtime === bundle.sourceMtime ? 'refresh' : 'replace'); }
       catch { lastError = 'renderer-reload-failed'; }
     }));
     await saveStatus();
