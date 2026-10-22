@@ -106,7 +106,7 @@ test('paged history counts generators once and averages the last ten completed r
   f.mount(); await settle();
   assert.deepEqual(f.calls.metadata.map(call => call.generatorMetadataOffset), [0, 4, 8]);
   assert.ok(f.calls.metadata.every(call => call.includeMessages === false));
-  assert.deepEqual(f.snapshot().metrics, {ttftMs:8000, tps:15, samples:10, conversationTokens:1858, cacheHitRate:0.75});
+  assert.deepEqual(f.snapshot().metrics, {ttftMs:8000, tps:7.5, samples:10, inputTokens:480, outputTokens:1378, conversationTokens:1858, cacheHitRate:0.75});
 
   // Step usage replaces the same generator's counters; it is not another call.
   f.emit(state('A', 12, {stepUsage:usage(20, 300, 40)})); await settle();
@@ -123,7 +123,7 @@ test('paged history counts generators once and averages the last ten completed r
   f.emit(); await settle();
   assert.equal(f.calls.metadata.length, 4);
   assert.deepEqual(f.snapshot().metrics, {
-    ttftMs:10000, tps:19, samples:10, conversationTokens:2715, cacheHitRate:430 / 580
+    ttftMs:10000, tps:9.5, samples:10, inputTokens:580, outputTokens:2135, conversationTokens:2715, cacheHitRate:430 / 580
   });
 
   const pending = fixture(state('pending', 1), {metadata:() => ({generatorMetadata:[record(0, {
@@ -144,6 +144,8 @@ test('native cumulative cost takes priority and output subdivisions are not coun
   t.after(() => f.controller.dispose());
   f.mount(); await settle();
   assert.equal(f.snapshot().metrics.conversationTokens, 350);
+  assert.equal(f.snapshot().metrics.inputTokens, 150);
+  assert.equal(f.snapshot().metrics.outputTokens, 200);
   assert.equal(f.snapshot().metrics.cacheHitRate, 50 / 150);
 });
 
@@ -165,7 +167,7 @@ test('a reused provider isolates old successes and failures from the next conver
       usage:usage(1, 2, 3), timeToFirstToken:{seconds:0n, nanos:250000000}, streamingDuration:{seconds:1n, nanos:0}
     })]});
     await settle();
-    assert.deepEqual(f.snapshot().metrics, {ttftMs:250, tps:2, samples:1, conversationTokens:6, cacheHitRate:0.75});
+    assert.deepEqual(f.snapshot().metrics, {ttftMs:250, tps:1.6, samples:1, inputTokens:4, outputTokens:2, conversationTokens:6, cacheHitRate:0.75});
     f.controller.dispose();
   }
 });

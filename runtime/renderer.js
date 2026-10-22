@@ -7,7 +7,7 @@
   if (!document.documentElement || !document.body) return null;
   window.__antigravityChineseHelper?.uninstall?.();
 
-  const VERSION = '0.3.6';
+  const VERSION = '0.3.7';
   let strings = dictionary.strings || dictionary;
   let stopped = false;
   let flushTask = null;
@@ -52,13 +52,10 @@
   const shadow = host.attachShadow({mode:'open'});
   const style = document.createElement('style');
   style.textContent = `
-    :host { display:inline-flex; align-items:center; flex-wrap:wrap; gap:3px 4px; flex:0 1 auto; min-width:0; max-width:100%; vertical-align:middle; margin-inline-start:3px; color:var(--secondary-foreground,#b6bbc4); }
+    :host { display:inline-flex; align-items:center; gap:4px; flex:0 0 auto; vertical-align:middle; margin-inline-start:3px; color:var(--secondary-foreground,#b6bbc4); }
     *, *::before, *::after { box-sizing:border-box; }
     [hidden] { display:none !important; }
     .ring-item { display:inline-flex; align-items:center; flex:0 0 auto; }
-    .metric { display:inline-flex; align-items:baseline; flex:0 0 auto; gap:3px; white-space:nowrap; font:10px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-    .metric-label { color:var(--muted-foreground,#9199a6); }
-    .metric-value { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-variant-numeric:tabular-nums; }
     button { position:relative; display:inline-grid; place-items:center; width:24px; height:24px; padding:2px; border:0; border-radius:50%; color:inherit; background:transparent; cursor:pointer; font:inherit; }
     button:hover, button[aria-expanded="true"] { background:var(--secondary,rgba(128,128,128,.15)); color:var(--foreground,#e8e8eb); }
     button:focus-visible { outline:1px solid var(--foreground,#e8e8eb); outline-offset:2px; }
@@ -74,6 +71,21 @@
     dd { min-width:0; margin:0; text-align:right; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
   `;
   shadow.appendChild(style);
+  const metricsHost = document.createElement('span');
+  metricsHost.className = 'no-focus-agent-input';
+  metricsHost.style.marginInlineStart = 'auto';
+  metricsHost.setAttribute('data-ch-keep', 'true');
+  metricsHost.setAttribute('data-testid', 'conversation-metrics');
+  const metricsShadow = metricsHost.attachShadow({mode:'open'});
+  const metricsStyle = document.createElement('style');
+  metricsStyle.textContent = `
+    :host { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:3px 10px; flex:0 1 auto; min-width:min(100%,330px); max-width:100%; margin-inline-start:auto; color:var(--secondary-foreground,#b6bbc4); }
+    *, *::before, *::after { box-sizing:border-box; }
+    .metric { display:inline-flex; align-items:baseline; flex:0 0 auto; gap:3px; white-space:nowrap; font:10px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    .metric-label { color:var(--muted-foreground,#9199a6); }
+    .metric-value { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-variant-numeric:tabular-nums; }
+  `;
+  metricsShadow.appendChild(metricsStyle);
 
   const permanentListeners = [];
   const rings = [];
@@ -204,9 +216,10 @@
   const fiveHour = createRing('five-hour', '5 小时额度', quotaRows);
   const weekly = createRing('weekly', '每周额度', quotaRows);
   const metricDefinitions = [
-    ['ttftMs', '首字', '最近10条回复的平均首字延迟', value => `${(value / 1000).toFixed(2)}s`],
-    ['tps', 'TPS', '最近10条回复的平均生成速度', value => value.toFixed(1)],
-    ['conversationTokens', 'Token', '对话Token使用量', formatTokens],
+    ['ttftMs', '首字', '最近10条完成回复的平均首字时间', value => `${(value / 1000).toFixed(2)}s`],
+    ['tps', 'TPS', '最近10条回复的平均TPS（含首字等待）', value => value.toFixed(1)],
+    ['inputTokens', '输入', '对话输入Token使用量（含缓存输入）', formatTokens],
+    ['outputTokens', '输出', '对话输出Token使用量', formatTokens],
     ['cacheHitRate', '缓存', '缓存命中率', value => `${(value * 100).toFixed(1)}%`],
   ];
   const metrics = metricDefinitions.map(([key, label, title, format]) => {
@@ -214,12 +227,15 @@
     item.title = title;
     const name = document.createElement('span'); name.className = 'metric-label'; name.textContent = label;
     const value = document.createElement('span'); value.className = 'metric-value'; value.textContent = '—';
-    item.append(name, value); shadow.appendChild(item);
+    item.append(name, value); metricsShadow.appendChild(item);
     return {key, value, format};
   });
   listen(host, 'pointerdown', event => event.stopPropagation());
   listen(host, 'mousedown', event => event.stopPropagation());
   listen(host, 'click', event => event.stopPropagation());
+  listen(metricsHost, 'pointerdown', event => { event.preventDefault(); event.stopPropagation(); });
+  listen(metricsHost, 'mousedown', event => { event.preventDefault(); event.stopPropagation(); });
+  listen(metricsHost, 'click', event => event.stopPropagation());
 
   function normalizeQuota(quota) {
     const fraction = quota?.remainingFraction;
@@ -272,6 +288,7 @@
 
   return {
     host,
+    metricsHost,
     update,
     dispose() {
       if (disposed) return;
@@ -281,6 +298,7 @@
       permanentListeners.length = 0;
       for (const ring of rings) ring.root?.unmount();
       host.remove();
+      metricsHost.remove();
     }
   };
 });
@@ -289,6 +307,7 @@
   const selector = '[data-testid="model-selector-trigger"]';
   const instances = new Map();
   const clients = new WeakMap();
+  let layoutSequence = 0;
   let stopped = false;
   const quotaHubs = new Map();
   const appWindow = document.defaultView;
@@ -470,9 +489,10 @@
     // its top-level usage and the repeated retry snapshots.
     const selected = [...(meta.retryInfos ?? [])].reverse().find(retry => retry.usage)?.usage ?? meta.usage;
     const duration = value => value ? count(Number(value.seconds ?? 0) * 1000 + Number(value.nanos ?? 0) / 1000000) : null;
-    const parts = usageParts(selected), streamingMs = duration(meta.streamingDuration);
-    return {parts, ttftMs:duration(meta.timeToFirstToken), streamingMs,
-      tps:streamingMs > 0 && parts?.output > 0 ? parts.output * 1000 / streamingMs : null};
+    const parts = usageParts(selected), streamingMs = duration(meta.streamingDuration), ttftMs = duration(meta.timeToFirstToken);
+    // Count all output against the whole call, including time before the first stream event.
+    return {parts, ttftMs, streamingMs,
+      tps:streamingMs > 0 && ttftMs !== null && parts?.output > 0 ? parts.output * 1000 / (ttftMs + streamingMs) : null};
   }
   function conversationMetrics(instance) {
     if (!instance.historyStats) {
@@ -491,6 +511,7 @@
     const input = totals ? totals.input + totals.cache : 0;
     return {ttftMs:instance.historyReady ? stats.ttftMs : null,
       tps:instance.historyReady ? stats.tps : null, samples:instance.historyReady ? stats.samples : 0,
+      inputTokens:totals ? input : null, outputTokens:totals?.output ?? null,
       conversationTokens:totals ? input + totals.output : null,
       cacheHitRate:input > 0 ? totals.cache / input : null};
   }
@@ -535,12 +556,42 @@
     if (typeof subscription === 'function') subscription();
     else subscription?.dispose?.();
   }
+  function releaseLayout(instance) {
+    const layout = instance.layout;
+    if (!layout) return;
+    layout.style.remove();
+    if (layout.toolbar.getAttribute('data-ch-metrics-toolbar') === layout.marker) {
+      if (layout.previous === null) layout.toolbar.removeAttribute('data-ch-metrics-toolbar');
+      else layout.toolbar.setAttribute('data-ch-metrics-toolbar', layout.previous);
+    }
+    instance.layout = null;
+  }
+  function placeView(instance) {
+    const {anchor, view} = instance;
+    const placement = anchor.closest('.no-focus-agent-input') ?? anchor;
+    if (view.host.previousSibling !== placement) placement.after(view.host);
+    if (!view.metricsHost) return;
+    const footer = anchor.closest('[class*="@container/input-footer"]');
+    let toolbar = anchor;
+    while (footer && toolbar.parentElement && toolbar.parentElement !== footer) toolbar = toolbar.parentElement;
+    if (!footer || toolbar.parentElement !== footer) {
+      releaseLayout(instance);
+      if (view.metricsHost.previousSibling !== view.host) view.host.after(view.metricsHost);
+      return;
+    }
+    if (instance.layout?.toolbar !== toolbar) {
+      releaseLayout(instance);
+      const marker = `ch-${++layoutSequence}`, style = document.createElement('style');
+      style.setAttribute('data-ch-keep', 'true');
+      style.textContent = `[data-ch-metrics-toolbar="${marker}"] { flex-wrap:wrap; row-gap:4px; }`;
+      instance.layout = {toolbar, marker, style, previous:toolbar.getAttribute('data-ch-metrics-toolbar')};
+      toolbar.setAttribute('data-ch-metrics-toolbar', marker);
+      document.head.appendChild(style);
+    }
+    if (view.metricsHost.parentElement !== toolbar) toolbar.appendChild(view.metricsHost);
+  }
   function mount(anchor) {
     const view = createView(document, anchor);
-    // The app's own no-focus wrapper is already a child of its flex toolbar.
-    // Keep the new button outside the native model-menu trigger and its wrapper.
-    const placement = anchor.closest('.no-focus-agent-input') ?? anchor;
-    placement.after(view.host);
     const instance = {anchor, view, provider:null, client:null, selected:null, subscription:null,
       epoch:0, queued:false, disposed:false, state:null, record:null, models:null, config:null,
       wanted:null, requested:null, requestedKeys:new Set(), requestBase:null, inFlight:false, lastError:null, snapshot:null,
@@ -702,6 +753,7 @@
   }
   function rebind(instance) {
     if (stopped || instance.disposed || !instance.anchor.isConnected) return;
+    placeView(instance);
     const next = bindings(instance.anchor);
     const changed = next.provider !== instance.provider || next.client !== instance.client;
     const previousModel = selectedModel(instance);
@@ -733,6 +785,7 @@
     instance.disposed = true; instance.epoch++;
     disposeSubscription(instance.subscription);
     releaseQuota(instance);
+    releaseLayout(instance);
     instance.view.dispose(); instances.delete(instance.anchor);
   }
   return {
