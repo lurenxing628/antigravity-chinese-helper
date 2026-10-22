@@ -1,6 +1,6 @@
 # Antigravity 汉化助手
 
-macOS 菜单栏汉化助手，通过 Antigravity 的本机调试接口加载中文界面，支持词库热更新、暂停和恢复英文。运行时版本 **0.3.4**。
+macOS 菜单栏汉化助手，通过 Antigravity 的本机调试接口加载中文界面，支持词库热更新、暂停和恢复英文。运行时版本 **0.3.5**。
 
 已验证环境：**Antigravity App 2.25.0 / macOS arm64 / Node.js 24.15.0**。
 
@@ -79,5 +79,14 @@ node runtime/runner.mjs --reload
 - `runtime/runner.mjs`：发现窗口、重新连接、热更新和本机控制接口。
 - `runtime/cdp.mjs`：使用 Node.js 内置 WebSocket 的调试协议客户端。
 - `packaging/Helper.swift`：菜单栏程序。
+- `packaging/RunnerStatus.swift`：后台状态解码和菜单标题。
 - `build-app.sh`：退出助手后，使用本机 Swift 编译器重建菜单栏 `.app`。
 - `安装汉化助手.command`：退出助手后，将应用和运行文件部署到 Application Support。
+
+## 验证
+
+```sh
+node --test tests/*.test.mjs
+xcrun swiftc packaging/RunnerStatus.swift tests/RunnerStatusTests.swift -o /tmp/antigravity-helper-status-tests
+/tmp/antigravity-helper-status-tests
+```

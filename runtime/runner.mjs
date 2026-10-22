@@ -14,13 +14,20 @@ const statusPath = join(stateDir, 'status.json');
 const sourcePath = join(runtimeDir, 'renderer.js');
 const dictionaryPath = join(runtimeDir, 'translations.json');
 const helperKey = '__antigravityChineseHelper';
+const requestedShutdownTimeoutMs = Number(process.env.ANTIGRAVITY_HELPER_SHUTDOWN_TIMEOUT_MS ?? 8000);
+const shutdownTimeoutMs = Number.isFinite(requestedShutdownTimeoutMs) && requestedShutdownTimeoutMs > 0 ? requestedShutdownTimeoutMs : 8000;
+// Keep the returned script ID so shutdown can remove a registration in flight.
+const shutdownPreservedMethods = ['Page.addScriptToEvaluateOnNewDocument'];
 const knownApp = `location.protocol === 'https:' && location.hostname === '127.0.0.1' && globalThis.top === globalThis && typeof globalThis.electronNative?.getZoomLevel === 'function' && typeof globalThis.nativeStorage?.getItems === 'function'`;
 const sessions = new Map();
 const rejectedTargets = new Map();
 let bundle;
 let stopping = false;
 let discovering = false;
+let discoveryClient = null;
 let discoverySettled = Promise.resolve();
+let shutdownPromise = null;
+let shutdownDeadline = null;
 let reloading = false;
 let reloadPromise = null;
 let tickPromise = null;
@@ -75,8 +82,8 @@ function ipc(command, timeoutMs = 15000) {
   });
 }
 
-async function evaluate(client, expression) {
-  const result = await client.call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+async function evaluate(client, expression, timeoutMs) {
+  const result = await client.call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }, timeoutMs);
   if (result.exceptionDetails) throw new Error('Renderer evaluation failed');
   return result.result?.value;
 }
@@ -117,6 +124,7 @@ async function installNow(session, replace) {
     const result = await client.call('Page.addScriptToEvaluateOnNewDocument', { source: bundle.expression });
     session.scriptId = result.identifier;
   }
+  if (session.closing || stopping) return false;
   await evaluate(client, bundle.expression);
   const info = await evaluate(client, `(() => { const helper = globalThis.${helperKey}; return { active: Boolean(helper), version: typeof helper?.version === 'string' ? helper.version : null }; })()`);
   session.version = info?.version ?? null;
@@ -128,15 +136,27 @@ function install(session, replace = false) {
   return session.operation;
 }
 
-async function disconnect(session, restoreEnglish) {
+function disconnect(session, restoreEnglish) {
+  if (stopping && !session.cleanupStarted) session.client.cancelPending({ preserveMethods: shutdownPreservedMethods });
+  if (session.disconnectPromise) return session.disconnectPromise;
   clearTimeout(session.navigationTimer);
   session.closing = true;
-  await session.operation?.catch(() => {});
-  if (restoreEnglish && session.client.connected) {
-    if (session.scriptId) await session.client.call('Page.removeScriptToEvaluateOnNewDocument', { identifier: session.scriptId }).catch(() => {});
-    await evaluate(session.client, `(() => { if (${knownApp}) { globalThis.${helperKey}?.uninstall?.(); delete globalThis.${helperKey}; } })()`).catch(() => {});
-  }
-  session.client.close();
+  session.disconnectPromise = (async () => {
+    await session.operation?.catch(() => {});
+    session.cleanupStarted = true;
+    try {
+      if (restoreEnglish && session.client.connected) {
+        const timeoutMs = stopping ? Math.max(0, shutdownDeadline - Date.now()) : undefined;
+        if (timeoutMs !== 0) {
+          // Send both removals together: a slow request must not hold up uninstall.
+          const cleanup = [evaluate(session.client, `(() => { if (${knownApp}) { globalThis.${helperKey}?.uninstall?.(); delete globalThis.${helperKey}; } })()`, timeoutMs)];
+          if (session.scriptId) cleanup.push(session.client.call('Page.removeScriptToEvaluateOnNewDocument', { identifier: session.scriptId }, timeoutMs));
+          await Promise.allSettled(cleanup);
+        }
+      }
+    } finally { session.client.close(); }
+  })();
+  return session.disconnectPromise;
 }
 
 function scheduleInstall(session) {
@@ -201,6 +221,8 @@ async function discover() {
       let session;
       try {
         client = await CdpClient.connect(target.webSocketDebuggerUrl);
+        discoveryClient = client;
+        if (stopping) { client.close(); break; }
         // Native bridge identity excludes embedded localhost websites with the same origin.
         if (!(await evaluate(client, `Boolean(${knownApp})`))) {
           rejectedTargets.set(target.id, Date.now() + 10000);
@@ -216,14 +238,18 @@ async function discover() {
           if (sessions.get(target.id) === session) sessions.delete(target.id);
         });
         if (!(await install(session))) throw new Error('Renderer did not initialize');
+        if (stopping) { await disconnect(session, true); break; }
         sessions.set(target.id, session);
         lastError = null;
       } catch {
         if (session) await disconnect(session, true);
         else client?.close();
         if (!stopping) lastError = 'window-connect-failed';
+      } finally {
+        if (discoveryClient === client) discoveryClient = null;
       }
     }
+    if (stopping) return;
     if (Date.now() - lastHealth >= 10000) {
       lastHealth = Date.now();
       for (const [id, session] of sessions) {
@@ -288,18 +314,26 @@ function tick() {
   return tickPromise;
 }
 
-async function stop() {
-  if (stopping) return;
+function stop() {
+  if (shutdownPromise) return shutdownPromise;
   stopping = true;
+  shutdownDeadline = Date.now() + shutdownTimeoutMs;
   clearInterval(interval);
-  await discoverySettled;
-  await Promise.all([...sessions.values()].map((session) => disconnect(session, true)));
-  sessions.clear();
-  await saveStatus().catch(() => {});
-  await unlink(pidPath).catch(() => {});
-  // Node owns removal of a bound Unix socket when this server closes.
-  if (server) server.close();
-  process.exitCode = 0;
+  // Reject pending installation work without closing its socket; cleanup needs it.
+  discoveryClient?.cancelPending({ preserveMethods: shutdownPreservedMethods });
+  shutdownPromise = (async () => {
+    await Promise.all([
+      discoverySettled,
+      ...[...sessions.values()].map((session) => disconnect(session, true)),
+    ]);
+    sessions.clear();
+    await saveStatus().catch(() => {});
+    await unlink(pidPath).catch(() => {});
+    // Node owns removal of a bound Unix socket when this server closes.
+    if (server) server.close();
+    process.exitCode = 0;
+  })();
+  return shutdownPromise;
 }
 
 async function collect() {

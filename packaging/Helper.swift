@@ -13,6 +13,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     private var isQuitting = false
     private var stopping = false
     private var lastError: String?
+    private let shutdownGracePeriod: TimeInterval = 10
 
     private var homeFolder: URL { supportFolder.appendingPathComponent("application", isDirectory: true) }
     private var runtimeFolder: URL { homeFolder.appendingPathComponent("runtime", isDirectory: true) }
@@ -82,6 +83,10 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         process.executableURL = node
         process.arguments = [script.path]
         process.currentDirectoryURL = runtimeFolder
+        var environment = ProcessInfo.processInfo.environment
+        // The runner owns cleanup; leave one second for it to close and exit.
+        environment["ANTIGRAVITY_HELPER_SHUTDOWN_TIMEOUT_MS"] = String(Int((shutdownGracePeriod - 1) * 1000))
+        process.environment = environment
         do {
             try FileManager.default.createDirectory(at: supportFolder, withIntermediateDirectories: true)
             let logURL = supportFolder.appendingPathComponent("helper.log")
@@ -125,9 +130,9 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         stopping = true
         statusLine.title = "正在恢复英文…"
         process.terminate()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + shutdownGracePeriod) {
             if process.isRunning {
-                let message = "SIGTERM 后 3 秒进程仍在运行，结束汉化助手进程。\n"
+                let message = "恢复英文的等待时间已结束，结束汉化助手进程。\n"
                 if let data = message.data(using: .utf8) { try? self.runnerLog?.write(contentsOf: data) }
                 kill(process.processIdentifier, SIGKILL)
             }
@@ -163,26 +168,11 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         }
         let path = supportFolder.appendingPathComponent("status.json")
         guard let data = try? Data(contentsOf: path),
-              let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+              let value = try? JSONDecoder().decode(RunnerStatus.self, from: data) else {
             statusLine.title = "正在连接 Antigravity…"
             return
         }
-        let state = (value["status"] as? String ?? value["state"] as? String ?? "").lowercased()
-        let count = (value["translatedWindows"] as? Int)
-            ?? (value["windowsTranslated"] as? Int)
-            ?? (value["attachedTargets"] as? Int)
-            ?? (value["windows"] as? Int)
-            ?? (value["targets"] as? [Any])?.count
-            ?? 0
-        if state.contains("error") {
-            statusLine.title = "汉化遇到问题：" + (value["message"] as? String ?? "打开说明查看日志")
-        } else if count > 0 {
-            statusLine.title = "已汉化 \(count) 个窗口"
-        } else if state.contains("wait") || state == "running" || state == "connected" {
-            statusLine.title = "运行中 · 等待 Antigravity 窗口"
-        } else {
-            statusLine.title = value["message"] as? String ?? "汉化运行中"
-        }
+        statusLine.title = value.menuTitle
     }
 
     @objc private func reloadTranslations() {
@@ -241,7 +231,12 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-let application = NSApplication.shared
-let delegate = HelperDelegate()
-application.delegate = delegate
-application.run()
+@main
+enum HelperApplication {
+    static func main() {
+        let application = NSApplication.shared
+        let delegate = HelperDelegate()
+        application.delegate = delegate
+        withExtendedLifetime(delegate) { application.run() }
+    }
+}

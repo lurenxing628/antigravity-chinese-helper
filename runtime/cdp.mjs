@@ -62,7 +62,7 @@ export class CdpClient {
         this.#pending.delete(id);
         reject(new Error(`CDP ${method} timed out`));
       }, timeoutMs);
-      this.#pending.set(id, { resolve, reject, timer });
+      this.#pending.set(id, { method, resolve, reject, timer });
       try { this.#socket.send(JSON.stringify({ id, method, params })); }
       catch (error) {
         clearTimeout(timer);
@@ -76,6 +76,15 @@ export class CdpClient {
     if (!this.#listeners.has(method)) this.#listeners.set(method, new Set());
     this.#listeners.get(method).add(listener);
     return () => this.#listeners.get(method)?.delete(listener);
+  }
+
+  cancelPending({ preserveMethods = [] } = {}) {
+    for (const [id, { method, reject, timer }] of this.#pending) {
+      if (preserveMethods.includes(method)) continue;
+      clearTimeout(timer);
+      this.#pending.delete(id);
+      reject(new Error('CDP request cancelled'));
+    }
   }
 
   #finish() {

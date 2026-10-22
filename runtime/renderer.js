@@ -7,7 +7,7 @@
   if (!document.documentElement || !document.body) return null;
   window.__antigravityChineseHelper?.uninstall?.();
 
-  const VERSION = '0.3.4';
+  const VERSION = '0.3.5';
   let strings = dictionary.strings || dictionary;
   let stopped = false;
   let flushTask = null;
@@ -826,8 +826,31 @@
     [groupEntry, ['Working', 'Thinking', 'Explored', 'Ran', 'ran', 'command', 'commands', 'Edited', 'edited', 'Done'], ['Explored'], 'status-group']
   ]) {
     if (!entry) continue;
-    const localized = localizeLiterals(entry, words, templates);
-    if (localized) install(entry.key, entry.original, localized, kind);
+    let localized;
+    try {
+      localized = localizeLiterals(entry, words, templates);
+    } catch {
+      // A changed native function may no longer be a standalone expression.
+      // Leave that formatter intact while installing the remaining adapters.
+      continue;
+    }
+    if (!localized) continue;
+    let enabled = true;
+    const wrapper = function statusFormatter(...args) {
+      if (enabled) {
+        try {
+          return Reflect.apply(localized, this, args);
+        } catch {
+          // Recompilation cannot retain module-private bindings. Disable this
+          // wrapper too: native callers may already hold a reference to it.
+          enabled = false;
+          if (window[entry.key] === wrapper) window[entry.key] = entry.original;
+        }
+      }
+      // Keep native exceptions outside the localization fallback boundary.
+      return Reflect.apply(entry.original, this, args);
+    };
+    install(entry.key, entry.original, wrapper, kind);
   }
 
   const shimmerEntry = nativeFunctions.find(entry => entry.source.includes('"animate-shimmer-text"') && /\bchildren\s*:/.test(entry.source) && /\bactive\s*:/.test(entry.source));
@@ -898,7 +921,7 @@
   }
 
   return {
-    count: hooks.length,
+    get count() { return hooks.filter(hook => hook.owner[hook.key] === hook.wrapper).length; },
     hooks,
     prefixKey: prefixEntry?.key ?? null,
     thinkingKey: transitionEntry?.key ?? null,

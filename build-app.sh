@@ -11,6 +11,7 @@ mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 
 xcrun swiftc -O -framework AppKit \
     "$project_dir/packaging/Helper.swift" \
+    "$project_dir/packaging/RunnerStatus.swift" \
     -o "$app_dir/Contents/MacOS/AntigravityChineseHelper"
 
 cat > "$app_dir/Contents/Info.plist" <<'PLIST'
@@ -22,8 +23,8 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
     <key>CFBundleDisplayName</key><string>Antigravity 汉化助手</string>
     <key>CFBundleExecutable</key><string>AntigravityChineseHelper</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.2.2</string>
-    <key>CFBundleVersion</key><string>4</string>
+    <key>CFBundleShortVersionString</key><string>0.3.5</string>
+    <key>CFBundleVersion</key><string>5</string>
     <key>LSMinimumSystemVersion</key><string>12.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
