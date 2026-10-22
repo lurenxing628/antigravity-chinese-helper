@@ -98,7 +98,7 @@
   const fractionText = value => value === null ? '—' : `${Math.round(value * 100)}%`;
   function formatTokens(value) {
     if (value >= 1000000) return `${Number((value / 1000000).toFixed(1))}M`;
-    return `${(value / 1000).toFixed(2)} K`;
+    return `${(value / 1000).toFixed(2)}K`;
   }
   function listen(target, type, listener, options, collection = permanentListeners) {
     target.addEventListener(type, listener, options);
