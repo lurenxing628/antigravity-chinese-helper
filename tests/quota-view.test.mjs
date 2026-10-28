@@ -67,6 +67,7 @@ function fixture(initialTime = new Date(2026, 9, 22, 12).getTime()) {
   };
   return {
     view, timers, row, now:() => now,
+    settingReference:label => elements.find(element => element.className === 'setting-reference' && element.children[0]?.textContent === label)?.children[1].textContent,
     open:key => button(key).parentElement.emit('pointerenter'),
     close:key => button(key).parentElement.emit('pointerleave'),
     click:key => button(key).emit('click'),
@@ -82,6 +83,16 @@ function fixture(initialTime = new Date(2026, 9, 22, 12).getTime()) {
   };
 }
 
+test('context settings name an unknown backend default and replace it when a catalog budget is available', t => {
+  const f = fixture(); t.after(() => f.view.dispose());
+  const contextSetting = {modelKey:'1417', modelLabel:'Gemini Fixture', customLimit:500000, effectiveLimit:500000,
+    defaultLimit:null, maxLimit:1032192, pending:false, supported:true, error:null};
+  f.view.update({contextSetting});
+  assert.equal(f.settingReference('默认上下文'), '后端默认');
+  f.view.update({contextSetting:{...contextSetting,defaultLimit:256000}});
+  assert.equal(f.settingReference('默认上下文'), '256.00K');
+});
+
 test('quota reset timestamps survive normalization and update even when remaining quota is unchanged', t => {
   const f = fixture(); t.after(() => f.view.dispose());
   const snapshot = {
@@ -89,13 +100,13 @@ test('quota reset timestamps survive normalization and update even when remainin
     weeklyQuota:{remainingFraction:.8, resetAtMs:f.now() + 2 * 86400000}
   };
   assert.equal(f.view.update(snapshot), true);
-  assert.equal(f.row('five-hour', '额度重置'), '14:43（2小时43分后）');
-  assert.equal(f.row('weekly', '额度重置'), '10/24 12:00（2天后）');
+  assert.equal(f.row('five-hour', '恢复时间'), '14:43（2小时43分后）');
+  assert.equal(f.row('weekly', '恢复时间'), '10/24 12:00（2天后）');
   assert.equal(f.timers.size, 0, 'closed cards do not run countdown timers');
   assert.equal(f.view.update(snapshot), false);
   snapshot.fiveHourQuota.resetAtMs += 60000;
   assert.equal(f.view.update(snapshot), true, 'a changed reset timestamp updates the view');
-  assert.equal(f.row('five-hour', '额度重置'), '14:44（2小时44分后）');
+  assert.equal(f.row('five-hour', '恢复时间'), '14:44（2小时44分后）');
   assert.equal(f.row('five-hour', '剩余比例'), '40%');
 });
 
@@ -103,20 +114,20 @@ test('open countdowns follow minute boundaries, stop when closed, and never clai
   const f = fixture(new Date(2026, 9, 22, 12, 0, 10).getTime()); t.after(() => f.view.dispose());
   f.view.update({fiveHourQuota:{remainingFraction:.4, resetAtMs:new Date(2026, 9, 22, 12, 3).getTime()}});
   f.open('five-hour');
-  assert.equal(f.row('five-hour', '额度重置'), '12:03（3分后）');
+  assert.equal(f.row('five-hour', '恢复时间'), '12:03（3分后）');
   assert.equal(f.timers.size, 1);
   f.advance(50000);
-  assert.equal(f.row('five-hour', '额度重置'), '12:03（2分后）');
+  assert.equal(f.row('five-hour', '恢复时间'), '12:03（2分后）');
   f.close('five-hour');
   assert.equal(f.timers.size, 0);
   f.advance(60000);
-  assert.equal(f.row('five-hour', '额度重置'), '12:03（2分后）', 'hidden text is not periodically rewritten');
+  assert.equal(f.row('five-hour', '恢复时间'), '12:03（2分后）', 'hidden text is not periodically rewritten');
   f.open('five-hour');
-  assert.equal(f.row('five-hour', '额度重置'), '12:03（1分后）', 'reopening recomputes from the current clock');
+  assert.equal(f.row('five-hour', '恢复时间'), '12:03（1分后）', 'reopening recomputes from the current clock');
   f.click('five-hour'); f.close('five-hour');
   assert.equal(f.timers.size, 1, 'a pinned card stays live after the pointer leaves');
   f.advance(60000);
-  assert.equal(f.row('five-hour', '额度重置'), '12:03（已到重置时间）');
+  assert.equal(f.row('five-hour', '恢复时间'), '12:03（已到重置时间）');
   assert.equal(f.row('five-hour', '剩余比例'), '40%', 'only a new quota response can change remaining quota');
   assert.equal(f.timers.size, 0, 'an expired timestamp does not keep scheduling');
 });
@@ -124,15 +135,15 @@ test('open countdowns follow minute boundaries, stop when closed, and never clai
 test('missing or disabled quotas do not count down; switching and disposing cards clear their timers', () => {
   const f = fixture();
   f.open('five-hour');
-  assert.equal(f.row('five-hour', '额度重置'), '—');
+  assert.equal(f.row('five-hour', '恢复时间'), '—');
   assert.equal(f.timers.size, 0);
   for (const resetAtMs of [null, undefined, NaN, Infinity, 0]) {
     f.view.update({fiveHourQuota:{remainingFraction:.4, resetAtMs}});
-    assert.equal(f.row('five-hour', '额度重置'), '—');
+    assert.equal(f.row('five-hour', '恢复时间'), '—');
     assert.equal(f.timers.size, 0);
   }
   f.view.update({fiveHourQuota:{remainingFraction:.4, resetAtMs:f.now() + 60000, disabled:true}});
-  assert.equal(f.row('five-hour', '额度重置'), '—');
+  assert.equal(f.row('five-hour', '恢复时间'), '—');
   assert.equal(f.row('five-hour', '剩余比例'), '—');
   assert.equal(f.timers.size, 0);
   f.view.update({

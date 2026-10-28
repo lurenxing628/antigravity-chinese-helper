@@ -43,6 +43,7 @@ function state(id, generation, {stepUsage, costSummary} = {}) {
 function fixture(initial, {metadata = () => ({generatorMetadata:[]}), catalog, config, stored = {}, save, load,
   childStates = {}, byParent = {}} = {}) {
   let current = initial;
+  let viewId = initial?.conversationId;
   const listeners = new Set();
   const storageListeners = new Set();
   const storeListeners = new Set();
@@ -103,19 +104,20 @@ function fixture(initial, {metadata = () => ({generatorMetadata:[]}), catalog, c
     async sendUserCascadeMessage(request, options) { calls.sent.push({method:'message', request, options, receiver:this}); return 'message-result'; },
     async sendAllQueuedMessages(request, options) { calls.sent.push({method:'queued', request, options, receiver:this}); return 'queued-result'; }
   };
-  const view = {
+  const createView = () => ({
     host:{}, updates:[], disposed:false,
     update(snapshot) {
       assert.equal(this.disposed, false, 'a late callback must not write to a disposed view');
       this.updates.push(structuredClone(snapshot));
     },
     dispose() { this.disposed = true; }
-  };
-  const anchor = {
+  });
+  let view = createView();
+  let anchor = {
     isConnected:true,
     matches:selector => selector === '[data-testid="model-selector-trigger"]',
     getAttribute:() => null,
-    closest:selector => selector === '[data-cascade-id]' ? {getAttribute:() => current.conversationId} : null,
+    closest:selector => selector === '[data-cascade-id]' ? {getAttribute:() => viewId} : null,
     after(host) { assert.equal(host, view.host); },
     __reactFiber$fixture:{memoizedProps:{value:{
       cascadeContext:{state:{agentStateProvider:provider}}, selectedModel:selected
@@ -152,13 +154,26 @@ function fixture(initial, {metadata = () => ({generatorMetadata:[]}), catalog, c
   }
   const document = {defaultView:{nativeStorage, sendSchema, createNativeMessage}};
   const create = vm.runInNewContext(controllerSource, {queueMicrotask});
-  const controller = create(document, (_document, _anchor, callbacks) => { actions = callbacks; return view; });
+  const controller = create(document, (_document, _anchor, callbacks) => {
+    actions = callbacks;
+    if (view.disposed) view = createView();
+    return view;
+  });
   return {
-    controller, calls, view, listeners, storeListeners, childListeners, registryActive, client, storage, nativeStorage,
+    controller, calls, get view() { return view; }, listeners, storeListeners, childListeners, registryActive, client, storage, nativeStorage,
     mount:() => controller.discover(anchor),
+    remount() { anchor.isConnected = false; controller.cleanup(); anchor = {...anchor,isConnected:true}; controller.discover(anchor); },
+    rebindProvider() {
+      anchor.__reactFiber$fixture.memoizedProps.value.cascadeContext.state.agentStateProvider = {...provider};
+      controller.discover(anchor);
+    },
+    useClient(value) {
+      anchor.__reactFiber$fixture.return.return.return.memoizedProps.services.core.authService._lsClient = value;
+      controller.discover(anchor);
+    },
     setLimit:tokens => actions.setContextLimit(tokens),
     select(value, label = String(value)) { selected.value = value; selected.label = label; controller.discover(anchor); },
-    emit(next = current) { current = next; for (const listener of listeners) listener(); },
+    emit(next = current, id = next.conversationId ?? viewId) { current = next; viewId = id; for (const listener of listeners) listener(); },
     emitChild(id, next = childStates[id]) {
       childStates[id] = next;
       for (const listener of childListeners.get(id) ?? []) listener();
@@ -190,14 +205,14 @@ test('paged history counts generators once and averages the last ten completed r
   assert.equal(f.snapshot().metrics.cacheHitRate, 370 / 500, 'output tokens do not enter the cache denominator');
   assert.equal(f.calls.metadata.length, 3);
 
-  // Two calls arrive between provider events. Fetch the uncovered index 12,
-  // rather than only the newest index 13, and coalesce repeated notifications.
+  // Two calls arrive between provider events. Refresh the previous tail at 11,
+  // cover both new calls, and coalesce repeated notifications.
   f.emit(state('A', 14)); await settle();
   f.emit(); f.emit(); await settle();
-  assert.deepEqual(f.calls.metadata.map(call => call.generatorMetadataOffset), [0, 4, 8, 12]);
+  assert.deepEqual(f.calls.metadata.map(call => call.generatorMetadataOffset), [0, 4, 8, 11, 12]);
   gap.resolve({generatorMetadata:records.slice(12)}); await settle();
   f.emit(); await settle();
-  assert.equal(f.calls.metadata.length, 4);
+  assert.equal(f.calls.metadata.length, 5);
   assert.deepEqual(f.snapshot().metrics, {
     ttftMs:10000, tps:9.5, samples:10, inputTokens:580, outputTokens:2135, conversationTokens:2715, cacheHitRate:430 / 580
   });
@@ -212,6 +227,78 @@ test('paged history counts generators once and averages the last ten completed r
   assert.equal(pending.snapshot().metrics.tps, null);
 });
 
+test('a new generator refreshes the previous unfinished tail before adding its own output', async t => {
+  const history = [record(0, {usage:usage(10, 1, 30), streamingDuration:{seconds:0n, nanos:0}})];
+  const f = fixture(state('A', 1), {
+    metadata:request => ({generatorMetadata:history.slice(request.generatorMetadataOffset)})
+  });
+  t.after(() => f.controller.dispose());
+  f.mount(); await settle();
+  assert.equal(f.snapshot().metrics.outputTokens, 1);
+  assert.equal(f.snapshot().metrics.samples, 0);
+  history[0] = record(0, {usage:usage(10, 1000, 30), streamingDuration:{seconds:3n, nanos:0}});
+  history.push(record(1, {usage:usage(10, 20, 30)}));
+  f.emit(state('A', 2)); await settle();
+  assert.deepEqual(f.calls.metadata.map(call => call.generatorMetadataOffset), [0, 0]);
+  assert.equal(f.snapshot().metrics.outputTokens, 1020);
+  assert.equal(f.snapshot().metrics.inputTokens, 80);
+  assert.equal(f.snapshot().metrics.samples, 2);
+  assert.equal(f.snapshot().metrics.tps, (1000 * 1000 / 4500 + 4) / 2);
+  f.emit(); await settle();
+  assert.equal(f.calls.metadata.length, 2);
+});
+
+test('an expanded child step list applies usage immediately and stale metadata cannot replace it', async t => {
+  const history = [record(0, {usage:usage(10, 1, 30)})];
+  const f = fixture(state('A', 0), {
+    childStates:{child:state('child', 1)}, byParent:{A:{child:true}},
+    metadata:request => ({generatorMetadata:history.slice(request.generatorMetadataOffset)})
+  });
+  t.after(() => f.controller.dispose());
+  f.mount(); await settle();
+  const expanded = state('child', 1, {stepUsage:usage(20, 500, 60)});
+  expanded.trajectorySlice.generatorMetadatasInSlice[0].stepIndices = [0, 1];
+  expanded.trajectorySlice.stepsSlice.startIndex = 1;
+  expanded.trajectorySlice.totalStepsLength = 2;
+  f.emitChild('child', expanded); await settle();
+  assert.equal(f.snapshot().subagentMetrics.outputTokens, 500, 'the first event must use the newly associated step');
+  assert.equal(f.snapshot().subagentMetrics.tps, 500 * 1000 / 3000);
+  assert.equal(f.calls.metadata.length, 1, 'step usage is already available without another request');
+  history.push({...record(1, {usage:usage(10, 20, 30)}), stepIndices:[2]});
+  const next = state('child', 2);
+  next.trajectorySlice.generatorMetadatasInSlice[0].stepIndices = [2];
+  next.trajectorySlice.stepsSlice.startIndex = 2;
+  next.trajectorySlice.totalStepsLength = 3;
+  f.emitChild('child', next); await settle();
+  assert.deepEqual(f.calls.metadata.map(call => call.generatorMetadataOffset), [0, 0]);
+  assert.equal(f.snapshot().subagentMetrics.outputTokens, 520, 'the old metadata snapshot must not undo the step counters');
+  assert.equal(f.snapshot().subagentMetrics.inputTokens, 120);
+  assert.equal(f.snapshot().subagentMetrics.tps, (500 * 1000 / 3000 + 4) / 2);
+});
+
+test('completion during an in-flight start read queues final usage and timing while the agent remains active', async t => {
+  const starting = deferred();
+  let requests = 0;
+  const f = fixture(state('A', 1), {metadata:() => ++requests === 1 ? starting.promise : {
+    generatorMetadata:[record(0, {usage:usage(20, 1000, 60),
+      timeToFirstToken:{seconds:1n, nanos:0}, streamingDuration:{seconds:4n, nanos:0}})]
+  }});
+  t.after(() => f.controller.dispose());
+  f.mount(); await settle();
+  const completed = state('A', 1, {stepUsage:usage(20, 1000, 60)});
+  completed.trajectorySlice.stepsInSlice[0].metadata.finishedGeneratingAt = {seconds:1n, nanos:0};
+  f.emit(completed); await settle();
+  assert.equal(f.calls.metadata.length, 1);
+  starting.resolve({generatorMetadata:[record(0, {usage:usage(10, 1, 30), streamingDuration:{seconds:0n, nanos:0}})]});
+  await settle();
+  assert.deepEqual(f.calls.metadata.map(call => call.generatorMetadataOffset), [0, 0]);
+  assert.equal(f.snapshot().metrics.outputTokens, 1000);
+  assert.equal(f.snapshot().metrics.tps, 200);
+  assert.equal(f.snapshot().metrics.samples, 1);
+  f.emit({...completed, fullyIdle:true}); await settle();
+  assert.equal(f.calls.metadata.length, 2, 'the later idle event must not fetch the same completed call again');
+});
+
 test('native cumulative cost takes priority and output subdivisions are not counted twice', async t => {
   const f = fixture(state('A', 1, {costSummary:{total:{cumulativeTotal:{
     input:{tokens:100n}, cacheRead:{tokens:50n}, output:{tokens:200n},
@@ -223,6 +310,11 @@ test('native cumulative cost takes priority and output subdivisions are not coun
   assert.equal(f.snapshot().metrics.inputTokens, 150);
   assert.equal(f.snapshot().metrics.outputTokens, 200);
   assert.equal(f.snapshot().metrics.cacheHitRate, 50 / 150);
+  const zero = fixture(state('zero',1,{costSummary:{total:{cumulativeTotal:{input:{tokens:0n}}}}}),
+    {metadata:() => ({generatorMetadata:[record(0)]})});
+  t.after(() => zero.controller.dispose());
+  zero.mount(); await settle();
+  assert.equal(zero.snapshot().metrics.conversationTokens,0,'an explicit zero cost partition remains authoritative');
 });
 
 test('recursive descendants are paged once and stay separate from their parent metrics', async t => {
@@ -254,7 +346,7 @@ test('recursive descendants are paged once and stay separate from their parent m
   assert.ok(f.calls.metadata.every(call => call.includeMessages === false));
 });
 
-test('child provider events and new descendants refresh the aggregate without rereading completed history', async t => {
+test('child provider events and new descendants refresh the aggregate without rereading the full history', async t => {
   const histories = {A:[record(0)], child:[record(0), record(1)], grandchild:[record(0, {usage:usage(5, 6, 5)})]};
   const f = fixture(state('A', 1), {
     childStates:{child:state('child', 1), grandchild:state('grandchild', 1)},
@@ -270,7 +362,7 @@ test('child provider events and new descendants refresh the aggregate without re
   f.emitChild('child'); f.emitChild('child'); await settle();
   assert.equal(f.calls.metadata.filter(call => call.cascadeId === 'child').length, 1);
   f.emitChild('child', state('child', 2)); await settle();
-  assert.deepEqual(f.calls.metadata.filter(call => call.cascadeId === 'child').map(call => call.generatorMetadataOffset), [0, 1]);
+  assert.deepEqual(f.calls.metadata.filter(call => call.cascadeId === 'child').map(call => call.generatorMetadataOffset), [0, 0, 1]);
   assert.equal(f.snapshot().subagentMetrics.outputTokens, 30);
   f.setParents({A:{child:true}, child:{grandchild:true}}); await settle();
   assert.equal(f.snapshot().subagentMetrics.count, 2);
@@ -378,6 +470,151 @@ test('dispose unsubscribes and suppresses queued and late async view writes', as
   assert.equal(f.view.updates.length, writes);
   assert.equal(f.calls.metadata.length, 1);
   assert.equal(f.controller.size, 0);
+});
+
+test('returning to a cached conversation restores complete metrics and refreshes its unfinished tail', async t => {
+  const history = [record(0),record(1),record(2)];
+  const refresh = deferred();
+  let revisiting = false;
+  const f = fixture(state('A',3), {metadata:request => request.cascadeId === 'B'
+    ? {generatorMetadata:[record(0)]} : revisiting ? refresh.promise
+      : {generatorMetadata:history.slice(request.generatorMetadataOffset)}});
+  t.after(() => f.controller.dispose());
+  f.mount(); await settle();
+  f.emit(state('A',3,{stepUsage:usage(20,300,40)})); await settle();
+  const before = f.snapshot().metrics;
+  assert.equal(before.outputTokens,313);
+  f.emit(state('B',1)); await settle();
+  history[2] = record(2,{usage:usage(20,1000,40)});
+  history.push(record(3,{usage:usage(10,20,30)}));
+  revisiting = true;
+  f.emit(state('A',4,{costSummary:{total:{cumulativeTotal:{}}}})); await settle();
+  assert.deepEqual(f.calls.metadata.map(call => [call.cascadeId,call.generatorMetadataOffset]),[['A',0],['B',0],['A',2]]);
+  assert.deepEqual(f.snapshot().metrics,before,'an incomplete refresh cannot replace the complete snapshot with native default zeroes');
+  refresh.resolve({generatorMetadata:history.slice(2)}); await settle();
+  assert.equal(f.snapshot().metrics.outputTokens,1033,'a cached fromStep flag cannot hide the final usage of the previous tail');
+  assert.equal(f.snapshot().metrics.samples,4);
+});
+
+test('numeric history survives view replacement and provider rebinding while backend clients stay isolated', async t => {
+  const history = [record(0),record(1),record(2)], tails = [deferred(),deferred()];
+  const pending = [...tails];
+  const f = fixture(state('A',3), {metadata:request => request.generatorMetadataOffset === 0
+    ? {generatorMetadata:history} : pending.shift()?.promise ?? {generatorMetadata:history.slice(2)}});
+  const other = fixture(state('A',3), {metadata:() => ({generatorMetadata:history.map((value,index) => record(index,{usage:usage(100,900,200)}))})});
+  t.after(() => { f.controller.dispose(); other.controller.dispose(); });
+  f.mount(); await settle();
+  const metrics = f.snapshot().metrics, oldView = f.view;
+  f.remount(); await settle();
+  assert.equal(oldView.disposed,true);
+  assert.notEqual(f.view,oldView);
+  assert.equal(f.listeners.size,1,'only the replacement view owns a subscription');
+  assert.deepEqual(f.snapshot().metrics,metrics);
+  tails[0].resolve({generatorMetadata:history.slice(2)}); await settle();
+  f.rebindProvider(); await settle();
+  assert.deepEqual(f.snapshot().metrics,metrics);
+  assert.equal(f.listeners.size,1);
+  tails[1].resolve({generatorMetadata:history.slice(2)}); await settle();
+  f.useClient(other.client); await settle();
+  assert.equal(f.snapshot().metrics.outputTokens,2700);
+  assert.deepEqual(other.calls.metadata.map(call => call.generatorMetadataOffset),[0]);
+  f.useClient(f.client);
+  assert.deepEqual(f.snapshot().metrics,metrics,'restoring the first backend does not borrow the second backend statistics');
+  await settle();
+  assert.deepEqual(f.calls.metadata.map(call => call.generatorMetadataOffset),[0,2,2,2]);
+});
+
+test('unknown provider snapshots retain the DOM target cache while loaded rollback and trajectory replacement invalidate it', async t => {
+  const unknown = fixture({conversationId:'unknown'});
+  t.after(() => unknown.controller.dispose());
+  unknown.mount(); await settle();
+  assert.equal(unknown.snapshot().metrics.inputTokens,null);
+  assert.equal(unknown.snapshot().metrics.outputTokens,null);
+  unknown.emit(state('unknown',0)); await settle();
+  assert.equal(unknown.snapshot().metrics.inputTokens,0,'a loaded empty trajectory is a real zero');
+
+  const rolledBack = deferred(), replaced = deferred();
+  let phase = 'initial';
+  const withTrajectory=(id,generation,trajectoryId)=>{
+    const value=state(id,generation); value.trajectorySlice.trajectoryId=trajectoryId; return value;
+  };
+  const f = fixture(withTrajectory('A',2,'trajectory-A'), {metadata:request => request.cascadeId === 'B'
+    ? {generatorMetadata:[record(0)]} : phase === 'initial' ? {generatorMetadata:[record(0),record(1)]}
+      : phase === 'rollback' ? rolledBack.promise : replaced.promise});
+  t.after(() => f.controller.dispose());
+  f.mount(); await settle(); const a = f.snapshot().metrics;
+  f.emit(withTrajectory('B',1,'trajectory-B')); await settle(); const b = f.snapshot().metrics;
+  f.emit({conversationId:'A'}); await settle();
+  assert.deepEqual(f.snapshot().metrics,a);
+  f.emit({},'B'); await settle();
+  assert.deepEqual(f.snapshot().metrics,b,'a temporarily missing provider ID uses the target DOM conversation');
+  f.emit(withTrajectory('A',2,'trajectory-A'),'B'); await settle();
+  assert.deepEqual(f.snapshot().metrics,b,'the old provider cannot contribute statistics to the new DOM target');
+  phase='rollback'; f.emit(withTrajectory('A',1,'trajectory-A')); await settle();
+  assert.equal(f.snapshot().metrics.outputTokens,null);
+  rolledBack.resolve({generatorMetadata:[record(0,{usage:usage(1,2,3)})]}); await settle();
+  assert.equal(f.snapshot().metrics.outputTokens,2);
+  phase='replacement'; f.emit(withTrajectory('A',1,'trajectory-A-new')); await settle();
+  assert.equal(f.snapshot().metrics.outputTokens,null);
+  replaced.resolve({generatorMetadata:[record(0,{usage:usage(5,6,7)})]}); await settle();
+  assert.equal(f.snapshot().metrics.outputTokens,6);
+  assert.deepEqual(f.calls.metadata.filter(call => call.cascadeId === 'A').map(call => call.generatorMetadataOffset),[0,0,0]);
+});
+
+test('child hydration publishes complete aggregates and restores child cursors on return', async t => {
+  const histories = {one:[record(0),record(1),record(2)],two:[record(0),record(1),record(2)]};
+  const first = {one:deferred(),two:deferred()}, refresh = {one:deferred(),two:deferred()};
+  let revisiting = false;
+  const f = fixture(state('A',0), {childStates:{one:state('one',3),two:state('two',3)},byParent:{A:{one:true,two:true}},
+    metadata:request => (revisiting ? refresh : first)[request.cascadeId].promise});
+  t.after(() => f.controller.dispose());
+  f.mount(); await settle();
+  first.one.resolve({generatorMetadata:histories.one}); await settle();
+  assert.equal(f.snapshot().subagentMetrics.ttftMs,null);
+  assert.equal(f.snapshot().subagentMetrics.tps,null);
+  assert.equal(f.snapshot().subagentMetrics.samples,0);
+  first.two.resolve({generatorMetadata:histories.two}); await settle();
+  const complete = f.snapshot().subagentMetrics;
+  assert.equal(complete.outputTokens,68);
+  f.emit(state('B',0)); await settle();
+  assert.equal(f.registryActive.get('one'),0);
+  assert.equal(f.registryActive.get('two'),0);
+  for (const id of ['one','two']) {
+    histories[id].push(record(3)); f.emitChild(id,state(id,4));
+  }
+  revisiting = true;
+  f.emit(state('A',0,{costSummary:{total:{subagent:{}}}})); await settle();
+  assert.deepEqual(f.snapshot().subagentMetrics,complete);
+  assert.deepEqual(f.calls.metadata.map(call => [call.cascadeId,call.generatorMetadataOffset]),[['one',0],['two',0],['one',2],['two',2]]);
+  refresh.one.resolve({generatorMetadata:histories.one.slice(2)}); await settle();
+  assert.deepEqual(f.snapshot().subagentMetrics,complete,'one completed child cannot publish a partial aggregate average');
+  refresh.two.resolve({generatorMetadata:histories.two.slice(2)}); await settle();
+  assert.equal(f.snapshot().subagentMetrics.outputTokens,140);
+  assert.equal(f.snapshot().subagentMetrics.samples,8);
+  assert.equal(f.snapshot().subagentMetrics.tps,2.5);
+});
+
+test('a late response from the previous attachment cannot overwrite a returned conversation cache', async t => {
+  const old = deferred(), current = deferred(), tail = deferred();
+  let reads = 0;
+  const f = fixture(state('A',2), {metadata:request => request.cascadeId === 'B'
+    ? {generatorMetadata:[record(0)]} : [old,current,tail][reads++].promise});
+  t.after(() => f.controller.dispose());
+  f.mount(); await settle();
+  f.emit(state('B',1)); await settle();
+  f.emit(state('A',2)); await settle();
+  assert.equal(f.snapshot().metrics.outputTokens,null);
+  const records = [record(0,{usage:usage(1,2,3)}),record(1,{usage:usage(4,5,6)})];
+  current.resolve({generatorMetadata:records}); await settle();
+  assert.equal(f.snapshot().metrics.outputTokens,7);
+  old.resolve({generatorMetadata:[record(0,{usage:usage(99999,99999,99999)})]}); await settle();
+  assert.equal(f.snapshot().metrics.outputTokens,7);
+  f.emit(state('B',1)); await settle();
+  f.emit(state('A',2)); await settle();
+  assert.equal(f.snapshot().metrics.outputTokens,7,'the passive cache also retains the current attachment result');
+  assert.deepEqual(f.calls.metadata.filter(call => call.cascadeId === 'A').map(call => call.generatorMetadataOffset),[0,0,1]);
+  tail.resolve({generatorMetadata:records.slice(1)}); await settle();
+  assert.equal(f.snapshot().metrics.outputTokens,7);
 });
 
 test('context limit changes both send paths while preserving requests and actual history', async t => {
@@ -488,6 +725,57 @@ test('context limit reports the backend clamp instead of inventing model capacit
   assert.equal(f.snapshot().contextSetting.effectiveLimit, 98304);
   assert.equal(f.snapshot().modelCapacity, 131072);
   assert.equal(f.snapshot().contextSetting.maxLimit, 98304);
+});
+
+test('new servers read catalog checkpoint budgets and retain both send overrides without the removed resolver', async t => {
+  const f = fixture(state('A', 1), {
+    stored:{'antigravityChineseHelper.contextLimit.1417':'500000'},
+    metadata:() => ({generatorMetadata:[record(0, {chatStartMetadata:{contextWindowMetadata:{maxContextTokens:400000}}})]}),
+    catalog:() => ({models:{fixture:{model, maxTokens:1048576, maxOutputTokens:65536, displayName:'Gemini Fixture',
+      modelExperiments:{experiments:{CASCADE_USE_EXPERIMENT_CHECKPOINTER:{value:{case:'stringValue', value:JSON.stringify({
+        enabled:true, max_token_limit:'256000', use_model_reported_token_count:false, session_summary_prompt_override:'not retained'
+      })}}}}
+    }}})
+  });
+  delete f.client.getResolvedCascadeConfig;
+  t.after(() => f.controller.dispose());
+  f.mount(); await settle();
+  assert.equal(f.snapshot().contextSetting.error, null);
+  assert.equal(f.snapshot().contextSetting.defaultLimit, 256000);
+  assert.equal(f.snapshot().contextSetting.customLimit, 500000);
+  assert.equal(f.snapshot().contextSetting.effectiveLimit, 500000);
+  assert.equal(f.snapshot().contextSetting.maxLimit, 1032192, 'native defaults reserve 16384 output tokens rather than the catalog output ceiling');
+  assert.equal(f.snapshot().outputReserve, 16384);
+  assert.equal(f.snapshot().compactionBasisLabel, '后端估算');
+  assert.equal(f.snapshot().compactionReference, 400000, 'the actual call budget takes priority over the catalog default and future preference');
+  assert.equal(await f.setLimit(600000), true);
+  assert.equal(f.snapshot().maxContext, 400000);
+  assert.equal(f.snapshot().compactionReference, 400000, 'editing a future budget must not rewrite the actual call');
+  const request = {cascadeId:'A', cascadeConfig:{plannerConfig:{planModel:model}}};
+  await f.client.sendUserCascadeMessage(request);
+  await f.client.sendAllQueuedMessages(request);
+  assert.ok(f.calls.sent.every(call => call.request.cascadeConfig.checkpointConfig.maxTokenLimit === 600000));
+  assert.equal(f.calls.config, 0);
+  assert.equal(await f.setLimit(2000000), true);
+  assert.equal(f.snapshot().contextSetting.effectiveLimit, 1032192);
+  assert.equal(await f.setLimit(null), true);
+  assert.equal(f.snapshot().contextSetting.effectiveLimit, 256000);
+  await f.client.sendUserCascadeMessage(request);
+  assert.equal(f.calls.sent.at(-1).request, request);
+});
+
+test('an unknown backend default does not prevent removing a saved context override', async t => {
+  const f = fixture(state('A', 0), {stored:{'antigravityChineseHelper.contextLimit.1417':'500000'}});
+  delete f.client.getResolvedCascadeConfig;
+  t.after(() => f.controller.dispose());
+  f.mount(); await settle();
+  assert.equal(f.snapshot().contextSetting.defaultLimit, null);
+  assert.equal(f.snapshot().contextSetting.error, null);
+  assert.equal(f.snapshot().contextSetting.customLimit, 500000);
+  assert.equal(f.snapshot().compactionBasisLabel, null, 'an absent checkpoint experiment does not establish a token-count source');
+  assert.equal(await f.setLimit(null), true);
+  assert.equal(f.snapshot().contextSetting.customLimit, null);
+  assert.equal(Object.keys(f.storage).length, 0);
 });
 
 test('failed context configuration or persistence leaves the previous sending budget intact', async t => {
