@@ -147,3 +147,61 @@ test('native UI templates translate counts and notices while preserving dynamic 
   assert.equal(translate('Open My  conversation', 'fork-title'), '打开 My  conversation');
   assert.equal(translate('Enter Branch...', 'trigger-field-placeholder'), '输入 Branch…');
 });
+
+
+test('notebook preview and feedback templates keep parser details and account addresses verbatim', () => {
+  const {translate}=fixture({'Send feedback as':'反馈账号：','Invalid notebook JSON:':'笔记本 JSON 无效：',
+    'Invalid notebook JSON.':'笔记本 JSON 无效。','No notebook cells were found.':'未找到笔记本单元格。',
+    'This notebook has no renderable cells.':'此笔记本没有可显示的单元格。'});
+  const detail='Unexpected token $, "Commit $& {server}" is invalid JSON';
+  assert.equal(translate('Preview unavailable — Invalid notebook JSON: '+detail),'无法预览 — 笔记本 JSON 无效：'+detail);
+  assert.equal(translate('Preview unavailable — No notebook cells were found.'),'无法预览 — 未找到笔记本单元格。');
+  assert.equal(translate('Preview unavailable — This notebook has no renderable cells.'),'无法预览 — 此笔记本没有可显示的单元格。');
+  assert.equal(translate('Preview unavailable — Provider error: Settings'),'无法预览 — Provider error: Settings');
+  assert.equal(translate('Send feedback as me+$&@example.invalid'),'反馈账号：me+$&@example.invalid');
+});
+
+
+test('native dynamic notices preserve branch names, command labels, server identifiers and errors', () => {
+  const {translate}=fixture({});
+  const cases=[
+    ['Conflicts with "My  Command $&\nOther" (press Enter to replace)','与“My  Command $&\nOther”冲突（按 Enter 替换）'],
+    ['Conflict: also assigned to My  Command $&','快捷键冲突：也用于 My  Command $&'],
+    ['Pushed 2 commits to feature/My  Branch.$&.','已向 feature/My  Branch.$& 推送 2 个提交。'],
+    ['Push 1 commit to origin/main','向 origin/main 推送 1 个提交'],
+    ['MCP server "My  Server \"quoted\"" not found in the store.','未在商店中找到 MCP 服务器“My  Server \"quoted\"”。'],
+    ["Couldn't disconnect My:Server: Error: raw  detail",'无法断开连接：My:Server: Error: raw  detail'],
+    ['Recording exceeds 15MB limit (20.25MB)','录音超过 15MB 上限（20.25MB）'],
+    ['Shared with: A  Model, B“Model”','共用此额度：A  Model, B“Model”'],
+    ['12 Comments','12 条评论'],
+    ['For Google AI Ultra accounts, this setting is disabled.','对于 Google AI Ultra 账号，此设置已禁用。'],
+    ['Credentials expire in 2h 30m. Refresh credentials to keep this automation running','凭证将在 2小时 30分钟后过期。请刷新凭证，让此自动化继续运行'],
+    ['Managed by the My  Task $& automation','由自动化 My  Task $& 管理']
+  ];
+  for(const [original,expected] of cases)assert.equal(translate(original),expected,original);
+  for(const original of ['Typing','Turn 2','Work in My Folder','Error: raw detail after a server error']) {
+    if(original.startsWith('Error:'))continue; // This pre-existing broad error rule is outside these additions.
+    assert.equal(translate(original),null,'arbitrary display/data text has no new broad rule: '+original);
+  }
+});
+
+
+test('native operation and browser templates retain raw names and error suffixes', () => {
+  const {translate}=fixture({});
+  const detail='Error: My  value\n$& path';
+  assert.equal(translate('Unfold lines 2-20'),'展开第 2–20 行');
+  assert.equal(translate('Proceed with implementation plan and 2 comments'),'按实施计划和 2 条批注继续执行');
+  assert.equal(translate("Couldn't load apps: "+detail),'无法加载应用：'+detail);
+  assert.equal(translate('Forked from My  $& title'),'分支来源：My  $& title');
+  assert.equal(translate('No apps found for "My  Query".'),'未找到与“My  Query”匹配的应用。');
+  assert.equal(translate('Failed to update agent: '+detail),'更新智能体失败：'+detail);
+  assert.equal(translate('Could not attach folder "My  Folder": '+detail),'无法将文件夹添加为附件："My  Folder": '+detail);
+  assert.equal(translate("Couldn't mark as unread conversation"),'将对话标为未读失败');
+  assert.equal(translate('A file already exists at /tmp/My  File.'),'/tmp/My  File 已存在同名文件。');
+  assert.equal(translate('The folder “My  Folder” does not exist. Would you like to create it?'),'文件夹“My  Folder”不存在。要创建吗？');
+  assert.equal(translate('The certificate was rejected (net::ERR_CERT_OTHER).'),'证书被拒绝（net::ERR_CERT_OTHER）。');
+  assert.equal(translate('Check if there is a typo in example.invalid, or open the page in your external browser.'),'检查 example.invalid 是否有拼写错误，或在外部浏览器中打开此页面。');
+  assert.equal(translate('Sign in from the My  Product panel.'),'请在 My  Product 面板中登录。');
+  for (const value of ['Failed to update my file: data','Could not attach folder notes',"Couldn't rename conversation",'The folder My Folder does not exist.'])
+    assert.equal(translate(value),null,value);
+});

@@ -41,7 +41,7 @@ function state(id, generation, {stepUsage, costSummary} = {}) {
 }
 
 function fixture(initial, {metadata = () => ({generatorMetadata:[]}), catalog, config, stored = {}, save, load,
-  childStates = {}, byParent = {}} = {}) {
+  childStates = {}, byParent = {}, summaries = {}} = {}) {
   let current = initial;
   let viewId = initial?.conversationId;
   const listeners = new Set();
@@ -56,7 +56,7 @@ function fixture(initial, {metadata = () => ({generatorMetadata:[]}), catalog, c
     onDidChange(listener) { listeners.add(listener); return {dispose:() => listeners.delete(listener)}; }
   };
   const store = {
-    getState:() => ({trajectorySummaries:{indexes:{byParent}}}),
+    getState:() => ({trajectorySummaries:{summaries,indexes:{byParent}}}),
     subscribe(listener) { storeListeners.add(listener); return () => storeListeners.delete(listener); }
   };
   function childProvider(id) {
@@ -179,6 +179,7 @@ function fixture(initial, {metadata = () => ({generatorMetadata:[]}), catalog, c
       for (const listener of childListeners.get(id) ?? []) listener();
     },
     setParents(next) { byParent = next; for (const listener of storeListeners) listener(); },
+    setSummary(id, summary) { summaries = {...summaries,[id]:summary}; for (const listener of storeListeners) listener(); },
     snapshot:() => view.updates.at(-1)
   };
 }
@@ -370,6 +371,101 @@ test('child provider events and new descendants refresh the aggregate without re
   assert.equal(f.snapshot().subagentMetrics.outputTokens, 36);
   assert.equal(f.snapshot().subagentMetrics.cacheHitRate, 95 / 130);
   assert.equal(f.snapshot().metrics.outputTokens, 3);
+});
+
+test('completed descendants release native state after final metadata and reuse numeric snapshots without subscribing again', async t => {
+  const final = deferred();
+  const summary = {trajectoryId:'child-trajectory',stepCount:1,notFullyIdle:false,lastModifiedTime:{seconds:1n,nanos:0}};
+  const f = fixture(state('A',1), {
+    childStates:{child:{...state('child',1),fullyIdle:true}},
+    byParent:{A:{child:true}}, summaries:{child:summary},
+    metadata:request => request.cascadeId === 'child' ? final.promise : {generatorMetadata:[record(0)]}
+  });
+  t.after(() => f.controller.dispose());
+  f.mount(); await settle();
+  assert.equal(f.registryActive.get('child'),1,'an idle state cannot release an unfinished final metadata request');
+  assert.equal(f.childListeners.get('child').size,1);
+  final.resolve({generatorMetadata:[record(0,{usage:usage(20,30,80)})]}); await settle();
+  assert.equal(f.registryActive.get('child'),0);
+  assert.equal(f.childListeners.get('child').size,0);
+  const metrics = f.snapshot().subagentMetrics;
+  assert.equal(metrics.inputTokens,100);
+  assert.equal(metrics.outputTokens,30);
+  assert.equal(metrics.samples,1);
+
+  f.emit(); f.emit();
+  f.setSummary('child',{...summary,annotations:{title:'A renamed child'}});
+  await settle();
+  f.remount(); await settle();
+  assert.deepEqual(f.snapshot().subagentMetrics,metrics);
+  f.emit(state('B',1)); await settle();
+  f.emit(state('A',1)); await settle();
+  assert.deepEqual(f.snapshot().subagentMetrics,metrics);
+  assert.deepEqual(f.calls.subscribed,['child'],'unchanged completed summaries must survive updates, remounts, and conversation switches without reacquiring native state');
+  assert.deepEqual(f.calls.unsubscribed,['child']);
+  assert.equal(f.calls.metadata.filter(call => call.cascadeId === 'child').length,1);
+  f.controller.dispose();
+  assert.deepEqual(f.calls.unsubscribed,['child'],'disposing a settled numeric snapshot must not unsubscribe twice');
+});
+
+test('resumed descendants and changed completed summaries reacquire native state and refresh only the numeric tail', async t => {
+  const records = [record(0),record(1)];
+  const summary = (active, modified, stepCount) => ({trajectoryId:'child-trajectory',stepCount,
+    notFullyIdle:active,lastModifiedTime:{seconds:BigInt(modified),nanos:0}});
+  const f = fixture(state('A',1), {
+    childStates:{child:{...state('child',1),fullyIdle:true}},
+    byParent:{A:{child:true}}, summaries:{child:summary(false,1,1)},
+    metadata:request => ({generatorMetadata:request.cascadeId === 'child'
+      ? records.slice(request.generatorMetadataOffset, request.generatorMetadataOffset + (request.generatorMetadataOffset === 0 ? 1 : 2))
+      : [record(0)]})
+  });
+  t.after(() => f.controller.dispose());
+  f.mount(); await settle();
+  assert.equal(f.registryActive.get('child'),0);
+  assert.equal(f.snapshot().subagentMetrics.outputTokens,3);
+
+  f.emitChild('child',state('child',2));
+  f.setSummary('child',summary(true,2,2)); await settle();
+  assert.equal(f.registryActive.get('child'),1,'a resumed child needs its live state subscription again');
+  assert.deepEqual(f.calls.subscribed,['child','child']);
+  assert.equal(f.snapshot().subagentMetrics.outputTokens,13);
+  f.emitChild('child',{...state('child',2),fullyIdle:true});
+  f.setSummary('child',summary(false,2,2)); await settle();
+  assert.equal(f.registryActive.get('child'),0);
+  assert.equal(f.childListeners.get('child').size,0);
+  assert.equal(f.snapshot().subagentMetrics.outputTokens,13);
+
+  records[1] = record(1,{usage:usage(10,100,30)});
+  f.setSummary('child',summary(false,3,2)); await settle();
+  assert.deepEqual(f.calls.subscribed,['child','child','child']);
+  assert.deepEqual(f.calls.unsubscribed,['child','child','child']);
+  assert.equal(f.registryActive.get('child'),0);
+  assert.equal(f.snapshot().subagentMetrics.outputTokens,103,'a completed summary revision must refresh its final usage, even without another generator');
+  assert.deepEqual(f.calls.metadata.filter(call => call.cascadeId === 'child').map(call => call.generatorMetadataOffset),[0,0,1,1,1]);
+});
+
+test('an idle descendant keeps its subscription when the final metadata refresh fails', async t => {
+  const final = deferred();
+  let childReads = 0;
+  const f = fixture(state('A',1), {
+    childStates:{child:state('child',1)}, byParent:{A:{child:true}},
+    summaries:{child:{trajectoryId:'child-trajectory',stepCount:1,notFullyIdle:true,lastModifiedTime:{seconds:1n,nanos:0}}},
+    metadata:request => request.cascadeId === 'child' && childReads++ > 0 ? final.promise : {generatorMetadata:[record(0)]}
+  });
+  t.after(() => f.controller.dispose());
+  f.mount(); await settle();
+  assert.equal(f.snapshot().subagentMetrics.outputTokens,3);
+  assert.equal(f.registryActive.get('child'),1);
+  f.emitChild('child',{...state('child',1),fullyIdle:true});
+  f.setSummary('child',{trajectoryId:'child-trajectory',stepCount:1,notFullyIdle:false,lastModifiedTime:{seconds:2n,nanos:0}});
+  await settle();
+  assert.equal(f.registryActive.get('child'),1);
+  final.reject(new Error('final metadata unavailable')); await settle();
+  assert.equal(f.registryActive.get('child'),1,'a previously complete start snapshot must not be mistaken for confirmed final metadata');
+  assert.equal(f.childListeners.get('child').size,1);
+  assert.deepEqual(f.calls.unsubscribed,[]);
+  f.emit(); await settle();
+  assert.equal(f.calls.metadata.filter(call => call.cascadeId === 'child').length,2,'this change must not add a retry loop');
 });
 
 test('native subagent totals are separated once and do not double count descendant costs', async t => {

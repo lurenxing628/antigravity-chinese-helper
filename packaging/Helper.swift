@@ -48,6 +48,17 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard let menu = statusItem?.menu else { return false }
+        sender.activate(ignoringOtherApps: true)
+        // Reopening the app also exposes its controls when the status item is
+        // outside the visible menu bar. Reuse the same menu and actions.
+        DispatchQueue.main.async {
+            menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        }
+        return false
+    }
+
     private func item(_ title: String, action: Selector) -> NSMenuItem {
         let result = NSMenuItem(title: title, action: action, keyEquivalent: "")
         result.target = self

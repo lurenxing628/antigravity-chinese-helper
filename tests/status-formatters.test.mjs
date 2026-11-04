@@ -1002,6 +1002,14 @@ test('agent and task list counts share native card and running-summary ownership
     const custom={...record,metadata:{toolCall:{name:'custom_reader'}}};
     assert.equal(render(custom,2).props.title.props.content,'subagent');
   }
+  for(const [count,expected] of [['1 task','1 个任务'],['0 tasks','0 个任务']]) {
+    const full=list('manage_task',count),record={...full,step:{...full.step,value:{...full.step.value,args:Object.freeze({})}}};
+    const info=record.step.value.result.stepRenderInfo;
+    assert.equal(render(record,2).props.title.props.content,expected,'new snapshots can omit the native list action');
+    assert.equal(f.window.running(record),'已列出 '+expected);
+    assert.equal(info.titleParts[0].part.value,count);
+    assert.equal(render(record,2).props.supplementaryView.props.children,'11 subagents\n1 task');
+  }
   const good=list('manage_subagents','11 subagents');
   const wrongAction={...good,step:{...good.step,value:{...good.step.value,args:{Action:'read',Name:'self'}}}};
   const wrongTool={...good,metadata:{toolCall:{name:'custom_reader'}}};
@@ -2828,4 +2836,2134 @@ test('current native status popup reuses the fixed background-command title with
   assert.equal(props.sections[1],'backgroundTasks');assert.equal(f.window.fixtureActions,0);
   adapters.setStrings({[key]:'后台命令测试'});assert.equal(f.window.Wvc(props).props.children[1].props.children[0].props.label,'后台命令测试');
   f.uninstall()();assert.equal(f.window.Wvc,original);assert.equal(f.window.Wvc(props).props.children[1].props.children[0].props.label,'Background Commands');
+});
+
+
+test('current IconPill forwardRef translates owned resources and preserves lexical bindings, refs, and identity', () => {
+  const f = nativeFixture();
+  f.window.URL = URL;
+  f.window.eval = code => f.evaluate(code);
+  // Native IconPill render snapshot: current 10647600-character application bundle.
+  f.evaluate("\nObject.assign(A,{\n  forwardRef(render){return {$$typeof:Symbol.for('react.forward_ref'),render};},\n  useMemo(callback){return callback();},useCallback(callback){return callback;},\n  useContext(context){return context?.value??null;},\n  useSyncExternalStore(_subscribe,getSnapshot){return getSnapshot();},\n  useRef(value){return {current:value};},useEffect(){},\n  Children:{toArray(value){return Array.isArray(value)?value:[value];}}\n});\nvar fixtureActions=[],fixtureDragRefs=[],fixtureSummaryState={summaries:{}};\nfunction fixtureForbiddenAction(){fixtureActions.push('unexpected action');throw Error('unexpected action');}\nfunction Df(value){\n  var parsed=new URL(String(value));\n  return {scheme:parsed.protocol.slice(0,-1),path:decodeURIComponent(parsed.pathname),fragment:parsed.hash.slice(1),\n    with(changes){var next=new URL(parsed.href);if(changes.scheme)next.protocol=changes.scheme+':';if('fragment' in changes)next.hash=changes.fragment||'';return Df(next.href);},\n    toString(){return parsed.href;}};\n}\nfunction $f(value){return typeof value==='string'?Df(value).toString():value.toString();}\nfunction KC(value){return /^https?:\\/\\//i.test(value);}\nfunction FB(){return false;}\nfunction QC(value){return {key:value};}\nfunction kC(){return {resolveLinkOpenTarget:fixtureForbiddenAction,openUrlInBrowserPane:fixtureForbiddenAction,getTargetTreeId:fixtureForbiddenAction,linkWrapper:null};}\nfunction sB(){}function RB(){}function nNa(){}function SB(){}\nfunction nl(provider,selector,arg){return selector.selector(provider?.getState?.(),arg);}\nfunction vOa(){return kna;}\nfunction OB(){}\nfunction fPa(){return ()=>{};}function qPa(){return ()=>{};}\nvar Yf={basename(uri){return uri.path.split('/').at(-1)||'';},extname(uri){var name=this.basename(uri),index=name.lastIndexOf('.');return index<0?'':name.slice(index);}};\nfunction aD(value){return Yf.basename(Df(value));}\nfunction EB(uri){return Yf.basename(uri).replace(/\\.[^.]+$/,'').split(/[_ -]+/).map(word=>word.charAt(0).toUpperCase()+word.slice(1)).join(' ');}\nfunction CB(){return 'description';}\nfunction YC(){var ref={current:null};fixtureDragRefs.push(ref);return {ref};}\nfunction Hi(...values){return values.filter(Boolean).join(' ');}\nfunction wA(){}function Z(){}function dNa(){}\nfunction rPa(){throw Error('unrelated inline-layout branch');}\nfunction MB(){return fixtureForbiddenAction();}function NB(){return fixtureForbiddenAction();}\nconst MC=new Map([['https://fixture.invalid/page',{pageTitle:'Task Log'}]]);\nconst tPa={value:null},TB={value:null},aC={value:null},kB={value:null},jB={value:false};\nconst uPa={getState:()=>undefined,onDidChange:()=>({dispose(){}})};\nconst kna={getState:()=>fixtureSummaryState,onDidChange:()=>({dispose(){}})};\nconst sPa={selector:(state,id)=>id?state.summaries[id]?.summary:undefined};\nconst vPa={selector:(state,uri)=>state&&uri?OB(state.artifactSnapshots,uri):undefined};\nconst xB=[],yB=[],zB=[],AB=[],pPa=new Set(['scratch','.system_generated','.tempmediaStorage','.git','.jj']);\nconst zca=/^[0-9a-f-]{36}$/i;\nfunction cD(a,b){var c=Df(a).with({scheme:\"file\"}),d=aD(a);if(d.toLowerCase()===\"skill.md\")return c=c.path.split(\"/\").filter(f=>f.length>0),c=c.length>1?c[c.length-2]:\"\",{kind:9,displayName:c?`${c}/${d}`:d};if(!c.path.startsWith(b))return{kind:0};d=c.path.substring(b.length).split(\"/\").filter(f=>f.length>0);if(d.length===0)return{kind:0};b=d[0]===\"v1\"&&zca.test(d[3]??\"\")?4:1;d=[d.slice(0,b).join(\"/\"),...d.slice(b)];b=d[0];if(d.length===1)return{kind:6,cascadeId:b};a=aD(a);if(d[1]===\".system_generated\"){if(d.length===\n2)return{kind:5,cascadeId:b,displayName:\"\"};if(d[2]===\"steps\")return{kind:0};if(d[2]===\"tasks\")return{kind:8,cascadeId:b};if(d[2]===\"logs\"){if(d.length===3)return{kind:3,cascadeId:b};if(a===\"overview.txt\")return{kind:2,cascadeId:b};if(a.endsWith(\".txt\"))return{kind:4,sectionName:EB(c),cascadeId:b}}return a.endsWith(\".jpeg\")||a.endsWith(\".jpg\")||a.endsWith(\".png\")||a.endsWith(\".gif\")||a.endsWith(\".webp\")||a.endsWith(\".ico\")?{kind:7}:{kind:5,cascadeId:b,displayName:EB(c)}}return d.slice(1).some(f=>\npPa.has(f))?{kind:0}:{kind:1,icon:CB(c),displayName:EB(c)}}\nfunction dD(a){return a.kind===5||a.kind===6||a.kind===2||a.kind===3||a.kind===4}\nfunction fD(a){if(a=((typeof a===\"string\"?Df(a):a).fragment||\"\").match(/^L(\\d+)(?::(\\d+))?(?:-L?(\\d+)(?::(\\d+))?)?$/)){var b=parseInt(a[1],10);return{startLine:b,endLineInclusive:a[3]?parseInt(a[3],10):b,startCol:a[2]?parseInt(a[2],10):void 0,endCol:a[4]?parseInt(a[4],10):void 0}}}\nvar iD=A.forwardRef(({fileUri:a,openUri:b,artifactsDir:c,getFileIcon:d,getUrlTabIcon:f,pageTitle:g,iconOverride:h,className:k,contentOverride:l,contentCustomizer:m,contentClassName:n,isDirectory:q,draggable:r=!0,scopeItem:t,tooltip:u,title:v,testId:w,preferCustomOpenUriOnPrimaryClick:x=!1,onClick:y,onAuxClick:z,onKeyDown:C,onKeyUp:D,...E},F)=>{var G=(0,A.useMemo)(()=>KC(a),[a]),H=(0,A.useMemo)(()=>G?a:$f(a),[G,a]),I=(0,A.useMemo)(()=>FB(H),[H]),K=G||I,{resolveLinkOpenTarget:L,openUrlInBrowserPane:M,\ngetTargetTreeId:N,linkWrapper:O}=kC({enabled:K}),P=(0,A.useContext)(TB),R=sB(),Q=(0,A.useContext)(I?aC:tPa),V=(0,A.useMemo)(()=>I?RB(H)??R:void 0,[I,H,R]),T=nNa(V);V=nl(T??uPa,vPa,I?H:void 0);var S=nl(Q?.cascadeContext?.state?.agentStateProvider??uPa,vPa,I?H:void 0);V=V??S;var U=(0,A.useContext)(kB),Y=(0,A.useMemo)(()=>I?H.split(\"#\",1)[0]:void 0,[I,H]),W=SB(Y,V);V=G?H:I?W??H:void 0;S=(0,A.useCallback)(()=>{var ra=G?(ra=QC(H))?MC.get(ra.key):void 0:void 0;return ra},[G,H]);var ca=(0,A.useSyncExternalStore)(G?\nfPa:qPa,S,S),da=(0,A.useMemo)(()=>cD(H,c??\"_\"),[H,c]),oa=(0,A.useMemo)(()=>{if(h!==void 0)return h;if(G){if(ca?.faviconDataUrl?.startsWith(\"data:image/\"))return A.createElement(\"img\",{src:ca.faviconDataUrl,width:14,height:14,alt:\"\",className:\"rounded-sm shrink-0\"});let ra=f?.(a)??\"language\";return typeof ra===\"string\"?A.createElement(Z,{name:ra,size:14,className:\"stroke-1 text-muted-foreground shrink-0\"}):A.createElement(ra,{size:14})}return da.kind===1?A.createElement(Z,{name:da.icon,size:16,className:\"stroke-1\"}):\ndD(da)||da.kind===8?A.createElement(Z,{name:\"chat_bubble\",size:14,className:\"stroke-1\"}):A.createElement(wA,{uri:H,getFileIcon:d,isDirectory:q??null})},[H,a,d,f,da,h,q,G,ca]),{fileName:fa,lineRange:ea,lineIndicator:X}=(0,A.useMemo)(()=>{var ra=Df(H),qa=fD(ra);qa={startLine:qa?.startLine,endLine:qa?.endLineInclusive};var Ha=Yf.extname(ra).toLowerCase();if(xB.includes(Ha)||yB.includes(Ha)||zB.includes(Ha)||AB.includes(Ha))Ha=void 0;else{Ha=qa?.startLine;var La=qa?.endLine;let Ra=void 0;Ha!==void 0&&\n(Ra=`#L${Ha+1}`,La!==void 0&&Ha!==La&&(Ra+=`-${La+1}`));Ha=Ra}return{fileName:Yf.basename(ra),lineRange:qa,lineIndicator:Ha}},[H]);S=vOa();var ja=nl(S??kna,sPa,dD(da)?da.cascadeId:void 0),la=(0,A.useMemo)(()=>{if(G){var ra=fa;try{ra=(new URL(a)).host||fa}catch{}return A.createElement(\"span\",null,ca?.pageTitle||g||ra)}var qa=da.kind;return qa===1||qa===9?A.createElement(\"span\",null,da.displayName,X&&A.createElement(\"span\",{className:\"text-muted-foreground ml-0.5\"},X)):da.kind===8?\"Task Log\":dD(da)?\n(ra=ja??\"Conversation\",qa=qa===3?\"Sections\":qa===4?da.sectionName:qa===2?\"Overview\":qa===5?da.displayName:\"\",A.createElement(\"span\",null,ra.length>30?ra.substring(0,30)+\"\\u2026\":ra,qa&&A.createElement(A.Fragment,null,A.createElement(\"span\",null,\": \"),A.createElement(\"span\",{className:\"text-muted-foreground\"},qa)))):A.createElement(\"span\",null,fa,X&&A.createElement(\"span\",{className:\"text-muted-foreground ml-0.5\"},X))},[G,ca,g,a,da,ja,fa,X]),ta=(0,A.useMemo)(()=>{var ra=l??la;return m?m(ra):ra},[la,\nm,l]),{ref:za}=YC(H,ea,!1,t);t=(0,A.useCallback)(ra=>{za.current=r?ra:null;typeof F===\"function\"?F(ra):F&&(F.current=ra)},[za,r,F]);S=(0,A.useContext)(jB);var sa=n??(S?\"break-all leading-tight select-text\":\"inline-flex items-baseline gap-1 break-all leading-tight select-text text-left\"),ha=S&&oa?rPa(ta):void 0;oa=ha?A.createElement(A.Fragment,null,A.createElement(\"span\",{className:\"whitespace-nowrap\"},A.createElement(\"span\",{className:\"inline-block align-middle -translate-y-px shrink-0 mr-0.5 leading-[0] [&_svg]:inline-block [&_img]:inline-block [&>div]:inline-block [&_.google-symbols]:leading-none\"},\noa),A.createElement(\"span\",{className:sa},ha.first)),A.createElement(\"span\",{className:sa},ha.rest)):A.createElement(A.Fragment,null,oa?A.createElement(\"span\",{className:S?\"inline-block align-middle -translate-y-px shrink-0 mr-0.5 leading-[0] [&_svg]:inline-block [&_img]:inline-block [&>div]:inline-block [&_.google-symbols]:leading-none\":\"inline-flex self-center shrink-0 items-center justify-center\"},oa):null,A.createElement(\"span\",{className:sa},ta));ta=/\\btext-(?:foreground|secondary-foreground|muted-foreground|primary|destructive|accent)\\b/;\nn=ta.test(k??\"\")||ta.test(n??\"\");n=Hi(S?\"inline box-decoration-clone align-baseline text-sm font-medium inline-pill\":\"select-none inline-flex items-baseline align-baseline text-sm font-medium inline-pill\",\"gap-0.5 rounded-md p-0.5\",!n&&\"text-foreground\");var pa=A.useRef(!0),wa=A.useRef(0),ua=A.useRef(L);ua.current=L;(0,A.useEffect)(()=>()=>{pa.current=!1},[]);var xa=ra=>{var qa=++wa.current,Ha=K?MB():void 0,La=P??N();if(I&&!W&&Y&&typeof U?.readFile===\"function\"&&!x)ra.preventDefault(),ra.stopPropagation(),\nNB(Y,Ia=>U.readFile(Ia)).then(Ia=>{!pa.current||wa.current!==qa||Y&&Ha!==void 0&&JB!==Ha||(Ia=(Y?OB(T?.getState()?.artifactSnapshots,Y)??OB(Q?.cascadeContext?.state?.agentStateProvider?.getState()?.artifactSnapshots,Y):void 0)??Ia)&&ua.current(Ia,{event:ra})===\"preview\"&&M&&M(Ia,La)!==!1||b?.(Ia??H,ra)});else{var Ra=G?H:I?W:void 0;!x&&Ra&&L(Ra,{event:ra})===\"preview\"&&M&&M(Ra,La)!==!1?(ra.preventDefault(),ra.stopPropagation()):(Ra=!x&&I&&W?W:H,b?.(Ra,ra))}},ia=A.useRef(!1);ta=ra=>{ia.current||y?.(ra);\nxa(ra)};sa=ra=>{z?.(ra);ra.button===1&&(ra.preventDefault(),ra.stopPropagation(),xa(ra))};k=(ta=b&&{className:Hi(n,\"cursor-pointer hover:bg-secondary data-[popup-open]:bg-secondary transition-[background-color,opacity]\",k),title:v,\"data-testid\":w,\"data-uri\":H,\"data-quotable-inline\":\"true\",onClick:ta,onAuxClick:sa})?S?A.createElement(\"span\",{...E,...ta,ref:t,role:\"button\",tabIndex:0,onKeyDown:ra=>{C?.(ra);if(ra.key===\"Enter\"){ra.preventDefault();ra.stopPropagation();ia.current=!!C;try{ra.currentTarget.click()}finally{ia.current=\n!1}}else ra.key===\" \"&&(ra.preventDefault(),ra.stopPropagation())},onKeyUp:ra=>{D?.(ra);if(ra.key===\" \"){ra.preventDefault();ra.stopPropagation();ia.current=!!D;try{ra.currentTarget.click()}finally{ia.current=!1}}}},oa):A.createElement(\"button\",{...E,...ta,type:\"button\",ref:t,onKeyDown:C,onKeyUp:D},oa):A.createElement(\"span\",{...E,ref:t,onClick:y,onAuxClick:z,onKeyDown:C,onKeyUp:D,className:Hi(n,u?\"hover:bg-secondary data-[popup-open]:bg-secondary transition-[background-color]\":\"\",\"transition-[opacity]\",\nk),title:v,\"data-testid\":w,\"data-uri\":H,\"data-quotable-inline\":\"true\"},oa);u=A.createElement(dNa,{tooltip:u},k);if(K&&O&&V){let ra=(I?W:void 0)??H;return A.createElement(O,{href:V,bookmarkUri:Y,as:\"span\",onOpenInPreview:b&&M?()=>{wa.current+=1;MB();b(ra,void 0,{target:\"preview\"})}:void 0,onOpenInExternal:b?()=>{wa.current+=1;MB();b(ra,void 0,{useExternalBrowser:!0,target:\"external\"})}:void 0,children:u})}return u});iD.displayName='IconPill';\n");
+  const originalObject = f.window.iD, originalRender = originalObject.render;
+  assert.deepEqual(Array.from(f.evaluate("['MC','tPa','uPa','sPa','vPa'].map(name=>Object.prototype.hasOwnProperty.call(window,name))")), [false,false,false,false,false]);
+  const installed = f.install();
+  const hook = Array.from(installed.hooks).find(value => value.kind === 'native-file-label');
+  assert.ok(hook);
+  assert.equal(hook.owner, originalObject);
+  assert.equal(f.window.iD, originalObject);
+  assert.notEqual(originalObject.render, originalRender);
+  assert.equal(Object.prototype.hasOwnProperty.call(f.window,'render'), false);
+  const collect = (value, out = []) => {
+    if (typeof value === 'string' || typeof value === 'number') out.push(String(value));
+    else if (Array.isArray(value)) value.forEach(child => collect(child,out));
+    else if (value?.props) collect(value.props.children,out);
+    return out;
+  };
+  const props = fileUri => ({fileUri,artifactsDir:'/fixture/brain',openUri:f.window.fixtureForbiddenAction});
+  const renderChip = (value, ref) => {
+    const before = f.window.fixtureDragRefs.length;
+    const result = originalObject.render(value,ref);
+    assert.equal(f.window.fixtureDragRefs.length,before+1,'the original Hook sequence runs once');
+    const chip = result.props.children;
+    assert.equal(chip.type,'button');
+    return {result,chip,text:collect(result).join('')};
+  };
+  const taskProps = props('file:///fixture/brain/conversation/.system_generated/tasks/fixture.log');
+  const objectRef = {current:null}, syntheticObjectNode = {fixtureNode:'object'};
+  const task = renderChip(taskProps,objectRef);
+  assert.equal(task.text,'任务日志');
+  task.chip.props.ref(syntheticObjectNode);
+  assert.equal(objectRef.current,syntheticObjectNode);
+  assert.equal(f.window.fixtureDragRefs.at(-1).current,syntheticObjectNode);
+  const callbackNodes = [], syntheticCallbackNode = {fixtureNode:'callback'};
+  const callbackRef = node => callbackNodes.push(node);
+  const callbackTask = renderChip(taskProps,callbackRef);
+  callbackTask.chip.props.ref(syntheticCallbackNode);
+  assert.deepEqual(callbackNodes,[syntheticCallbackNode]);
+  assert.equal(f.window.fixtureDragRefs.at(-1).current,syntheticCallbackNode);
+  assert.equal(renderChip(props('file:///workspace/Task%20Log')).text,'Task Log');
+  assert.equal(renderChip({...taskProps,contentOverride:'Task Log'}).text,'Task Log');
+  const overviewProps = props('file:///fixture/brain/conversation/.system_generated/logs/overview.txt');
+  assert.equal(renderChip(overviewProps).text,'对话: 概览','the compiled fallback retains page const contexts and selectors');
+  f.evaluate("fixtureSummaryState.summaries.conversation={summary:'Overview'}");
+  assert.equal(renderChip(overviewProps).text,'Overview: 概览','the real conversation name remains verbatim');
+  assert.equal(renderChip(props('https://fixture.invalid/page')).text,'Task Log','the URL cache remains a page lexical const and its real page title stays verbatim');
+  assert.equal(f.window.fixtureActions.length,0);
+  f.uninstall()();
+  assert.equal(f.window.iD,originalObject);
+  assert.equal(originalObject.render,originalRender);
+  assert.equal(collect(originalObject.render(taskProps)).join(''),'Task Log');
+  assert.equal(f.window.fixtureActions.length,0);
+});
+
+
+test('native quota periods and remaining values translate without changing bucket data', () => {
+  const f=nativeFixture();
+  f.evaluate(`var Ema={daily:'Daily limit',weekly:'Weekly limit'};
+    var Hi=(...values)=>values.filter(Boolean).join(' '),kib=()=>null;`);
+  // Current application formatter and bucket row, captured before adaptation.
+  f.evaluate("var zl=function zl(a){var b=a.window.trim().toLowerCase();return Ema[b]?Ema[b]:/^\\d+[smhd]$/.test(b)?`${b} limit`:a.displayName};\nvar Fma=function Fma(a){var b=a.remaining.case===\"remainingFraction\"?a.remaining.value:void 0,c=a.resetTime?Pe(a.resetTime):void 0;if(a.description)if(c){{let k=c.getTime()-Date.now();k<=0?c={days:0,hours:0,mins:0,diffMs:k}:(c=Math.floor(k/6E4),c={days:Math.floor(c/1440),hours:Math.floor(c%1440/60),mins:c%60,diffMs:k})}var {days:d,hours:f,mins:g,diffMs:h}=c;c=h<=0?\"Resets in <1m\":`Resets in ${d>0?f>0?`${d}d ${f}h`:`${d}d`:f>0?g>0?`${f}h ${g}m`:`${f}h`:g>0?`${g}m`:\"<1m\"}`}else c=void 0;else c=void 0;return{remainingFraction:b,\nrefreshText:a.description||\"\",subtext:c,disabled:a.disabled??!1}};\nvar vjc=function vjc({bucket:a,title:b,detail:c,nested:d=!1}){a=Fma(a);var f=a.remainingFraction!==void 0?Math.round(a.remainingFraction*100):void 0;return A.createElement(\"div\",{className:\"grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-2 py-1 rounded-md text-xs\"},A.createElement(\"span\",{className:Hi(\"truncate\",d?\"text-muted-foreground\":\"text-foreground\")},b),A.createElement(\"span\",{className:\"flex items-center justify-end gap-1.5\"},f!==void 0&&A.createElement(\"span\",{className:f>=100?\"text-muted-foreground\":\n\"text-foreground\"},f,\"% left\"),A.createElement(kib,{remainingFraction:a.remainingFraction,disabled:a.disabled,className:\"w-4 h-4 shrink-0\"})),(c||a.subtext)&&A.createElement(A.Fragment,null,A.createElement(\"span\",{className:\"truncate text-muted-foreground\"},c),A.createElement(\"span\",{className:\"text-right text-muted-foreground whitespace-nowrap\"},a.subtext)))};");
+  const originals={period:f.window.zl,row:f.window.vjc};
+  const adapters=f.install();
+  const bucket=Object.freeze({window:' 5H ',remaining:Object.freeze({case:'remainingFraction',value:.88}),description:'raw provider detail'});
+  assert.equal(f.window.zl(bucket),'5 小时额度');
+  assert.equal(f.window.zl({...bucket,window:'weekly'}),'每周额度');
+  assert.equal(f.window.zl({...bucket,window:'daily'}),'每日额度');
+  assert.equal(f.window.zl({...bucket,window:'30m'}),'30 分钟额度');
+  assert.equal(f.window.zl({...bucket,window:'custom',displayName:'Weekly limit'}),'Weekly limit','provider names remain data');
+  const props={bucket,title:f.window.zl(bucket),detail:'My Plan'};
+  const row=f.window.vjc(props).props.children;
+  assert.equal(row[0].props.children,'5 小时额度');
+  assert.equal(Array.from(row[1].props.children[0].props.children).join(''),'剩余 88%');
+  assert.equal(row[1].props.children[1].props.remainingFraction,.88);
+  assert.equal(row[2].props.children[0].props.children,'My Plan');
+  assert.equal(bucket.window,' 5H ');
+  const noFraction=f.window.vjc({...props,bucket:{...bucket,remaining:{case:'remainingCredits',value:12}}});
+  assert.equal(noFraction.props.children[1].props.children[0],false);
+  adapters.setStrings({'quota-window:h':'{count} 小时限额','quota-remaining:prefix':'可用 '});
+  assert.equal(f.window.zl(bucket),'5 小时限额');
+  assert.equal(Array.from(f.window.vjc(props).props.children[1].props.children[0].props.children).join(''),'可用 88%');
+  f.uninstall()();
+  assert.equal(f.window.zl,originals.period);assert.equal(f.window.vjc,originals.row);
+});
+
+
+test('native model display translates effort suffixes and preserves model identity and custom names', () => {
+  const f=nativeFixture();
+  f.evaluate(`var hookCount=0;
+    A.useMemo=callback=>{hookCount++;return callback()};A.useCallback=callback=>callback;A.useId=()=> 'fixture';
+    var choices=[],modelState={effortIndex:new Map(),setSelectedModel:model=>choices.push(model)};
+    var B6=()=>modelState,bC=()=>({}),UN=()=>false,LY=()=>null,LTb=()=>null,KTb=()=>null;
+    var iS=()=>null,jS=()=>null,aS=()=>null,bS=()=>null,cS=()=>null,dS=()=>null,eS=()=>null,Ojc=()=>null;
+    var Njc=models=>models.some(model=>model.contextWindowOptions?.length),Oib=()=>null;
+    var Hi=(...values)=>values.filter(Boolean).join(' ');
+    var yjc=new Map(),zjc=/^(.*?)\\s*\\((low|medium|high|xhigh|max)(?:\\s+thinking)?\\)\\s*$/i;
+    var xjc=['low','medium','high','xhigh','max'],z6={low:'Low',medium:'Medium',high:'High',xhigh:'Extra',max:'Max'};`);
+  // Current shared display formatter and menu components, including the native
+  // effort parser and grouping path; setters only record the selected object.
+  f.evaluate("var A6=a=>{if(!a.isCustom){var b;(b=yjc.get(a.value))!=null?a=b:a=(a=zjc.exec(a.label))?{base:a[1].trim(),effort:a[2].toLowerCase()}:void 0;return a}};\nvar Ajc=a=>a?xjc.filter(b=>a.has(b)):[];\nvar Bjc=(a,b)=>{if((a=A6(a))&&(b=b.get(a.base))&&!(b.size<2))return{base:a.base,efforts:Ajc(b),byEffort:b}};\nvar Cjc=(a,b,c)=>{if(a=a.get(c))return b&&(b=A6(b),b?.base===c)?b.effort:a.has(\"medium\")?\"medium\":Ajc(a)[0]};\nvar Djc=(a,b)=>{var c=(b=Bjc(a,b))?A6(a):void 0;return b&&c?{name:b.base,effort:c.effort}:{name:a.label}};\nvar Qjc=({model:a})=>{var {setSelectedModel:b,selectedModel:c,bestOfNConfig:d,effortIndex:f,contextWindow:g}=B6(),{stepHandler:h,isGoogleInternal:k=!1}=bC(),l=UN(),m=d?.isBestOfNEnabled??!1,n=(0,A.useMemo)(()=>d?.selectedBestOfNModels??[],[d]),q=(0,A.useMemo)(()=>d?.setSelectedBestOfNModels??(()=>{}),[d]),r=n.some(z=>z.label===a.label),t=m?r:c?.label===a.label,u=LY(a,h?.useAICredits??!1,h?.availableCredits,h?.minimumCreditAmountForUsage,k),v=a.disabled??!1,w=(0,A.useCallback)(()=>{r?q(n.filter(z=>\nz.label!==a.label)):q([...n,a])},[r,n,q,a]),x=A.createElement(\"span\",{className:Hi(\"flex items-center gap-1.5 min-w-0\",v?\"text-muted-foreground\":\"\")},A.createElement(\"span\",{className:\"truncate text-xs text-left\"},a.label),u&&A.createElement(LTb,{modelWarning:u}),A.createElement(KTb,{option:a}));if(m)return A.createElement(cS,{checked:r,onCheckedChange:w,disabled:v},x);var y=Bjc(a,f);if(y){let z=Cjc(f,c,y.base)??y.efforts[0],C=c?A6(c)?.base===y.base:!1;return A.createElement(iS,{title:y.base},A.createElement(jS,\n{selected:C,disabled:v,onClick:l?void 0:()=>{var D=y.byEffort.get(z);D&&b(D)}},A.createElement(\"span\",{\"data-testid\":\"model-selector-effort-group\",\"data-model-base\":y.base,className:\"truncate text-xs text-left\"},y.base),A.createElement(\"span\",{className:\"shrink-0 opacity-70 text-xs\"},z6[z]),u&&A.createElement(LTb,{modelWarning:u}),A.createElement(KTb,{option:a})),A.createElement(aS,{side:\"right\",align:\"start\",className:\"min-w-40\"},g&&Njc(y.efforts.map(D=>y.byEffort.get(D)))?y.efforts.map(D=>{var E=\ny.byEffort.get(D);if(!E)return null;var F=C&&D===z;return E.contextWindowOptions?.length?A.createElement(Pjc,{key:D,option:E,effort:D,selected:F,contextWindow:g}):A.createElement(bS,{key:D,selected:F,onClick:()=>{b(E)}},A.createElement(\"span\",{\"data-testid\":\"model-selector-effort-option\",\"data-effort\":D,className:\"truncate\"},z6[D]))}):A.createElement(dS,{value:z,onValueChange:D=>{(D=y.byEffort.get(D))&&b(D)}},y.efforts.map(D=>A.createElement(eS,{key:D,value:D},A.createElement(\"span\",{\"data-testid\":\"model-selector-effort-option\",\n\"data-effort\":D},z6[D]))))))}return A.createElement(bS,{\"data-testid\":\"model-selector-item\",\"data-model-label\":a.label,selected:t,disabled:v,onClick:()=>{b(a)}},x)};\nvar Pjc=function Pjc({option:a,effort:b,selected:c,contextWindow:d}){var f=UN(),{setIsOpen:g}=B6();return A.createElement(iS,{title:`${z6[b]} \\u00b7 Context window`},A.createElement(jS,{selected:c,onClick:f?void 0:()=>{d.select(a,\"Default\");g(!1)}},A.createElement(\"span\",{\"data-testid\":\"model-selector-effort-option\",\"data-effort\":b,className:\"truncate\"},z6[b])),A.createElement(aS,{side:\"right\",align:\"start\",className:\"min-w-40\",collisionBoundary:\"viewport\"},A.createElement(dS,{\"aria-label\":\"Context window\",\n\"data-testid\":\"model-selector-context-window-submenu\",\"data-effort\":b,value:c?Oib(a,d.selected)?.name??\"Default\":\"\",onValueChange:h=>{d.select(a,h);g(!1)}},A.createElement(Ojc,{window:\"Default\"}),(a.contextWindowOptions??[]).map(({name:h,description:k,expensive:l})=>A.createElement(Ojc,{key:h,window:h,note:k,expensive:l})))))};");
+  const originals={display:f.window.Djc,row:f.window.Qjc,context:f.window.Pjc};
+  const adapters=f.install();
+  const model=Object.freeze({label:'GPT-OSS 120B (Medium)',value:120});
+  const index=f.window.modelState.effortIndex;
+  assert.equal(f.window.Djc,originals.display,'raw model names remain native for aria-label and selection');
+  assert.equal(f.window.Djc(model,index).name,model.label);
+  let row=f.window.Qjc({model});
+  assert.equal(row.props.children.props.children[0].props.children,'GPT-OSS 120B（中）');
+  assert.equal(row.props['data-model-label'],model.label);
+  row.props.onClick();assert.equal(f.window.choices[0],model);
+  const custom=Object.freeze({...model,isCustom:true});
+  assert.equal(f.window.Djc(custom,index).name,custom.label);
+  assert.equal(f.window.Qjc({model:custom}).props.children.props.children[0].props.children,custom.label);
+  const high=Object.freeze({label:'GPT-OSS 120B (High)',value:121});
+  index.set('GPT-OSS 120B',new Map([['medium',model],['high',high]]));
+  f.window.modelState.selectedModel=model;
+  row=f.window.Qjc({model});
+  assert.equal(row.props.title,'GPT-OSS 120B');
+  assert.equal(row.props.children[0].props.children[0].props.children,'GPT-OSS 120B');
+  assert.equal(row.props.children[0].props.children[1].props.children,'中');
+  const options=row.props.children[1].props.children.props.children;
+  assert.equal(options[0].props.value,'medium');assert.equal(options[0].props.children.props.children,'中');
+  assert.equal(options[1].props.value,'high');assert.equal(options[1].props.children.props.children,'高');
+  assert.equal(f.window.Djc(model,index).name,'GPT-OSS 120B');
+  assert.equal(f.window.Djc(model,index).effort,'medium');
+  const select=()=>{},context=f.window.Pjc({option:model,effort:'medium',selected:true,contextWindow:{select}});
+  assert.equal(context.props.title,'中 · 上下文窗口');
+  assert.equal(context.props.children[1].props.children.props['data-effort'],'medium');
+  adapters.setStrings({Medium:'适中'});
+  assert.equal(f.window.Qjc({model}).props.children[0].props.children[1].props.children,'适中');
+  f.uninstall()();
+  assert.equal(f.window.Djc,originals.display);assert.equal(f.window.Qjc,originals.row);assert.equal(f.window.Pjc,originals.context);
+});
+
+
+test('current environment summary and browser access labels preserve native data and callbacks', () => {
+  const f=nativeFixture();
+  f.evaluate(`var hooks=0;
+    A.useState=value=>{hooks++;return [value,()=>{}]};A.useCallback=callback=>callback;
+    var nativeCalls=[];
+    var openAllowlist=()=>nativeCalls.push('open'),addAllowlist=url=>nativeCalls.push(url),openUrl=url=>nativeCalls.push(url);
+    var bC=()=>({stepHandler:{openBrowserAllowlist:openAllowlist,addToBrowserAllowlist:addAllowlist}}),wE=()=>({openUrlInSystemBrowser:openUrl});
+    var FMb=value=>value.denied,GMb=value=>value.allowed,AS=()=>({viewportRef:{current:null},contentRef:{current:null}});
+    var Hi=(...values)=>values.filter(Boolean).join(' '),e=value=>value;
+    var IMb=()=>null,HMb=()=>null,JZ=()=>null,CMb=()=>null,iA=()=>null,Z=()=>null;`);
+  // The current environment output branch omits the old binary slot.
+  f.evaluate("var currentEnvironment=function({environment:f,onReset}){return A.createElement('div',{onClick:onReset,className:'text-xs text-muted-foreground'},'Active environment: os=',A.createElement('b',null,f.os??'unknown'),', host=',A.createElement('b',null,f.host??'unknown'),', userType=',A.createElement('b',null,f.userCohort??'unknown'),'. Reload the window if a change does not take effect.');};");
+  // Current JMb component captured before adaptation, without executing its
+  // nested tool-output, URL or recording components.
+  f.evaluate('var JMb='+"({subtrajectory:a,step:b,debugMode:c})=>{var d=a.steps,[f,g]=(0,A.useState)(!1),[h,k]=(0,A.useState)(!0),[l,m]=(0,A.useState)(new Set),{stepHandler:{openBrowserAllowlist:n,addToBrowserAllowlist:q}={}}=bC(),{openUrlInSystemBrowser:r}=wE(),t=FMb(a),u=GMb(a),v=(0,A.useCallback)(async()=>\n{var z=e,C=e;try{C(await z(n?.()))}finally{z()}},[n]),w=(0,A.useCallback)(async z=>{var C=e,D=e;try{if(q)try{D(await C(q(z))),m(E=>new Set([...E,z]))}catch(E){D(),console.error(\"Failed to add URL to allowlist:\",E)}else console.error(\"Failed to add URL to allowlist: addToBrowserAllowlist is undefined\")}finally{C()}},[q]),{viewportRef:x,contentRef:y}=AS();return A.createElement(\"div\",{className:\"flex flex-col relative\"},A.createElement(\"div\",{ref:x,className:\"p-2 max-h-[20vh] overflow-y-auto gap-2\"},\nA.createElement(\"div\",{ref:y},d.length>0&&A.createElement(IMb,{stepsToShow:d,subtrajectory:a,debugMode:c}))),t.length>0||u.length>0||b.recordingPath?A.createElement(\"div\",{className:\"flex flex-col gap-2 p-2 border-t border-border\"},t.length>0&&A.createElement(\"div\",{className:\"flex flex-col\"},A.createElement(\"div\",{className:\"flex items-center gap-1\"},A.createElement(Z,{name:\"warning\",className:\"h-3 w-3 flex-none\"}),A.createElement(\"span\",{className:\"text-xs text-secondary-foreground\"},\"Denied Sites\")),\nA.createElement(\"div\",{className:\"flex items-center justify-between\"},A.createElement(\"span\",{className:\"text-sm text-secondary-foreground\"},\"The agent was prevented from accessing some sites\"),A.createElement(\"div\",{className:\"flex cursor-pointer items-center text-xs text-secondary-foreground hover:text-foreground\",onClick:()=>{g(!f)}},A.createElement(\"span\",{className:\"mr-1 select-none\"},f?\"Hide\":\"Show\"),A.createElement(Z,{name:\"keyboard_arrow_down\",className:Hi(\"h-3 w-3 transition-transform duration-100\",\nf?\"rotate-180\":\"\")}))),A.createElement(JZ,{shouldShow:f},A.createElement(\"div\",{className:\"mt-2 space-y-1\"},t.map((z,C)=>A.createElement(HMb,{key:C,url:z,onUrlClick:D=>{r(D)}}))))),u.length>0&&A.createElement(\"div\",{className:\"flex flex-col\"},A.createElement(\"div\",{className:\"flex flex-col\"},A.createElement(\"div\",{className:\"flex items-center gap-1 text-xs text-secondary-foreground\"},A.createElement(Z,{name:\"warning\",className:\"h-3 w-3 flex-none\"}),\"Site Allowlist\"),A.createElement(\"div\",{className:\"flex items-start justify-between\"},\nA.createElement(\"span\",{className:\"flex-1 pr-4 text-sm\"},\"The Agent attempted to interact with some sites that are not allowlisted\"),A.createElement(\"div\",{className:\"flex cursor-pointer items-center text-xs text-secondary-foreground hover:text-foreground\",onClick:()=>{k(!h)}},A.createElement(\"span\",{className:\"mr-1 select-none\"},h?\"Hide\":\"Show\"),A.createElement(Z,{name:\"keyboard_arrow_down\",className:Hi(\"h-3 w-3 transition-transform duration-100\",h?\"rotate-180\":\"\")}))),A.createElement(\"div\",{className:\"mt-2 flex items-center justify-between\"},\nA.createElement(\"span\",{className:\"text-sm\"},\"Add them to allow future interactions\"),A.createElement(\"button\",{onClick:v,className:\"cursor-pointer self-start text-xs text-blue-400 underline hover:text-blue-300\"},\"Open allowlist\"))),A.createElement(JZ,{shouldShow:h},A.createElement(\"div\",{className:\"mt-2 space-y-1\"},u.map((z,C)=>{var D=l.has(z);return A.createElement(\"div\",{key:C,className:\"flex items-center gap-2\"},A.createElement(HMb,{url:z,onUrlClick:E=>{r(E)},className:\"flex-1 px-2 py-1 text-xs\"}),\nA.createElement(\"button\",{\"data-tooltip-id\":`add-to-allowlist-${C}`,\"aria-label\":D?\"Added to allowlist\":\"Add to allowlist\",onClick:()=>{w(z)},disabled:D,className:Hi(\"rounded border px-2 py-1 text-xs transition-colors\",D?\"cursor-default border-green-600 bg-green-600 text-white\":\"cursor-pointer border-blue-600 bg-blue-600 text-white hover:bg-blue-700\")},D?A.createElement(Z,{name:\"check\",className:\"h-3 w-3\"}):A.createElement(Z,{name:\"add\",className:\"h-3 w-3\"})),A.createElement(iA,{id:`add-to-allowlist-${C}`,\nplace:\"top\"},D?\"Added to allowlist\":\"Add to allowlist\"))})))),A.createElement(CMb,{generationStatus:b.recordingGenerationStatus,recordingPath:b.recordingPath})):null)}"+';');
+  const originalEnvironment=f.window.currentEnvironment,originalBrowser=f.window.JMb;
+  const created=[],create=f.window.A.createElement;
+  f.window.A.createElement=(...args)=>{const node=create(...args);created.push(node);return node;};
+  const reset=()=>{},environment=Object.freeze({os:'darwin',host:'fixture-host',userCohort:'external'});
+  const denied='https://fixture.invalid/Denied%20Sites',allowed='https://fixture.invalid/Show?q=Site%20Allowlist';
+  const steps=Object.freeze([{raw:'Site Allowlist / Show / Denied Sites'}]);
+  const subtrajectory=Object.freeze({steps,denied:Object.freeze([denied]),allowed:Object.freeze([allowed])});
+  const step=Object.freeze({recordingPath:'Show',recordingGenerationStatus:'native-state'});
+  const adapters=f.install();
+  const env=f.window.currentEnvironment({environment,onReset:reset});
+  const nodes=(value,out=[])=>{if(Array.isArray(value))value.forEach(child=>nodes(child,out));else if(value?.props){out.push(value);nodes(value.props.children,out);}return out;};
+  const text=value=>{if(typeof value==='string'||typeof value==='number')return String(value);if(Array.isArray(value))return value.map(text).join('');return value?.props?text(value.props.children):'';};
+  assert.equal(text(env),'当前环境：操作系统=darwin，主机=fixture-host，用户类型=external。如果更改未生效，请重新加载窗口。');
+  assert.equal(env.props.onClick,reset);
+  assert.deepEqual(nodes(env).filter(node=>node.type==='b').map(node=>node.props.children),['darwin','fixture-host','external']);
+  created.length=0;
+  const result=f.window.JMb({subtrajectory,step,debugMode:false}),rendered=nodes(result);
+  assert.equal(f.window.hooks,3,'the native state Hooks run once');
+  for(const expected of ['已阻止的网站','智能体无法访问部分网站','网站允许列表','展开','收起','打开允许列表','加入允许列表','加入允许列表后，智能体才能操作这些网站'])assert.ok(text(result).includes(expected),expected);
+  assert.deepEqual(rendered.filter(node=>node.type===f.window.HMb).map(node=>node.props.url),[denied,allowed]);
+  assert.equal(rendered.find(node=>node.type===f.window.IMb).props.stepsToShow,steps);
+  assert.equal(rendered.find(node=>node.type===f.window.CMb).props.recordingPath,'Show');
+  const nativeOpen=created.find(node=>node.type==='button'&&node.props.children==='Open allowlist');
+  const translatedOpen=rendered.find(node=>node.type==='button'&&node.props.children==='打开允许列表');
+  assert.equal(translatedOpen.props.onClick,nativeOpen.props.onClick);
+  const nativeAdd=created.find(node=>node.type==='button'&&node.props['aria-label']==='Add to allowlist');
+  const keptAdd=rendered.find(node=>node.type==='button'&&node.props['aria-label']==='Add to allowlist');
+  assert.equal(keptAdd.props.onClick,nativeAdd.props.onClick);
+  assert.equal(keptAdd.props.disabled,false);
+  assert.equal(f.window.nativeCalls.length,0);
+  assert.equal(subtrajectory.steps[0].raw,'Site Allowlist / Show / Denied Sites');
+  assert.ok(Array.from(adapters.uiKeys).includes('JMb'));
+  f.uninstall()();
+  assert.equal(f.window.currentEnvironment,originalEnvironment);assert.equal(f.window.JMb,originalBrowser);
+});
+
+
+test('cloud disclosure links, hook empty states and account panel labels preserve native values and actions', () => {
+  const f=nativeFixture();
+  f.evaluate(`var effectCalls=0,actions=0;
+    A.useEffect=()=>{effectCalls++};
+    var CF=()=>({logEvent:()=>{}}),Sv=()=>null,IE=()=>null,lA=()=>null,Klb=[];
+    var hookEmpty=({event,onAdd})=>A.createElement('div',null,
+      A.createElement('span',null,'No handlers configured for ',event,'.'),
+      A.createElement('button',{onClick:onAdd},'Add Handler'));
+    var accountAction=({product,onOpen})=>A.createElement('div',null,
+      A.createElement('span',null,'Not Signed In'),A.createElement('span',null,\`Sign in from the \${product} panel.\`),
+      A.createElement(lA,{variant:'primary',size:'sm',onClick:onOpen},'Open ',product,' panel'));`);
+  // Current native cloud-resource disclosure owner, including the four links.
+  f.evaluate("var Olb=({onDismiss:a})=>{var {logEvent:b}=CF();(0,A.useEffect)(()=>{b(wg.CLOUD_RESOURCE_DISCLOSURE_SHOWN)},[b]);var c=()=>{b(wg.CLOUD_RESOURCE_DISCLOSURE_DISMISSED);a()};return A.createElement(Sv,{containerRef:void 0},A.createElement(IE,{isOpen:!0,onClose:c,onSubmit:c,title:\"Files and resources in cloud workspaces\",className:\"w-[560px] max-w-[560px]\",scrollToBottomOnOpen:!1},A.createElement(\"div\",{\"data-testid\":\"cloud-resource-disclosure-modal\"},A.createElement(\"p\",{className:\"text-secondary-foreground text-sm mb-4\"},\n\"Here's how uploaded files, attachments, and connected resources work in your cloud environment\"),A.createElement(\"ol\",{className:\"flex flex-col gap-3 list-none p-0 m-0 mb-4\"},Klb.map((d,f)=>A.createElement(\"li\",{key:d.id,\"data-testid\":`cloud-resource-disclosure-step-${d.id}`,className:\"flex items-start gap-3\"},A.createElement(\"span\",{\"aria-hidden\":\"true\",className:\"shrink-0 flex items-center justify-center w-5 h-5 rounded-full bg-muted text-muted-foreground text-xs font-medium\"},f+1),A.createElement(\"span\",\n{className:\"flex flex-col gap-0.5 min-w-0\"},A.createElement(\"span\",{className:\"text-sm font-medium text-foreground\"},d.title),A.createElement(\"span\",{className:\"text-sm text-secondary-foreground\"},d.description))))),A.createElement(\"p\",{\"data-testid\":\"cloud-resource-disclosure-terms\",className:\"text-xs text-secondary-foreground rounded-md bg-muted px-3 py-2 mb-4 leading-relaxed\"},\"Avoid uploading highly sensitive data and verify actions taken by your agent. Make sure you have the\",\" \",A.createElement(\"a\",\n{href:\"https://policies.google.com/terms#toc-relationship\",className:\"text-link hover:underline\",target:\"_blank\",rel:\"noreferrer\"},\"necessary rights\"),\" \",\"to any content or files that you upload, including content of minors. Don't generate content that infringes on others' rights, including content that deceives, harasses, or harms. When using Antigravity, you must comply with Google's\",\" \",A.createElement(\"a\",{href:\"https://policies.google.com/terms/generative-ai/use-policy\",className:\"text-link hover:underline\",\ntarget:\"_blank\",rel:\"noreferrer\"},\"Prohibited Use Policy\"),\". Your use is subject to the\",\" \",A.createElement(\"a\",{href:\"https://antigravity.google/terms\",className:\"text-link hover:underline\",target:\"_blank\",rel:\"noreferrer\"},\"Google Antigravity Terms of Service\"),\" \",\"and\",\" \",A.createElement(\"a\",{href:\"https://policies.google.com/privacy\",className:\"text-link hover:underline\",target:\"_blank\",rel:\"noreferrer\"},\"Google Privacy Policy\"),\".\"),A.createElement(\"div\",{className:\"flex justify-end gap-3\"},\nA.createElement(lA,{size:\"md\",variant:\"primary\",\"data-testid\":\"cloud-resource-disclosure-acknowledge\",\"data-autofocus\":\"true\",onClick:c},\"Got it\")))))};");
+  const find=(node,predicate,result=[])=>{
+    if(Array.isArray(node))node.forEach(child=>find(child,predicate,result));
+    else if(node?.props){if(predicate(node))result.push(node);find(node.props.children,predicate,result);}
+    return result;
+  };
+  const original={cloud:f.window.Olb,hook:f.window.hookEmpty,account:f.window.accountAction};
+  const onDismiss=()=>{},raw=f.window.Olb({onDismiss});
+  const rawLinks=find(raw,node=>node.type==='a');
+  const adapters=f.install();
+  const result=f.window.Olb({onDismiss});
+  assert.equal(f.window.effectCalls,2,'the adapted owner executes its Hook once');
+  const links=find(result,node=>node.type==='a');
+  assert.deepEqual(links.map(node=>node.props.children),['必要权利','禁止使用政策','Google Antigravity 服务条款','Google 隐私政策']);
+  for(let i=0;i<links.length;i++){
+    assert.equal(links[i].props.href,rawLinks[i].props.href);
+    assert.equal(links[i].props.target,rawLinks[i].props.target);
+    assert.equal(links[i].props.rel,rawLinks[i].props.rel);
+  }
+  const dialog=find(result,node=>node.type===f.window.IE)[0];
+  assert.equal(dialog.props.onClose,dialog.props.onSubmit);
+  const onAdd=()=>{},event='My  Start $& Event';
+  const empty=f.window.hookEmpty({event,onAdd}).props.children;
+  assert.equal(empty[0].props.children,'尚未为 '+event+' 配置处理器。');
+  assert.equal(empty[1].props.onClick,onAdd);
+  const onOpen=()=>{},product='My  Product $&';
+  const account=f.window.accountAction({product,onOpen}).props.children[2];
+  assert.equal(Array.from(account.props.children).join(''),'打开 '+product+' 面板');
+  assert.equal(account.props.onClick,onOpen);
+  adapters.setStrings({'No handlers configured for {event}.':'{event} 尚无处理器','account-panel:suffix':' 控制面板'});
+  assert.equal(f.window.hookEmpty({event,onAdd}).props.children[0].props.children,event+' 尚无处理器');
+  assert.equal(Array.from(f.window.accountAction({product,onOpen}).props.children[2].props.children).join(''),'打开 '+product+' 控制面板');
+  f.uninstall()();
+  assert.equal(f.window.Olb,original.cloud);assert.equal(f.window.hookEmpty,original.hook);assert.equal(f.window.accountAction,original.account);
+});
+
+
+test('native customization origins and sidecar error prefixes preserve path and error data', () => {
+  const f=nativeFixture();
+  f.evaluate(`var KE=()=> 'fixture',iA=()=>null,x7=()=>null;
+    var J={DiscoveryCategory:{BUILTIN:0,INSTALLED:1},SidecarStatus:{RUNNING:1},SidecarErrorSource:{PROCESS:1,MANAGER:2}};
+    var Lmc=new Map([[0,{label:'Built In',className:'builtin'}],[1,{label:'Global',className:'global'}]]);
+    var Hi=(...values)=>values.filter(Boolean).join(' ');
+    var m6b=()=>({dotClass:'status',label:'Ready'}),Wyc=()=> 'Generic',n6b=()=> undefined,y_=()=>{},FW=()=> '1s';
+    A.useState=value=>[typeof value==='function'?value():value,()=>{}];`);
+  f.evaluate("var Mmc=({discoveredIn:a,category:b,className:c=\"\"})=>{var d=KE(),f=b!==void 0?Lmc.get(b):void 0;if(!f)return null;var g=f.label;b!==J.DiscoveryCategory.BUILTIN&&a?(b=a.toLowerCase(),a=`${b.endsWith(\".json\")||b.endsWith(\".txt\")?\"Included by\":\"Installed in\"} ${a}`):a=void 0;return A.createElement(A.Fragment,null,A.createElement(\"span\",{\"data-tooltip-id\":a?d:void 0,\"aria-label\":a?`${g}: ${a}`:g,className:Hi(\"text-[11px] leading-4 px-2 py-0.5 rounded-full shrink-0 font-normal\",f.className,c)},g),a&&\nA.createElement(iA,{id:d,place:\"top\"},a))};\nvar Xyc=({sidecar:a})=>{var b=m6b(a.status),c=Wyc(a),d=a.status===J.SidecarStatus.RUNNING&&!!a.startTimeMs,[f,g]=(0,A.useState)(()=>Date.now());y_(()=>{g(Date.now())},d?1E3:null);var h=d?FW(f-Number(a.startTimeMs)):void 0,k=n6b(a);d=A.createElement;b=A.createElement(x7,{label:\"Status\"},A.createElement(\"span\",{className:\"inline-flex items-center gap-1.5\"},A.createElement(\"span\",{className:Hi(\"inline-block w-2 h-2 rounded-full shrink-0\",b.dotClass)}),b.label));c=A.createElement(x7,{label:\"Type\"},c);\nk=k&&A.createElement(x7,{label:\"Command\"},A.createElement(\"code\",{className:\"font-mono text-xs\"},k));h=h&&A.createElement(x7,{label:\"Uptime\"},h);var l;if(l=a.lastError){a:switch(a.errorSource){case J.SidecarErrorSource.PROCESS:l=\"Process Error: \";break a;case J.SidecarErrorSource.MANAGER:l=\"Manager Error: \";break a;default:l=\"Error: \"}l=A.createElement(\"div\",{className:\"mx-3 mt-1 text-sm text-red-500 break-words select-text\"},A.createElement(\"span\",{className:\"font-medium\"},l),a.lastError)}return d.call(A,\n\"div\",{className:\"flex flex-col gap-1 border rounded-xl py-2\"},b,c,k,h,l)};");
+  const originals={origin:f.window.Mmc,error:f.window.Xyc};
+  const adapters=f.install();
+  const path='/project/My  $& File.json',props=Object.freeze({discoveredIn:path,category:1});
+  const origin=f.window.Mmc(props);
+  assert.equal(origin.props.children[1].props.children,'由 '+path+' 引入');
+  assert.equal(props.discoveredIn,path);
+  assert.equal(f.window.Mmc({...props,discoveredIn:'/project/My Folder'}).props.children[1].props.children,'安装在 /project/My Folder');
+  assert.equal(f.window.Mmc({...props,category:0}).props.children[1],undefined);
+  const sidecar=Object.freeze({status:0,lastError:'Process Error',errorSource:1});
+  const output=f.window.Xyc({sidecar}).props.children[4];
+  assert.equal(output.props.children[0].props.children,'进程错误：');
+  assert.equal(output.props.children[1].props.children,'Process Error');
+  assert.equal(output.props.children[1].props['data-ch-keep'],true);
+  assert.equal(sidecar.lastError,'Process Error');
+  adapters.setStrings({'customization-source:included-by':'来自 {path}','Process Error':'进程异常'});
+  assert.equal(f.window.Mmc(props).props.children[1].props.children,'来自 '+path);
+  assert.equal(f.window.Xyc({sidecar}).props.children[4].props.children[0].props.children,'进程异常：');
+  f.uninstall()();
+  assert.equal(f.window.Mmc,originals.origin);assert.equal(f.window.Xyc,originals.error);
+});
+
+
+test('browser screenshot actions and resource expand labels preserve native callbacks and raw text', () => {
+  const f=nativeFixture({strings:{View:'视图','Show more':'显示更多','browser-result:View':'查看','Send command input?':'向命令发送输入？'}});
+  f.evaluate(`var fixtureOpens=[],fixtureSetters=[],fixtureState=0;
+    function bC(){return {stepHandler:{openFile:uri=>fixtureOpens.push(uri)}};}
+    function lA(){}function Z(){}function rSb(){}function nMb(){}
+    var commandInteractions=[],J={CascadeSendCommandInputInteractionSchema:{}},Vb=(_schema,value)=>value;
+    A.useState=value=>{const index=fixtureState++;return [index===1?true:value,next=>fixtureSetters.push(next)];};
+    A.useRef=value=>({current:value});A.useEffect=()=>{};`);
+  // Current native screenshot controls and resource text-card snapshots.
+  f.evaluate("var MMb=({step:a})=>{var {stepHandler:b}=bC(),c=a.mediaScreenshot;return A.createElement(A.Fragment,null,A.createElement(\"div\",{className:\"flex items-center gap-2\"},c?.uri&&A.createElement(lA,{variant:\"ghost\",size:\"xs\",onClick:()=>{b?.openFile(c.uri)},className:\"ml-auto\"},\"View\")))};\nvar QMb=({step:a})=>{var {stepHandler:b}=bC(),c=a.screenshotWithClickFeedback;return A.createElement(A.Fragment,null,A.createElement(\"div\",{className:\"flex items-center gap-2\"},c?.uri&&A.createElement(lA,{variant:\"ghost\",size:\"xs\",onClick:()=>{b?.openFile(c.uri)},className:\"ml-auto\"},\"View\")))};\nvar dSb=({text:a})=>{var [b,c]=(0,A.useState)(!1),d=(0,A.useRef)(null),[f,g]=(0,A.useState)(!1);(0,A.useEffect)(()=>{var h=()=>{d.current&&g(d.current.scrollHeight>d.current.clientHeight)};h();window.addEventListener(\"resize\",h);return()=>{window.removeEventListener(\"resize\",h)}},[a.text]);return A.createElement(A.Fragment,null,A.createElement(\"div\",{className:\"group relative cursor-pointer rounded-md border border-border bg-card\",onClick:()=>{c(!0)}},A.createElement(\"div\",{className:\"absolute inset-0 bg-foreground opacity-10\"}),\nA.createElement(\"div\",{ref:d,className:\"relative max-h-[100px] overflow-hidden\"},A.createElement(\"pre\",{className:\"m-3 whitespace-pre-wrap break-words text-sm\"},a.text),f&&A.createElement(\"div\",{className:\"bg-linear-to-t absolute bottom-0 left-0 right-0 flex h-16 items-end justify-center rounded-md from-card to-transparent pb-3\"},A.createElement(\"div\",{className:\"flex items-center text-xs text-primary transition-colors hover:opacity-90\"},A.createElement(\"span\",{className:\"translate-y-1.5 text-base\"},\n\"Show more\"))))),b&&A.createElement(cSb,{text:a.text,onClose:()=>{c(!1)}}))};\nvar sSb=({cascadeId:a,trajectoryId:b,stepIndex:c,interactionError:d,clearError:f,sendInteraction:g})=>{var h=k=>{g?.(a,b,c,{case:\"sendCommandInput\",value:Vb(J.CascadeSendCommandInputInteractionSchema,{confirm:k})},\"Failed to send command input\")};return A.createElement(\"div\",{className:\"flex flex-col gap-y-2 w-full\"},d?A.createElement(nMb,{message:d,onTryAgain:()=>f?.(),className:\"p-2 border-t border-border\"}):A.createElement(rSb,{promptText:\"Send command input?\",handleUserInteraction:h}))};\nvar eSb=({step:a})=>a.userRejected?A.createElement(\"span\",{className:\"text-secondary-foreground truncate\"},\"Read URL rejected\"):null;");
+  const originals={MMb:f.window.MMb,QMb:f.window.QMb,dSb:f.window.dSb,sSb:f.window.sSb,eSb:f.window.eSb};
+  const adapters=f.install();
+  for(const [name,property] of [['MMb','mediaScreenshot'],['QMb','screenshotWithClickFeedback']]) {
+    const uri='file:///fixture/'+property+'.png';
+    const step=Object.freeze({[property]:Object.freeze({uri})});
+    const button=f.window[name]({step}).props.children.props.children;
+    assert.equal(button.props.children,'查看','contextual action must not use the View menu noun');
+    assert.equal(button.props.variant,'ghost');
+    button.props.onClick();assert.equal(f.window.fixtureOpens.at(-1),uri);
+    assert.equal(step[property].uri,uri);
+    assert.equal(f.window[name]({step:{}}).props.children.props.children,undefined);
+  }
+  const raw='Show more\nOutput\n/home/example/file.txt';
+  const card=f.window.dSb({text:Object.freeze({text:raw})});
+  const body=card.props.children[0],content=body.props.children[1].props.children[0],expand=body.props.children[1].props.children[1];
+  assert.equal(content.props.children,raw);
+  assert.equal(expand.props.children.props.children.props.children,'显示更多');
+  body.props.onClick();assert.equal(f.window.fixtureSetters.at(-1),true);
+  assert.equal(f.window.eSb({step:{userRejected:true}}).props.children,'已拒绝读取网址');
+  assert.equal(f.window.eSb({step:{userRejected:false}}),null);
+  const sendInteraction=(...values)=>f.window.commandInteractions.push(values);
+  const prompt=f.window.sSb({cascadeId:'conversation',trajectoryId:'trajectory',stepIndex:7,sendInteraction}).props.children;
+  assert.equal(prompt.props.promptText,'向命令发送输入？');
+  prompt.props.handleUserInteraction(true);
+  const sent=f.window.commandInteractions[0];
+  assert.equal(sent[0],'conversation');assert.equal(sent[1],'trajectory');assert.equal(sent[2],7);
+  assert.equal(sent[3].value.confirm,true);
+  const error='Send command input?';
+  assert.equal(f.window.sSb({interactionError:error}).props.children.props.message,error,'supplied errors stay raw');
+  adapters.setStrings({'browser-result:View':'查看截图','Show more':'展开'});
+  assert.equal(f.window.MMb({step:{mediaScreenshot:{uri:'file:///fixture/a.png'}}}).props.children.props.children.props.children,'查看截图');
+  f.window.fixtureState=0;
+  const refreshed=f.window.dSb({text:{text:raw}}).props.children[0].props.children[1].props.children[1];
+  assert.equal(refreshed.props.children.props.children.props.children,'展开');
+  f.uninstall()();
+  for(const name of Object.keys(originals))assert.equal(f.window[name],originals[name]);
+});
+
+
+test('cost footer lexical children localize display without changing native headers, model names or amounts', () => {
+  const f=nativeFixture();f.window.eval=source=>f.evaluate(source);
+  f.evaluate(`var costHooks=0,costExpanded=false;
+    A.useState=value=>{costHooks++;return [costExpanded,()=>{}]};A.useMemo=read=>{costHooks++;return read()};A.useId=()=> 'cost-fixture';
+    var rP=()=>null,sP=()=>null,lA=()=>null,iA=()=>null,tP=()=>null;`);
+  // Current cost helper, root and const child components from the application.
+  f.evaluate("var sTb=function sTb(a){return a.replace(/^MODEL_(?:GOOGLE_)?/,\"\").split(\"_\").map(b=>b.charAt(0).toUpperCase()+b.slice(1).toLowerCase()).join(\" \").replace(/(\\d) (\\d)/g,\"$1.$2\")};\nvar E_=function E_(a){a=Number(a);return a>=1E6?`${(a/1E6).toFixed(1)}M`:a>=1E3?`${(a/1E3).toFixed(1)}K`:a.toString()};\nvar tTb=function tTb(a){return a>=1?`$${a.toFixed(2)}`:a>=.01?`$${a.toFixed(3)}`:`$${a.toFixed(4)}`};\nvar F_=function F_(a,b,c=0){return b?{label:a,tokens:E_(b.tokens),cost:`$${b.estimatedCostUsd.toFixed(4)}`,indent:c}:null};\nvar uTb=function uTb(a,b){if(b.estimatedCostUsd===0&&!b.output)return null;var c=[F_(\"Input\",b.input),F_(\"Cache\",b.cacheRead),F_(\"Output\",b.output),F_(\"  Thinking\",b.thinking,1),F_(\"  Response (incl. tool calls)\",b.response,1),b.generationCount>0?{label:\"Generations\",tokens:b.generationCount.toString(),cost:\"\",indent:0}:null].filter(d=>d!==null);return c.length===0?null:{header:`${a}${b.estimatedCostUsd>0?` (${`$${b.estimatedCostUsd.toFixed(4)}`})`:\"\"}`,rows:c}};\nvar G_=function G_(a){var b=BigInt(0),c=0,d=!1;for(let f of a)f&&(d=!0,b+=f.tokens,c+=f.estimatedCostUsd);if(d)return{tokens:b,estimatedCostUsd:c}};\nvar vTb=function vTb(a){a=a.filter(Boolean);if(a.length!==0)return a.length===1?a[0]:{input:G_(a.map(b=>b.input)),cacheRead:G_(a.map(b=>b.cacheRead)),output:G_(a.map(b=>b.output)),thinking:G_(a.map(b=>b.thinking)),response:G_(a.map(b=>b.response)),generationCount:a.reduce((b,c)=>b+c.generationCount,0),estimatedCostUsd:a.reduce((b,c)=>b+c.estimatedCostUsd,0),pricing:a[a.length-1].pricing}};\nvar wTb=function wTb(a){var b;for(let c of a)c&&(!b||c.estimatedCostUsd>b.estimatedCostUsd)&&(b=c);return b};\nconst xTb=({row:a})=>{var [b,c]=(0,A.useState)(!1);return A.createElement(A.Fragment,null,A.createElement(\"span\",{className:`${a.indent?\"pl-2 text-secondary-foreground\":\"\"} cursor-pointer hover:text-foreground transition-colors select-none flex items-center`,onClick:()=>c(d=>!d)},A.createElement(\"svg\",{className:`h-2.5 w-2.5 shrink-0 -ml-3 mr-0.5 transition-transform duration-150 ${b?\"rotate-90\":\"\"}`,viewBox:\"0 0 20 20\",fill:\"currentColor\"},A.createElement(\"path\",{fillRule:\"evenodd\",d:\"M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z\",\nclipRule:\"evenodd\"})),a.label,\":\"),A.createElement(\"span\",{className:`text-right tabular-nums ${a.indent?\"text-secondary-foreground\":\"\"}`},a.tokens),A.createElement(\"span\",{className:`text-right tabular-nums ${a.indent?\"text-placeholder\":\"text-muted-foreground\"}`},a.cost),b&&a.subRows.map((d,f)=>A.createElement(A.Fragment,{key:f},A.createElement(\"span\",{className:\"pl-6 text-secondary-foreground\"},d.label,\":\"),A.createElement(\"span\",{className:\"text-right tabular-nums text-secondary-foreground\"},d.tokens),\nA.createElement(\"span\",{className:\"text-right tabular-nums text-muted-foreground\"},d.cost))))};\nconst yTb=({pricing:a,hideModelName:b=!1})=>{var c=a.isEstimated?\"~\":\"\";return A.createElement(\"span\",{className:\"relative group/cost-tooltip cursor-help\"},A.createElement(\"svg\",{className:\"h-3 w-3 text-muted-foreground group-hover/cost-tooltip:text-secondary-foreground transition-colors\",viewBox:\"0 0 20 20\",fill:\"currentColor\"},A.createElement(\"path\",{fillRule:\"evenodd\",d:\"M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a.75.75 0 000 1.5h.253a.25.25 0 01.244.304l-.459 2.066A1.75 1.75 0 0010.747 15H11a.75.75 0 000-1.5h-.253a.25.25 0 01-.244-.304l.459-2.066A1.75 1.75 0 009.253 9H9z\",\nclipRule:\"evenodd\"})),A.createElement(\"div\",{className:\"absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover/cost-tooltip:block bg-[var(--card,#2d2d2d)] text-[var(--foreground,#cccccc)] border border-[var(--border,#454545)] rounded px-2 py-1.5 whitespace-nowrap text-[10px] z-50 shadow-lg\"},!b&&A.createElement(\"span\",{className:\"font-medium block mb-0.5\"},sTb(a.modelName),a.isEstimated&&A.createElement(\"span\",{className:\"font-normal opacity-70\"},\" \\u00b7 estimated\")),A.createElement(\"div\",\n{className:\"grid gap-x-2\",style:{gridTemplateColumns:\"auto auto auto\"}},A.createElement(\"span\",null,\"Input:\"),A.createElement(\"span\",{className:\"text-right tabular-nums\"},c,\"$\",a.inputPricePerMillionTokens.toFixed(2)),A.createElement(\"span\",null,\"/ 1M tokens\"),A.createElement(\"span\",null,\"Output:\"),A.createElement(\"span\",{className:\"text-right tabular-nums\"},c,\"$\",a.outputPricePerMillionTokens.toFixed(2)),A.createElement(\"span\",null,\"/ 1M tokens\"),A.createElement(\"span\",null,\"Cache:\"),A.createElement(\"span\",\n{className:\"text-right tabular-nums\"},c,\"$\",a.cacheReadPricePerMillionTokens.toFixed(2)),A.createElement(\"span\",null,\"/ 1M tokens\")),a.isEstimated&&A.createElement(\"span\",{className:\"block mt-1 opacity-70\"},\"No rate card for this model; showing comparable rates.\")))};\nconst zTb=({sections:a,pricing:b,hideModelName:c=!1})=>A.createElement(\"div\",{className:\"flex flex-col gap-1.5 font-mono text-[11px]\"},a.map((d,f)=>A.createElement(\"div\",{key:f,className:\"flex flex-col gap-0.5\"},A.createElement(\"span\",{className:\"font-semibold flex items-center gap-1\"},\nd.header,d.header.startsWith(\"Subagent\")&&A.createElement(\"span\",{className:\"relative group/cost-tooltip cursor-help\"},A.createElement(\"svg\",{className:\"h-2.5 w-2.5 text-muted-foreground group-hover/cost-tooltip:text-secondary-foreground transition-colors\",viewBox:\"0 0 20 20\",fill:\"currentColor\"},A.createElement(\"path\",{fillRule:\"evenodd\",d:\"M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a.75.75 0 000 1.5h.253a.25.25 0 01.244.304l-.459 2.066A1.75 1.75 0 0010.747 15H11a.75.75 0 000-1.5h-.253a.25.25 0 01-.244-.304l.459-2.066A1.75 1.75 0 009.253 9H9z\",\nclipRule:\"evenodd\"})),A.createElement(\"div\",{className:\"absolute left-full top-1/2 -translate-y-1/2 ml-1 hidden group-hover/cost-tooltip:flex flex-col gap-0.5 bg-[var(--card,#2d2d2d)] text-[var(--foreground,#cccccc)] border border-[var(--border,#454545)] rounded px-2 py-1.5 whitespace-nowrap text-[10px] font-normal z-50 shadow-lg\"},A.createElement(\"span\",null,\"\\u2022 Aggregate cost across all subagents\"),A.createElement(\"span\",null,\"\\u2022 Includes nested subagent costs\"))),d.header.includes(\"Total\")&&\nA.createElement(\"span\",{className:\"relative group/cost-tooltip cursor-help\"},A.createElement(\"svg\",{className:\"h-2.5 w-2.5 text-muted-foreground group-hover/cost-tooltip:text-secondary-foreground transition-colors\",viewBox:\"0 0 20 20\",fill:\"currentColor\"},A.createElement(\"path\",{fillRule:\"evenodd\",d:\"M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a.75.75 0 000 1.5h.253a.25.25 0 01.244.304l-.459 2.066A1.75 1.75 0 0010.747 15H11a.75.75 0 000-1.5h-.253a.25.25 0 01-.244-.304l.459-2.066A1.75 1.75 0 009.253 9H9z\",\nclipRule:\"evenodd\"})),A.createElement(\"div\",{className:\"absolute left-full top-1/2 -translate-y-1/2 ml-1 hidden group-hover/cost-tooltip:block bg-[var(--card,#2d2d2d)] text-[var(--foreground,#cccccc)] border border-[var(--border,#454545)] rounded px-2 py-1.5 whitespace-nowrap text-[10px] font-normal z-50 shadow-lg\"},A.createElement(\"span\",null,\"cumulative total for the conversation up to this point\")))),A.createElement(\"div\",{className:\"grid gap-x-3 pl-2 text-secondary-foreground\",style:{gridTemplateColumns:\"auto auto auto\"}},\nd.rows.map((g,h)=>g.subRows&&g.subRows.length>0?A.createElement(xTb,{key:h,row:g}):A.createElement(A.Fragment,{key:h},A.createElement(\"span\",{className:g.indent?\"pl-2 text-secondary-foreground\":\"\"},g.label,\":\"),A.createElement(\"span\",{className:`text-right tabular-nums ${g.indent?\"text-secondary-foreground\":\"\"}`},g.tokens),A.createElement(\"span\",{className:`text-right tabular-nums ${g.indent?\"text-placeholder\":\"text-muted-foreground\"}`},g.cost)))))),A.createElement(\"div\",{className:\"text-[10px] mt-1.5 flex items-center gap-1 text-muted-foreground\"},\nA.createElement(\"span\",null,\"Pricing is based on public API pricing\"),b&&A.createElement(yTb,{pricing:b,hideModelName:c})));\nvar ATb=({costSummary:a,executionIds:b,isLastTurn:c=!1,hideModelName:d=!1})=>{var [f,g]=(0,A.useState)(!1),h=A.useId(),k=(0,A.useMemo)(()=>{var y=[];for(let z of b){let C=a.turnCosts[z];C&&y.push(C)}return y},[b,a.turnCosts]),l=(0,A.useMemo)(()=>vTb(k.map(y=>y.turn)),[k]),m=(0,A.useMemo)(()=>c?a.total?.subagent:void 0,[c,a.total]),n=(0,A.useMemo)(()=>c?a.total?.cumulativeTotal:wTb(k.map(y=>y.cumulativeTotal)),[c,k,a.total]),q=Number(l?.input?.tokens??BigInt(0)),r=Number(l?.output?.tokens??BigInt(0)),\nt=l?.estimatedCostUsd??0,u=Number(n?.input?.tokens??BigInt(0)),v=Number(n?.output?.tokens??BigInt(0)),w=n?.estimatedCostUsd??0;if(t===0&&r===0)return null;var x=[];if(q>0||r>0)q=`Turn: ${E_(BigInt(q))}/${E_(BigInt(r))}`,x.push(t>0?`${q} ${tTb(t)}`:q);if(u>0||v>0)t=`Tot: ${E_(BigInt(u))}/${E_(BigInt(v))}`,x.push(w>0?`${t} ${tTb(w)}`:t);w=[];l&&(t=uTb(\"Turn\",l))&&w.push(t);m&&m.estimatedCostUsd>0&&(m=uTb(\"Subagent\",m))&&w.push(m);n&&(n=uTb(c?\"Grand Total\":\"Cumulative Total\",n))&&w.push(n);n=x.join(\" \\u00b7 \");\nreturn A.createElement(rP,{placement:\"top-end\",open:f,onOpenChange:g},A.createElement(sP,{asChild:!0},A.createElement(lA,{variant:\"ghost\",size:\"icon\",\"aria-label\":`Cost summary: ${n}`,\"data-tooltip-id\":h,className:\"text-secondary-foreground hover:text-foreground\"},A.createElement(\"svg\",{className:\"h-4 w-4 shrink-0\",viewBox:\"0 0 24 24\",fill:\"none\",stroke:\"currentColor\",strokeWidth:\"1.8\",strokeLinecap:\"round\",strokeLinejoin:\"round\"},A.createElement(\"circle\",{cx:\"12\",cy:\"12\",r:\"10\"}),A.createElement(\"path\",\n{d:\"M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8\"}),A.createElement(\"path\",{d:\"M12 18V6\"})))),!f&&A.createElement(iA,{id:h,place:\"top-end\"},A.createElement(\"div\",{className:\"flex flex-col gap-0.5\"},x.map((y,z)=>A.createElement(\"span\",{key:z,className:\"whitespace-nowrap tabular-nums\"},y)),A.createElement(\"span\",{className:\"opacity-60\"},\"Click to view more\"))),A.createElement(tP,{placement:\"top-end\",className:\"p-3\",style:{width:\"max-content\",maxWidth:\"min(90vw, 26rem)\"}},A.createElement(\"div\",{className:\"flex flex-col gap-2\"},\nA.createElement(\"div\",{className:\"flex flex-wrap items-center gap-x-1 text-xs text-muted-foreground\"},x.map((y,z)=>A.createElement(\"span\",{key:z,className:\"whitespace-nowrap\"},z>0?\"\\u00b7 \":\"\",y))),A.createElement(zTb,{sections:w,pricing:l?.pricing,hideModelName:d}))))};");
+  const text=(value,out=[])=>{if(typeof value==='string'||typeof value==='number')out.push(String(value));else if(Array.isArray(value))value.forEach(v=>text(v,out));else if(value?.props)text(value.props.children,out);return out;};
+  const elements=(value,out=[])=>{if(Array.isArray(value))value.forEach(v=>elements(v,out));else if(value?.props){out.push(value);elements(value.props.children,out)}return out;};
+  const amount=Object.freeze({tokens:2000n,estimatedCostUsd:.01}),pricing=Object.freeze({modelName:'MODEL_INPUT',isEstimated:true,inputPricePerMillionTokens:2.5,outputPricePerMillionTokens:3.5,cacheReadPricePerMillionTokens:.25});
+  const metrics=Object.freeze({input:amount,cacheRead:amount,output:amount,thinking:amount,response:amount,generationCount:1,estimatedCostUsd:.1234,pricing});
+  const props=Object.freeze({costSummary:Object.freeze({turnCosts:Object.freeze({native:Object.freeze({turn:metrics,cumulativeTotal:metrics})})}),executionIds:Object.freeze(['native'])});
+  const nativeRoot=f.window.ATb,nativePanel=f.evaluate('zTb'),nativeRates=f.evaluate('yTb');
+  const raw=nativeRoot(props),rawHooks=f.window.costHooks;f.window.costHooks=0;
+  const installed=f.install(),root=f.window.ATb(props);
+  assert.equal(f.window.costHooks,rawHooks,'the root Hook sequence runs once');
+  const oldSummaries=text(raw).filter(v=>/^(Turn|Tot): /.test(v)),newSummaries=text(root).filter(v=>/^(本次|累计)：/.test(v));
+  assert.equal(oldSummaries.length,newSummaries.length);
+  oldSummaries.forEach((value,index)=>assert.equal(newSummaries[index].replace(/^(本次|累计)：/,''),value.replace(/^(Turn|Tot): /,'')));
+  const panel=elements(root).find(node=>node.props.sections&&node.props.pricing);
+  assert.ok(panel);assert.notEqual(panel.type,nativePanel);assert.equal(panel.props.pricing,pricing);
+  const again=elements(f.window.ATb(props)).find(node=>node.props.sections&&node.props.pricing);
+  assert.equal(again.type,panel.type,'const child proxy identity stays stable');
+  const originalHeader=panel.props.sections[0].header,rendered=panel.type(panel.props);
+  assert.equal(originalHeader,'Turn ($0.1234)');assert.equal(panel.props.sections[0].header,originalHeader);
+  assert.ok(text(rendered).includes('本次 ($0.1234)'));assert.ok(text(rendered).includes('输入'));
+  assert.ok(text(rendered).includes('截至此处累计 ($0.1234)'));
+  assert.ok(text(rendered).includes('此对话截至当前的累计用量与费用'),'native Total tooltip condition still runs on the original English header');
+  const rates=elements(rendered).find(node=>node.props.pricing===pricing),rateCard=rates.type(rates.props);
+  assert.notEqual(rates.type,nativeRates);assert.ok(text(rateCard).includes('输入：'));assert.ok(text(rateCard).includes('2.50'));
+  const model=elements(rateCard).find(node=>node.props.className==='font-medium block mb-0.5');
+  assert.equal(model.props.children[0],'Input','an actual model display name is not reinterpreted as an input label');
+  assert.equal(model.props['data-ch-keep'],true);assert.equal(pricing.modelName,'MODEL_INPUT');
+  const header=Object.freeze({header:'Subagent ($0.1234)',rows:Object.freeze([])}),subPanel=panel.type({sections:[header],pricing});
+  assert.ok(text(subPanel).includes('子智能体 ($0.1234)'));assert.ok(text(subPanel).includes('• 包含嵌套子智能体的费用'));
+  const row=Object.freeze({label:'Input',tokens:'2K',cost:'$0.1234',subRows:Object.freeze([Object.freeze({label:'Output',tokens:'4K',cost:'$0.5678'})])});
+  const nestedPanel=panel.type({sections:[{header:'Turn',rows:[row]}],pricing}),nested=elements(nestedPanel).find(node=>node.props.row===row);
+  assert.ok(nested);f.window.costExpanded=true;f.window.costHooks=0;const nestedView=nested.type(nested.props);
+  assert.equal(f.window.costHooks,1);assert.ok(text(nestedView).includes('输入'));assert.ok(text(nestedView).includes('输出'));
+  assert.ok(text(nestedView).includes('$0.5678'));assert.equal(row.label,'Input');assert.equal(row.subRows[0].label,'Output');f.window.costExpanded=false;
+  installed.setStrings({'cost-summary:turn':'此消息：','Input:':'输入单价：'});
+  assert.ok(text(f.window.ATb(props)).some(v=>v.startsWith('此消息：')));
+  assert.ok(text(rates.type(rates.props)).includes('输入单价：'));
+  f.uninstall()();assert.equal(f.window.ATb,nativeRoot);assert.equal(elements(f.window.ATb(props)).find(node=>node.props.sections&&node.props.pricing).type,nativePanel);
+  assert.ok(text(panel.type(panel.props)).includes(originalHeader),'cached lexical proxies delegate to their original holder after uninstall');
+});
+
+
+test('MCP pane const bridge and PDF failures preserve refs, callbacks, supplied titles and errors', () => {
+  const f=nativeFixture();f.window.eval=source=>f.evaluate(source);
+  f.evaluate(`var paneState={status:'error',message:'Could not load '},paneHooks=0,paneLaunches=0;
+    var lB=()=>({launchMcpApp(){paneLaunches++;throw Error('launch stays deferred')}}),ko=(a,b)=>a+':'+b,qZ=()=>null,NRb=()=>null;
+    A.useState=initial=>{paneHooks++;return [paneState,()=>{}]};A.useMemo=read=>{paneHooks++;return read()};A.useRef=value=>{paneHooks++;return {current:value}};A.useEffect=()=>{paneHooks++};
+    var pdfFallback=({pendingAnnotations:a,error:b})=>A.createElement('div',{className:'p-4 text-error'},'Unable to load PDF: ',b);`);
+  // Current native pane const and writable gate. No launch effect is executed.
+  f.evaluate("const e$b=({view:a,cascadeId:b,onLaunched:c,supportsModelContext:d=!0})=>{var {launchMcpApp:f}=lB(),[g,h]=(0,A.useState)({status:\"loading\"}),k=a.serverName,l=a.toolName,m=a.invocation!==void 0,n=(0,A.useMemo)(()=>d?{sourceKey:ko(k,l),serverName:k,toolName:l}:void 0,[k,l,d]),q=(0,A.useRef)(c);(0,A.useEffect)(()=>{q.current=c});(0,A.useEffect)(()=>{if(!m&&f){var u=!1;h({status:\"loading\"});f(k,l,\"{}\",b).then(({callToolResultJson:v})=>{u||(h({status:\"ready\",callToolResultJson:v}),q.current?.({argumentsJson:\"{}\",\ncallToolResultJson:v}))},v=>{u||h({status:\"error\",message:v instanceof Error?v.message:String(v)})});return()=>{u=!0}}},[m,f,k,l,b]);if(a.invocation){var r=a.invocation.argumentsJson;var t=a.invocation.callToolResultJson}else if(f){if(g.status===\"loading\")return A.createElement(\"div\",{className:\"p-4 text-sm text-muted-foreground\",role:\"status\",\"aria-busy\":!0,\"data-testid\":\"mcp-app-pane-loading\"},A.createElement(qZ,null,\"Loading \",a.title));if(g.status===\"error\")return A.createElement(\"div\",{className:\"p-4 text-sm text-secondary-foreground\",\n\"data-testid\":\"mcp-app-pane-error\"},\"Could not load \",a.title,\": \",g.message);r=\"{}\";t=g.callToolResultJson}else return null;return A.createElement(NRb,{serverName:k,resourceUri:a.resourceUri,argumentsJson:r,callToolResultJson:t,title:a.title,placement:\"pane\",cascadeId:b,modelContext:n})};\nvar r3=({view:a,cascadeId:b,onLaunched:c,supportsModelContext:d})=>A.createElement(e$b,{key:`${a.serverName}\\u0000${a.toolName}`,view:a,cascadeId:b,onLaunched:c,supportsModelContext:d});");
+  const nativeGate=f.window.r3,nativeView=f.evaluate('e$b'),nativePdf=f.window.pdfFallback;
+  const ref={current:null},callback=()=>{},view=Object.freeze({serverName:'server',toolName:'tool',title:'Could not load ',resourceUri:'ui://pane/native'});
+  const props=Object.freeze({view,cascadeId:'native-conversation',onLaunched:callback,supportsModelContext:false});
+  const rawElement=nativeGate(props),rawView=nativeView(rawElement.props),nativeHooks=f.window.paneHooks;f.window.paneHooks=0;
+  f.install();const element=f.window.r3(props),again=f.window.r3(props);
+  assert.notEqual(element.type,nativeView);assert.equal(element.type,again.type);assert.equal(element.key,rawElement.key);assert.equal(element.props.view,view);assert.equal(element.props.onLaunched,callback);
+  const result=element.type({...element.props,ref});assert.equal(f.window.paneHooks,nativeHooks);assert.equal(result.props.children[0],'无法加载 ');assert.equal(result.props.children[1],view.title);assert.equal(result.props.children[3],rawView.props.children[3]);assert.equal(result.props['data-ch-keep'],true);
+  const pdfError='Unable to load PDF: ',pdf=f.window.pdfFallback({pendingAnnotations:[],error:pdfError});
+  assert.equal(pdf.props.children[0],'无法加载 PDF：');assert.equal(pdf.props.children[1],pdfError);assert.equal(pdf.props['data-ch-keep'],true);
+  f.window.paneState={status:'loading'};const loading=element.type(element.props);assert.equal(loading.props['data-ch-keep'],true);assert.equal(loading.props.children.props.children[0],'正在加载 ');assert.equal(loading.props.children.props.children[1],view.title);
+  assert.equal(f.window.paneLaunches,0);assert.equal(view.title,'Could not load ');
+  f.uninstall()();assert.equal(f.window.r3,nativeGate);assert.equal(f.window.pdfFallback,nativePdf);assert.equal(f.window.r3(props).type,nativeView);
+  f.window.paneState={status:'error',message:'Could not load '};assert.equal(element.type(element.props).props.children[0],'Could not load ');assert.equal(f.window.paneLaunches,0);
+});
+
+
+test('native forwardRef model display keeps raw aria labels, model values, refs and Hook order', () => {
+  const f=nativeFixture();
+  f.evaluate(`var hookCalls=0;
+    A.forwardRef=render=>({$$typeof:Symbol.for('react.forward_ref'),render});
+    A.useMemo=callback=>{hookCalls++;return callback()};A.useId=()=>{hookCalls++;return 'fixture'};
+    var nativeModelState={effortIndex:new Map()},B6=()=>nativeModelState,bC=()=>({});
+    var yF=()=>null,LY=()=>null,Z=()=>null,iA=()=>null;
+    var Hi=(...values)=>values.filter(Boolean).join(' ');
+    var Oib=(model,name)=>name!==undefined?model?.contextWindowOptions?.find(value=>value.name===name):undefined;
+    var Djc=(model,index)=>index.get(model.value)??{name:model.label};
+    var z6={low:'Low',medium:'Medium',high:'High',xhigh:'Extra',max:'Max'};`);
+  // Current native ModelSelectorButton render, before display adaptation.
+  f.evaluate('var Trigger=A.forwardRef('+"({chevronUp:a,className:b,...c},d)=>{var {selectedModel:f,bestOfNConfig:g,effortIndex:h,contextWindow:k}=B6(),{stepHandler:l,isGoogleInternal:m=!1}=bC(),n=yF(\"toggleModelSelector\"),q=(0,A.useId)(),r=(0,A.useId)(),t=(0,A.useId)(),u=(0,A.useId)(),v=LY(f,l?.useAICredits??!1,l?.availableCredits,l?.minimumCreditAmountForUsage,m),w=f?.quotaInfo!=void 0&&f.quotaInfo.remainingFraction>0&&f.quotaInfo.remainingFraction<.2,{label:x,tooltipContent:y,effortLabel:z}=(0,A.useMemo)(()=>{var G=\nf?.label??\"No Model Selected\",H=\"\",I=\"\",K=g?.selectedBestOfNModels??[];(g?.isBestOfNEnabled??!1)&&K.length>0?K.length>=3?(G=`${K.length} models selected`,H=K.map(L=>L.label).join(\", \")):H=G=K.map(L=>L.label).join(\", \"):f&&(K=Djc(f,h),G=K.name,K.effort&&(I=z6[K.effort]));return{label:G,tooltipContent:H,effortLabel:I}},[f,g,h]),C=k?.selected,D=z?Oib(f,C):void 0,E=D?.description,F=D?` \\u00b7 ${D.name}`:\"\";return A.createElement(\"button\",{ref:d,type:\"button\",\"data-testid\":\"model-selector-trigger\",\"data-context-window\":C,\n\"data-tooltip-id\":r,\"aria-label\":`Select model, current: ${x}${z?` ${z}`:\"\"}${F}`,className:Hi(\"flex cursor-pointer items-center h-7 gap-1 rounded-full pl-2 [&:has(>[data-icon]:first-child)]:pl-1.5 [&:has(>svg:first-child)]:pl-1.5 [&:has(>.google-symbols:first-child)]:pl-1.5 pr-1 text-xs text-secondary-foreground select-none outline-none hover:bg-secondary transition-colors\",\"min-w-0 max-w-full\",b),...c,onMouseDown:G=>{G.preventDefault();c.onMouseDown?.(G)}},A.createElement(\"span\",{\"data-tooltip-id\":y?\nt:void 0,className:\"min-w-0 overflow-hidden text-ellipsis whitespace-nowrap\"},x,z&&A.createElement(\"span\",{className:\"opacity-70\"},\" \",z+F)),y&&A.createElement(iA,{id:t,place:\"top\"},y),D?.expensive&&A.createElement(A.Fragment,null,A.createElement(\"div\",{\"data-tooltip-id\":E?u:void 0,className:\"flex shrink-0 pt-px items-center\"},A.createElement(Z,{name:\"warning\",size:14,className:\"shrink-0 text-warning\"})),E&&A.createElement(iA,{id:u,place:\"top\",className:\"max-w-[240px] whitespace-normal\"},E)),(v||\nw)&&A.createElement(A.Fragment,null,A.createElement(\"div\",{\"data-tooltip-id\":q,className:\"flex shrink-0 pt-px items-center\"},A.createElement(Z,{name:v?\"speed_2\":\"speed\",size:14,className:`shrink-0 ${v?\"text-red-500\":\"text-yellow-500\"}`})),A.createElement(iA,{id:q,place:\"top\",className:\"max-w-[240px] whitespace-normal\"},v||\"Your quota for this model is running low.\")),A.createElement(Z,{name:a?\"keyboard_arrow_up\":\"keyboard_arrow_down\",size:14,className:\"shrink-0\"}),A.createElement(iA,{id:r,place:\"top\"},\nA.createElement(\"div\",{className:\"text-xs\"},A.createElement(\"span\",null,\"Select Model\"),n&&A.createElement(\"span\",{className:\"ml-1 opacity-50\"},n))))}"+');');
+  const received=[],trigger=f.window.Trigger,original=trigger.render,ref={current:null},onMouseDown=event=>received.push(event);
+  const model=Object.freeze({label:'GPT-OSS 120B (Medium)',value:120});
+  f.window.nativeModelState.selectedModel=model;
+  const native=original({className:'fixture-class',onMouseDown},ref);
+  const adapters=f.install();
+  assert.equal(f.window.Trigger,trigger,'forwardRef object identity stays native');
+  assert.notEqual(trigger.render,original);
+  function label(value) {
+    const collect=(node,out=[])=>{
+      if(typeof node==='string'||typeof node==='number')out.push(String(node));
+      else if(Array.isArray(node))node.forEach(child=>collect(child,out));
+      else if(node?.props)collect(node.props.children,out);
+      return out;
+    };
+    return collect(value.props.children[0]).join('');
+  }
+  const render=()=>{
+    const before=f.window.hookCalls;
+    const value=trigger.render({className:'fixture-class',onMouseDown},ref);
+    assert.equal(f.window.hookCalls,before+5,'native render runs once with its original Hooks');
+    assert.equal(value.props.ref,ref);
+    assert.equal(value.props['data-testid'],'model-selector-trigger');
+    assert.ok(value.props.className.endsWith('fixture-class'));
+    return value;
+  };
+  let value=render();
+  assert.equal(label(value),'GPT-OSS 120B（中）');
+  assert.equal(value.props['aria-label'],native.props['aria-label']);
+  assert.equal(value.props['aria-label'],'Select model, current: GPT-OSS 120B (Medium)');
+  assert.equal(model.label,'GPT-OSS 120B (Medium)');
+  let prevented=0;const event=Object.freeze({preventDefault(){prevented++;}});
+  value.props.onMouseDown(event);assert.equal(prevented,1);assert.equal(received[0],event);
+  const custom=Object.freeze({...model,isCustom:true});
+  f.window.nativeModelState.selectedModel=custom;
+  value=render();assert.equal(label(value),custom.label);
+  assert.equal(value.props['aria-label'],'Select model, current: '+custom.label);
+  const grouped=Object.freeze({label:'Fixture Model (High)',value:121,contextWindowOptions:Object.freeze([{name:'1M'},{name:'Default'}])});
+  f.window.nativeModelState.selectedModel=grouped;
+  f.window.nativeModelState.effortIndex.set(grouped.value,{name:'Fixture Model',effort:'high'});
+  f.window.nativeModelState.contextWindow={selected:'1M'};
+  value=render();assert.equal(label(value),'Fixture Model 高 · 1M');
+  assert.equal(value.props['aria-label'],'Select model, current: Fixture Model High · 1M');
+  assert.equal(value.props['data-context-window'],'1M');
+  f.window.nativeModelState.contextWindow={selected:'Default'};
+  value=render();assert.equal(label(value),'Fixture Model 高 · 默认');
+  assert.equal(value.props['aria-label'],'Select model, current: Fixture Model High · Default');
+  assert.equal(value.props['data-context-window'],'Default');
+  adapters.setStrings({High:'较高',Default:'默认值'});
+  value=render();assert.equal(label(value),'Fixture Model 较高 · 默认值');
+  assert.equal(value.props['aria-label'],'Select model, current: Fixture Model High · Default');
+  assert.equal(f.window.nativeModelState.selectedModel,grouped);
+  adapters.setStrings({});
+  const customHigh=Object.freeze({label:'Custom Model (High)',value:122,isCustom:true});
+  const selected=Object.freeze([model,customHigh]);
+  const bestOfN=Object.freeze({isBestOfNEnabled:true,selectedBestOfNModels:selected});
+  f.window.nativeModelState.bestOfNConfig=bestOfN;
+  value=render();
+  assert.equal(label(value),'GPT-OSS 120B（中）, Custom Model (High)');
+  assert.equal(value.props.children[1].props.children,'GPT-OSS 120B（中）, Custom Model (High)','only the native selected-model tooltip is projected');
+  assert.equal(value.props['aria-label'],'Select model, current: GPT-OSS 120B (Medium), Custom Model (High)');
+  assert.equal(f.window.nativeModelState.bestOfNConfig,bestOfN);assert.equal(bestOfN.selectedBestOfNModels,selected);
+  assert.equal(selected[0],model);assert.equal(selected[1],customHigh);
+  f.window.nativeModelState.bestOfNConfig=undefined;
+  f.uninstall()();assert.equal(f.window.Trigger,trigger);assert.equal(trigger.render,original);
+  assert.equal(label(original({className:'fixture-class'},ref)),'Fixture Model High · Default');
+});
+
+
+test('native find-bar count keeps index, cap and input state while rendering the matched count', () => {
+  const f=nativeFixture();
+  f.evaluate(`var findHooks=0,findState={currentMatchIndex:0,totalMatches:0};
+    var K1=()=>findState;A.useMemo=callback=>{findHooks++;return callback()};`);
+  // Current native match-count owner; the state remains owned by K1.
+  f.evaluate('var findCount='+"()=>{var {currentMatchIndex:a,totalMatches:b,maxMatches:c}=K1(),d=(0,A.useMemo)(()=>b===0?\"No Results\":`${a+1} of ${c!==void 0&&b>=c?`${c}+`:`${b}`}`,[b,a,c]);return A.createElement(\"span\",{\"data-testid\":\"find-bar-match-count\",className:\"text-xs text-foreground opacity-70 px-0.5 min-w-[4.5rem] text-center\"},d)}"+';');
+  const original=f.window.findCount,adapters=f.install();
+  const render=()=>{const before=f.window.findHooks,result=f.window.findCount();assert.equal(f.window.findHooks,before+1);return result;};
+  assert.equal(render().props.children,'未找到结果');
+  const normal=Object.freeze({currentMatchIndex:3,totalMatches:5});f.window.findState=normal;
+  const row=render();assert.equal(row.props.children,'4 / 5');
+  assert.equal(row.props['data-testid'],'find-bar-match-count');
+  assert.equal(f.window.findState,normal);
+  const capped=Object.freeze({currentMatchIndex:99,totalMatches:100,maxMatches:100});f.window.findState=capped;
+  assert.equal(render().props.children,'100 / 100+');assert.equal(f.window.findState,capped);
+  adapters.setStrings({'No Results':'没有匹配项'});f.window.findState={currentMatchIndex:0,totalMatches:0};
+  assert.equal(render().props.children,'没有匹配项');
+  f.uninstall()();assert.equal(f.window.findCount,original);assert.equal(original().props.children,'No Results');
+});
+
+
+test('native diff source localizes fixed kinds while supplied commit details stay verbatim', () => {
+  const f=fixture();f.evaluate("function Pn(a){switch(a.kind){case \"singleEdit\":return\"single edit\";case \"agentEdits\":return\"all agent edits\";case \"uncommitted\":return\"uncommitted\";case \"staged\":return\"staged\";case \"branch\":return\"branch changes\";case \"commit\":return a.detail??\"commit\"}}");
+  const original=f.window.Pn,adapters=f.install();
+  for(const [kind,expected] of Object.entries({singleEdit:'单次改动',agentEdits:'智能体全部改动',uncommitted:'未提交改动',staged:'已暂存改动',branch:'分支改动',commit:'提交'})){
+    const input=Object.freeze({kind});assert.equal(f.window.Pn(input),expected);
+    assert.equal(Object.keys(input).length,1);
+  }
+  for(const detail of ['commit','staged','branch changes','My  commit title','',42]){
+    const input=Object.freeze({kind:'commit',detail});assert.equal(f.window.Pn(input),detail);assert.equal(input.detail,detail);
+  }
+  assert.equal(f.window.Pn({kind:'commit',detail:null}),'提交');
+  assert.equal(f.window.Pn({kind:'unknown',detail:'staged'}),undefined);
+  adapters.setStrings({'diff-source:branch':'分支修改'});assert.equal(f.window.Pn({kind:'branch'}),'分支修改');
+  f.uninstall()();assert.equal(f.window.Pn,original);assert.equal(original({kind:'branch'}),'branch changes');
+});
+
+
+test('native Git modal localizes its supplied summary while retaining message, branch, and resolution data', () => {
+  const f=nativeFixture();
+  f.evaluate(`var fixtureDraft='Commit';
+    A.useState=value=>[typeof value==='string'?fixtureDraft:value,()=>{}];
+    A.useEffect=()=>{};A.useRef=value=>({current:value});
+    var IE=()=>null,lA=()=>null,rA=()=>null,Z=()=>null;`);
+  // Native gub and the Git drop-in body from the current application bundle.
+  f.evaluate("var gub=({open:a,onResolve:b,onDismiss:c,title:d=\"Commit\",placeholder:f=\"Describe your changes, or leave empty to auto-generate\",submitLabel:g=\"Commit\",body:h})=>{var [k,l]=(0,A.useState)(\"\"),m=(0,A.useRef)(null);(0,A.useEffect)(()=>{if(a){let n=setTimeout(()=>{document.hasFocus()&&m.current?.focus()},50);return()=>{clearTimeout(n)}}},[a]);return A.createElement(IE,{isOpen:a,onClose:c,title:d},A.createElement(\"div\",{className:\"flex flex-col gap-3 w-full sm:min-w-[360px] p-0.5\"},h,A.createElement(\"textarea\",\n{ref:m,className:\"w-full min-h-[100px] p-2 rounded-lg border border-border bg-background text-sm resize-y focus:outline-none focus:ring-2 focus:ring-inset focus:ring-ring\",value:k,onChange:n=>l(n.target.value),placeholder:f,onKeyDown:n=>{n.key!==\"Enter\"||n.shiftKey||(n.preventDefault(),b(k))}}),A.createElement(\"div\",{className:\"flex justify-end gap-2\"},A.createElement(lA,{size:\"md\",variant:\"secondary\",type:\"button\",onClick:c},\"Cancel\"),A.createElement(lA,{size:\"md\",variant:\"primary\",className:\"flex flex-row items-center gap-2\",\nonClick:()=>b(k)},g,A.createElement(\"span\",{className:\"opacity-60 text-xs\"},\"\\u21b5\")))))};var fixtureGitBody=a=>{var b=a.context.workspaceState?.workingDirectoryChanges??[],c=a.context.workspaceState?.stagedChanges??[],d=a.context.workspaceState?.currentRef,f=b.length>0,[g,h]=(0,A.useState)(!(c.length>0)&&f);c=g?(new Set([...c.map(k=>k.uri),\n...b.map(k=>k.uri)])).size:c.length;d=A.createElement(\"div\",{className:\"flex flex-col gap-2\"},A.createElement(\"div\",{className:\"flex items-center gap-0.5 text-sm\"},A.createElement(\"span\",null,\"Commit \",c,\" file\",\" \",c===1?\"change\":\"changes\",\" to\"),d&&A.createElement(\"span\",{className:\"inline-flex items-center \"},A.createElement(Z,{name:\"call_split\",size:16}),A.createElement(\"span\",null,d))),f&&A.createElement(\"div\",{className:\"pt-0.5\"},A.createElement(rA,{checked:g,onChange:h,label:\"Include unstaged changes\"})));\nreturn A.createElement(gub,{...a,onResolve:k=>{var l=b.map(m=>m.uri);a.onResolve(JSON.stringify({message:k,includeUnstaged:g,unstagedUris:l}))},body:d})};");
+  const original=f.window.gub,adapters=f.install();
+  for(const [staged,working,expectedCount,includeUnstaged] of [[['a'],['b'],1,false],[[],['a','b'],2,true]]) {
+    const uris=working.map(name=>Object.freeze({uri:'file:///work/'+name}));
+    const state=Object.freeze({stagedChanges:Object.freeze(staged.map(name=>Object.freeze({uri:'file:///work/'+name}))),
+      workingDirectoryChanges:Object.freeze(uris),currentRef:'Commit'});
+    const resolutions=[],props={open:false,context:{workspaceState:state},onResolve:value=>resolutions.push(value),onDismiss:()=>{}};
+    const dropIn=f.window.fixtureGitBody(props),body=dropIn.props.body;
+    assert.equal(body.props.children[0].props.children[0].props.children[0],'Commit ');
+    const result=f.window.gub(dropIn.props),content=result.props.children,summary=content.props.children[0];
+    assert.equal(Array.from(summary.props.children[0].props.children[0].props.children).join(''),'将 '+expectedCount+' 个文件的改动提交到');
+    const branch=summary.props.children[0].props.children[1];
+    assert.equal(branch.props['data-ch-keep'],true);assert.equal(branch.props.children[1].props.children,'Commit');
+    assert.equal(body.props.children[0].props.children[0].props.children[0],'Commit ','the supplied body remains unchanged');
+    const textarea=content.props.children[1];assert.equal(textarea.props.value,'Commit');
+    assert.equal(result.props.onClose,props.onDismiss);
+    content.props.children[2].props.children[1].props.onClick();
+    assert.deepEqual(JSON.parse(resolutions[0]),{message:'Commit',includeUnstaged,unstagedUris:working.map(name=>'file:///work/'+name)});
+    assert.equal(state.currentRef,'Commit');
+  }
+  f.uninstall()();assert.equal(f.window.gub,original);
+});
+
+
+test('current SkillsList memo localizes its workspace warning and links while retaining workspace names and skill data', () => {
+  const f=nativeFixture();
+  f.evaluate(`var hookCalls=0;
+    A.memo=type=>({$$typeof:Symbol.for('react.memo'),type});
+    A.useMemo=callback=>{hookCalls++;return callback()};A.useCallback=callback=>{hookCalls++;return callback};
+    var aD=uri=>decodeURIComponent(uri.split('/').at(-1)),fAc=()=>null,dAc=()=>null,bAc={};`);
+  // Native gAc memo render from the current application bundle.
+  f.evaluate("var gAc=A.memo(({skills:a,configFileSkills:b,isLoading:c,isConfigFileLoading:d,error:f,configFileError:g,searchQuery:h,workspaceUris:k,onInstallSkill:l,selectedWorkspaceUri:m,onWorkspaceChange:n})=>{var q=c&&d,r=a.length>0||b.length>0,t=(0,A.useCallback)(w=>{if(!h.trim())return w;var x=h.toLowerCase();return w.filter(y=>y.name.toLowerCase().includes(x)||y.description&&y.description.toLowerCase().includes(x))},[h]),u=(0,A.useMemo)(()=>t(b),[b,t]),v=(0,A.useMemo)(()=>{var w=new Set;for(let x of a)x.name&&\nw.add(x.name.toLowerCase());return w},[a]);return A.createElement(A.Fragment,null,q&&A.createElement(\"div\",{className:\"text-sm text-muted-foreground\"},\"Loading skills...\"),f&&A.createElement(\"div\",{className:\"text-sm text-red-400\"},f),!q&&!f&&!g&&!r&&A.createElement(\"div\",{className:\"text-sm text-muted-foreground\"},\"No skills loaded.\"),!c&&a.length>0&&A.createElement(\"div\",{className:\"flex flex-col gap-4\"},A.createElement(fAc,{title:\"Installed Skills\",skills:a})),!d&&A.createElement(\"div\",{className:\"flex flex-col gap-2 mt-8\"},\nA.createElement(\"div\",{className:\"flex flex-row items-center gap-2 mb-1\"},A.createElement(\"h3\",{className:\"text-xs font-medium text-secondary-foreground uppercase m-0\"},\"Recommended Skills\",u.length>0&&` (${u.length})`),n&&m&&k.length>1&&A.createElement(\"div\",{className:\"flex items-center gap-1.5 ml-auto\"},A.createElement(\"span\",{className:\"text-[10px] font-medium text-muted-foreground uppercase tracking-wider\"},\"Workspace\"),A.createElement(\"select\",{value:m,onChange:w=>n(w.target.value),className:\"!rounded border border-solid !border-border !bg-background py-0.5 px-2 text-[10px] !text-foreground outline-none focus:border-primary transition-colors cursor-pointer\"},\nk.map(w=>A.createElement(\"option\",{key:w,value:w},aD(w)||w))))),g&&A.createElement(\"div\",{className:\"text-sm text-yellow-400\"},\"No recommended skills found in workspace\",\" \",A.createElement(\"strong\",null,m?aD(m):\"the current workspace\"),\" \\u2014 the skills config path does not exist in this workspace.\",k.length>1&&\" Try selecting a different workspace.\"),u.length>0&&A.createElement(A.Fragment,null,A.createElement(\"div\",{className:\"flex flex-row items-center gap-2 mb-1\"},A.createElement(\"div\",{className:\"text-xs text-muted-foreground\"},\n\"google3/configs/jetski/recommended_skills/skills.json\")),A.createElement(\"div\",{className:\"text-xs rounded-md border border-solid px-3 py-2 mb-1\",style:{borderColor:\"var(--border, rgba(255,255,255,0.1))\",background:\"var(--muted, rgba(255,255,255,0.04))\"}},\"\\ud83d\\udca1 Discover and install more skills at\",\" \",A.createElement(\"a\",{href:\"https://agent-marketplace.corp.google.com\",target:\"_blank\",rel:\"noopener noreferrer\",className:\"underline\",style:{color:\"var(--link, #3794ff)\"}},\"agent-marketplace.corp.google.com\"),\n\". Learn more about skills at\",\" \",A.createElement(\"a\",{href:\"https://goto.google.com/jetski-skills\",target:\"_blank\",rel:\"noopener noreferrer\",className:\"underline\",style:{color:\"var(--link, #3794ff)\"}},\"go/jetski-skills\"),\" \"),A.createElement(\"div\",{className:\"grid gap-2\",style:bAc},u.map(w=>A.createElement(dAc,{key:w.path||w.name,skill:w,isInstalled:v.has(w.name.toLowerCase()),onInstallSkill:l}))))),d&&!c&&A.createElement(\"div\",{className:\"text-sm text-muted-foreground\"},\"Scanning skills config file...\"))});");
+  const object=f.window.gAc,original=object.type,adapters=f.install();
+  assert.equal(f.window.gAc,object);assert.notEqual(object.type,original);
+  const nodes=(value,out=[])=>{if(Array.isArray(value))value.forEach(child=>nodes(child,out));else if(value?.props){out.push(value);nodes(value.props.children,out);}return out;};
+  const text=value=>typeof value==='string'?value:Array.isArray(value)?value.map(text).join(''):value?.props?text(value.props.children):'';
+  const item=Object.freeze({name:'Cloud only',description:'Local only',path:'/original/skill'}),calls=[];
+  const onChange=value=>calls.push(value),install=()=>{};
+  const props=Object.freeze({skills:Object.freeze([]),configFileSkills:Object.freeze([item]),isLoading:false,isConfigFileLoading:false,
+    error:'Cloud only',configFileError:'native config error',searchQuery:'',workspaceUris:Object.freeze(['file:///Workspace','file:///Active%20Skills']),
+    onInstallSkill:install,selectedWorkspaceUri:'file:///Workspace',onWorkspaceChange:onChange});
+  const before=f.window.hookCalls,result=object.type(props),all=nodes(result);
+  assert.equal(f.window.hookCalls,before+3,'the memo owner retains its native Hook sequence');
+  const warning=all.find(node=>node.type==='div'&&node.props.className==='text-sm text-yellow-400');
+  assert.equal(text(warning),'未在 Workspace 中找到推荐技能：此工作区缺少技能配置路径。请尝试选择其他工作区。');
+  const workspace=nodes(warning).find(node=>node.type==='strong');
+  assert.equal(workspace.props.children,'Workspace');assert.equal(workspace.props['data-ch-keep'],true);
+  const options=all.filter(node=>node.type==='option');
+  assert.deepEqual(options.map(node=>node.props.value),Array.from(props.workspaceUris));
+  assert.deepEqual(options.map(node=>node.props.children),['Workspace','Active Skills']);
+  assert.ok(options.every(node=>node.props['data-ch-keep']===true));
+  all.find(node=>node.type==='select').props.onChange({target:{value:props.workspaceUris[1]}});
+  assert.deepEqual(calls,[props.workspaceUris[1]]);
+  const error=all.find(node=>node.type==='div'&&node.props.className==='text-sm text-red-400');
+  assert.equal(error.props.children,props.error);assert.equal(error.props['data-ch-keep'],true);
+  const links=all.filter(node=>node.type==='a');
+  assert.deepEqual(links.map(node=>node.props.href),['https://agent-marketplace.corp.google.com','https://goto.google.com/jetski-skills']);
+  assert.ok(text(result).includes('💡 前往 agent-marketplace.corp.google.com 发现并安装更多技能；技能说明请参阅 go/jetski-skills。'));
+  const card=all.find(node=>node.type===f.window.dAc);
+  assert.equal(card.props.skill,item);assert.equal(card.props.onInstallSkill,install);
+  const fallback=object.type({...props,selectedWorkspaceUri:undefined,workspaceUris:[]});
+  assert.equal(text(nodes(fallback).find(node=>node.type==='div'&&node.props.className==='text-sm text-yellow-400')),
+    '未在 当前工作区 中找到推荐技能：此工作区缺少技能配置路径。');
+  f.uninstall()();assert.equal(object.type,original);assert.equal(f.window.gAc,object);
+});
+
+
+test('native plugin suggestion availability localizes only its action slot and keeps plugin metadata and callbacks', () => {
+  const f=nativeFixture();
+  f.evaluate(`
+    A.useState=value=>[value,()=>{}];A.useEffect=()=>{};A.useLayoutEffect=()=>{};
+    A.useMemo=callback=>callback();A.useContext=()=>({states:{}});
+    var currentPlugin,currentCatalog,cloudConnections={loaded:true},pluginSources='remote',events=[];
+    var p4b=()=>({plugin:currentPlugin,isLoading:false}),m4b=()=>({catalogEntry:currentCatalog,isLoading:false,failed:false}),BR=()=>false;
+    var q4b=()=>({plugin:undefined,isLoading:false}),E2=()=>({installedSkills:[],isLoading:false});
+    var c5b=()=>({installPlugin:()=>Promise.resolve(),togglePlugin:()=>{}}),c0={};
+    var Fj=()=>({get:()=>({pluginSources})}),HR=plugin=>plugin.path,b5b=()=>cloudConnections,AR=entry=>entry?.id;
+    var D4b=()=> 'ready',M2=()=>({requestInstallPlugin:()=>Promise.resolve()}),L2=()=>({logInstall:()=>{},logDetailOpen:(...args)=>events.push(args)});
+    var N2=entry=>({to:'/plugin',params:{pluginId:entry.id},search:{}});
+    var z2=()=>null,B2=()=>null,Z=()=>null,n5b=()=>null,y2=()=>null,lA=()=>null,x2=()=>null,o5b=()=>null,D2=()=>null;`);
+  // Native m5b suggestion owner from the current application bundle.
+  f.evaluate("var m5b=function m5b({catalogId:a,isCloudChat:b=!1,DetailModal:c,onInstalled:d}){var [f,g]=(0,A.useState)(),{plugin:h,isLoading:k}=p4b(a),{catalogEntry:l,isLoading:m,failed:n}=m4b(h?.installedFrom?.id||a),q=BR(l),{plugin:r,isLoading:t}=q4b(q?void 0:l),u=q?void 0:h??r,v=k||t,{installedSkills:w,isLoading:x}=E2(),{installPlugin:y,togglePlugin:z}=c5b(),[C,D]=(0,A.useState)(!1),[E,F]=(0,A.useState)(!1),[G,H]=(0,A.useState)(!1),[I,K]=(0,A.useState)(),L=(0,A.useContext)(c0)?.states,M=Fj().get(\"customizations\")?.pluginSources??\n\"local\",N=M===\"remote\"||b&&M!==\"local\",O=u?HR(u):void 0;b=(0,A.useMemo)(()=>[u?.name,u?.displayName,O,l?.displayName,l?.id,l?.id.split(\"/\").pop(),a].filter(wa=>!!wa),[u,O,l,a]);var P=b5b({pluginDir:O,pluginIds:b});M=AR(l);var R=((b=!l&&!u&&!!P.cloud)?P.cloud?.pluginId:void 0)||M||O||a,Q=b?P.cloud?.displayName||a:l?.displayName||u?.name||M||a;M=q?kV(l,w):void 0;var V=q?!!M:!!u;M=!N&&!!u?.forceDisabled;var T=!N&&!!u?.disabled&&!M;v=q?x:v;var S=!!P.local?.provider&&!P.local?.connected;S=q||N?\"ready\":\nS?\"signInRequired\":O&&!P.local?\"starting\":D4b(u,L);var U=V&&!M&&!T&&S===\"signInRequired\",Y=!N&&V&&!M&&!T&&!v&&(S===\"ready\"||S===\"starting\"&&G),W=()=>({catalogId:R,marketplace:l?.marketplace??\"\",name:Q,kind:q?\"skill\":\"plugin\"}),ca=d?()=>{var wa=W();q?d(wa):(K(wa),F(!0))}:void 0;L=M2({togglePlugin:z,installPlugin:y,onInstallComplete:ca});var da=L.requestInstallPlugin,{logInstall:pa,logDetailOpen:fa}=L2();(0,A.useEffect)(()=>{I&&Y&&(K(void 0),d?.(I))},[I,Y,d]);var ea=V&&!T&&S===\"ready\";(0,A.useLayoutEffect)(()=>\n{E&&(ea?F(!1):U&&(F(!1),Fm(`${Q} needs you to sign in before it can be used.`),c&&document.hasFocus()&&g(wa=>wa??\"signIn\")))},[E,ea,U,Q,c]);S=E&&!ea&&!U&&!M;(0,A.useEffect)(()=>{if(E&&!C){var wa=setTimeout(()=>{F(!1);H(!0)},15E3);return()=>{clearTimeout(wa)}}},[E,C]);if(m||!l&&k||(N||!l)&&!P.loaded)return A.createElement(n5b,null);if(!l&&!u&&!P.cloud)return A.createElement(\"div\",{\"data-testid\":\"plugin-suggestion-card-unavailable\",className:\"my-2 flex items-center gap-2 text-xs text-muted-foreground\"},\nA.createElement(Z,{name:\"info\",size:16}),n?\"Couldn't load the suggested plugin.\":\"The suggested plugin isn't in the marketplace.\");var X=q&&!V&&O2(lV(l,w)),ja=M?u?.disabledReason||l?.description:T?\"Disabled. Open the plugin page to finish setup.\":U?\"Sign in to finish setting up this plugin.\":b?P.cloud?.description:l?.description||u?.description,la=b?P.cloud?.logoUri:l?.logo,ta={id:R,marketplace:l?.marketplace??u?.installedFrom?.marketplace??\"google3\",kind:q?\"skill\":\"plugin\",surface:\"chat\"},{to:Ba,\nparams:ra,search:ha}=b?{to:\"/customizations/plugins/$pluginId\",params:{pluginId:R},search:{source:\"remote\"}}:l?N2(l,u):{to:\"/customizations/plugins/$pluginId\",params:{pluginId:O||a},search:{}},oa=N?P.cloud?null:A.createElement(z2,{variant:\"muted\"},\"Local only\"):b?A.createElement(z2,{variant:\"muted\"},\"Cloud only\"):null;X=N?!!P.cloud?.connected:V||X;return A.createElement(\"div\",{\"data-testid\":\"plugin-suggestion-card\",className:\"my-2 max-w-md rounded-xl border border-border\"},A.createElement(B2,{compact:!0,\nname:Q,description:ja,logo:la,to:Ba,params:ra,search:ha,onSelect:c&&!b?()=>{fa(ta,V);g(\"details\")}:void 0,onClick:c&&!b?void 0:()=>{fa(ta,V)},ariaLabel:`Open ${Q}`,badge:q?A.createElement(z2,{variant:\"muted\"},\"Skill\"):void 0,action:v?A.createElement(y2,{variant:\"text\"}):!M&&!T||S?oa?oa:U?c?A.createElement(lA,{variant:\"primary\",size:\"sm\",onClick:()=>{fa(ta,V);g(\"signIn\");d&&!I&&K({...W(),signedIn:!0})},\"aria-label\":`Sign in to ${Q}`},\"Sign in\"):A.createElement(z2,{variant:\"muted\",title:\"Sign in to finish setting up this plugin.\",\nclassName:\"pointer-events-none\"},\"Sign in needed\"):A.createElement(x2,{variant:\"text\",installed:X&&!S,processing:C||S,name:Q,onInstall:()=>{AZ(\"PLUGIN_INSTALL_BUTTON\");N?P.signInCloud():(pa(ta),D(!0),q?y(R).then(wa=>{wa!==void 0&&ca?.()}).finally(()=>{D(!1)}):(F(!0),H(!1),da(R,{awaitReview:!0}).then(wa=>{wa||F(!1)}).finally(()=>{D(!1)})))}}):A.createElement(o5b,{disabled:!!u?.disabled,forceDisabled:M,disabledReason:u?.disabledReason})}),P.error&&A.createElement(\"p\",{role:\"alert\",className:\"px-3 pb-2 text-xs text-destructive m-0\"},\nP.error),A.createElement(D2,{flow:L}),c&&!b&&A.createElement(c,{catalogId:R,isOpen:f!==void 0,openOnSignIn:f===\"signIn\",pageRoute:{to:Ba,params:ra,search:ha},onClose:()=>{g(void 0);P.refetch?.()},onInstalled:ca}))};");
+  const original=f.window.m5b,adapters=f.install();
+  const localPlugin=Object.freeze({name:'Cloud only',path:'/original/Local only',disabled:false});
+  const localCatalog=Object.freeze({id:'local-entry',displayName:'Cloud only',description:'Local only',marketplace:'fixture'});
+  f.window.currentPlugin=localPlugin;f.window.currentCatalog=localCatalog;
+  let result=f.window.m5b({catalogId:'original-id'}),card=result.props.children[0];
+  assert.equal(card.props.action.props.children,'仅本地');
+  assert.equal(card.props.name,'Cloud only');assert.equal(card.props.description,'Local only');
+  assert.equal(card.props.params.pluginId,'local-entry');
+  card.props.onClick();assert.equal(f.window.events[0][0].id,'local-entry');
+  assert.equal(localPlugin.path,'/original/Local only');
+  f.window.currentPlugin=undefined;f.window.currentCatalog=undefined;f.window.pluginSources='local';
+  const cloud=Object.freeze({pluginId:'cloud-entry',displayName:'Local only',description:'Cloud only',connected:false});
+  f.window.cloudConnections={loaded:true,cloud};
+  result=f.window.m5b({catalogId:'original-id'});card=result.props.children[0];
+  assert.equal(card.props.action.props.children,'仅云端');
+  assert.equal(card.props.name,'Local only');assert.equal(card.props.description,'Cloud only');
+  assert.equal(card.props.params.pluginId,'cloud-entry');
+  adapters.setStrings({'Cloud only':'只在云端'});
+  assert.equal(f.window.m5b({catalogId:'original-id'}).props.children[0].props.action.props.children,'只在云端');
+  f.uninstall()();assert.equal(f.window.m5b,original);
+});
+
+
+test('completed questionnaire answers translate generated copy while preserving option and write-in text', () => {
+  const f=nativeFixture();
+  f.evaluate(`var Markdown=()=>null,bC=()=>({renderers:{markdown:Markdown}});`);
+  // Current XMb native response owner; question and option text are user data.
+  f.evaluate("var XMb=({entry:a})=>{var {renderers:b}=bC();b=b.markdown;var c=(()=>{if(a.skipped)return\"Skipped\";var f=a.options.filter(g=>a.selectedOptionIds.includes(g.id)).map(g=>g.text);a.writeInResponse&&f.push(`${a.writeInResponse} (write-in)`);return f.length===0?\"No answer provided\":f.join(\", \")})(),d=c===\"No answer provided\";return A.createElement(\"div\",{className:\"flex text-sm min-w-0 flex-1 flex-col gap-0.5 p-2\"},A.createElement(b,{className:\"font-medium\"},a.question??\"\"),A.createElement(b,{className:`${d?\n\"text-muted-foreground\":\"text-secondary-foreground\"} [&_p]:!my-0 [&_ol]:!my-0 [&_ul]:!my-0 [&_li]:!my-0`},c))};");
+  const original=f.window.XMb,adapters=f.install();
+  const option=Object.freeze({id:'same',text:'No answer provided'});
+  const base=Object.freeze({question:'Skipped',options:Object.freeze([option]),selectedOptionIds:Object.freeze([]),writeInResponse:'',skipped:false});
+  const render=entry=>f.window.XMb({entry});
+  const answer=value=>value.props.children[1].props.children;
+  assert.equal(render(base).props['data-ch-keep'],true);
+  assert.equal(render(base).props.children[0].props.children,'Skipped');
+  assert.equal(answer(render(base)),'未作答');
+  assert.equal(answer(render({...base,skipped:true})),'已跳过');
+  const selected=Object.freeze({...base,selectedOptionIds:Object.freeze(['same'])});
+  assert.equal(answer(render(selected)),'No answer provided','an identical real option stays verbatim');
+  const write=Object.freeze({...selected,writeInResponse:'Skipped (write-in)'});
+  assert.equal(answer(render(write)),'No answer provided, Skipped (write-in)（手动填写）');
+  assert.equal(write.options[0],option);assert.equal(write.writeInResponse,'Skipped (write-in)');
+  adapters.setStrings({'question-response:no-answer':'尚未回答','question-response:write-in-suffix':'（自填）'});
+  assert.equal(answer(render(base)),'尚未回答');
+  assert.equal(answer(render(write)),'No answer provided, Skipped (write-in)（自填）');
+  f.uninstall()();assert.equal(f.window.XMb,original);
+  assert.equal(answer(render(base)),'No answer provided');
+});
+
+
+test('artifact review status translates only the native fixed labels and retains file chips and Hook calls', () => {
+  const f=nativeFixture();
+  f.evaluate(`var hookCalls=0;A.useMemo=callback=>{hookCalls++;return callback()};
+    var B={ArtifactApprovalStatus:{UNSPECIFIED:0,APPROVED:1,CHANGES_REQUESTED:2}};
+    var Z=()=>null,uE=()=>null,vE=()=>null;
+    var bC=()=>({cascadeContext:{events:{getArtifactMetadata:()=>undefined}},artifactsDir:'/raw/artifacts',stepHandler:{}});
+    var Hi=(...values)=>values.filter(Boolean).join(' ');`);
+  // Current qLb/QLb native review owners, including their unchanged file loop.
+  f.evaluate("var qLb=({artifactComments:a=[],fileComments:b=[],fileDiffComments:c=[],autoProceedUris:d=[],onCommentClick:f,isTurboReviewMode:g})=>{var {cascadeContext:h,artifactsDir:k,stepHandler:l}=bC(),m=h?.events?.getArtifactMetadata,n=(0,A.useMemo)(()=>{var r=new Map;for(var t of d){var u=`${t}|autoProceed`;r.has(u)||r.set(u,{uri:t,nonLgtmComments:[],isDiff:!1})}for(var v of a)u=v.artifactUri,t=`${u}|artifact`,r.has(t)||r.set(t,{uri:u,nonLgtmComments:[],isDiff:!1}),v.approvalStatus!==B.ArtifactApprovalStatus.APPROVED&&\n(u=v.scope.case===\"selections\"?v.scope.value.selections[0]:void 0,u=u?.selection.case===\"textSelection\"?u.selection.value:void 0,r.get(t).nonLgtmComments.push({text:v.comment,...PY(u)}));for(var w of b)if(v=w.fileUri,t=`${v}|file`,r.has(t)||r.set(t,{uri:v,nonLgtmComments:[],isDiff:!1}),w.fileCommentInfos[0]?.selection?.startLine!==0||w.fileCommentInfos[0]?.selection?.endLine!==0||w.fileCommentInfos[0]?.selection?.content!==\"LGTM\")for(var x of w.fileCommentInfos)r.get(t).nonLgtmComments.push({text:x.comment,\n...PY(x.selection)});for(let y of c){x=y.fileUri;w=`${x}|fileDiff`;r.has(w)||r.set(w,{uri:x,nonLgtmComments:[],isDiff:!0});for(let z of y.diffCommentInfos)x=z.modifiedSelection??z.originalSelection,r.get(w).nonLgtmComments.push({text:z.comment,...PY(x)})}return r},[a,b,c,d]),q=(0,A.useMemo)(()=>Array.from(n.entries()).sort(([,r],[,t])=>{var u=m?.(r.uri),v=m?.(t.uri);u=u?.requestFeedback===!0;v=v?.requestFeedback===!0;return u&&!v?-1:!u&&v?1:r.uri.localeCompare(t.uri)}),[n,m]);g=g?\"Auto-proceeded with\":\n\"Proceeded with\";return A.createElement(\"div\",{className:\"relative p-px rounded-xl bg-card-border\"},A.createElement(\"div\",{className:\"relative flex flex-col gap-0 p-2 rounded-[calc(theme(borderRadius.xl)-1px)] bg-card\"},A.createElement(\"div\",{className:\"flex items-center gap-1.5 flex-wrap\"},A.createElement(Z,{name:\"check_circle\",className:\"size-4 text-secondary-foreground\"}),A.createElement(\"span\",{className:\"text-sm\"},g),q.map(([r,t])=>t.nonLgtmComments.length>0?A.createElement(vE,{key:r,groups:[{uri:t.uri,\ncomments:t.nonLgtmComments,kind:t.isDiff?\"file-diff\":\"file\"}],getFileIcon:l?.getFileIcon,onCommentClick:()=>f?.(t.uri),artifactsDir:k}):A.createElement(uE,{key:r,fileUri:t.uri})))))};var QLb=({approvalStatus:a})=>{if(a===B.ArtifactApprovalStatus.UNSPECIFIED)return null;var b=a===B.ArtifactApprovalStatus.APPROVED?\"Approved\":\"Requested changes\";return A.createElement(\"span\",{className:Hi(\"inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium\",a===B.ArtifactApprovalStatus.APPROVED?\"bg-green-500/20 border-green-500/50\":\"bg-red-500/20 border-red-500/50\")},b)};");
+  const originals={proceeded:f.window.qLb,status:f.window.QLb},adapters=f.install();
+  const collect=(value,out=[])=>{if(typeof value==='string')out.push(value);else if(Array.isArray(value))value.forEach(child=>collect(child,out));else if(value?.props)collect(value.props.children,out);return out};
+  const findChips=(value,out=[])=>{if(Array.isArray(value))value.forEach(child=>findChips(child,out));else if(value?.props){if(value.type===f.window.uE)out.push(value);findChips(value.props.children,out)}return out};
+  const files=Object.freeze(['file:///project/Requested%20changes.md']);
+  const props={autoProceedUris:files,isTurboReviewMode:true};
+  const before=f.window.hookCalls,automatic=f.window.qLb(props);
+  assert.equal(f.window.hookCalls,before+2,'the native useMemo sequence executes once');
+  assert.equal(collect(automatic).join(''),'已自动按以下内容继续');
+  assert.equal(findChips(automatic)[0].props.fileUri,files[0]);
+  assert.equal(collect(f.window.qLb({...props,isTurboReviewMode:false})).join(''),'已按以下内容继续');
+  assert.equal(f.window.QLb({approvalStatus:0}),null);
+  assert.equal(f.window.QLb({approvalStatus:1}).props.children,'已批准');
+  assert.equal(f.window.QLb({approvalStatus:2}).props.children,'已要求修改');
+  adapters.setStrings({'artifact-review:auto-proceeded':'已自动采用','artifact-review:requested-changes':'需要修改'});
+  assert.equal(collect(f.window.qLb(props)).join(''),'已自动采用');
+  assert.equal(f.window.QLb({approvalStatus:2}).props.children,'需要修改');
+  f.uninstall()();assert.equal(f.window.qLb,originals.proceeded);assert.equal(f.window.QLb,originals.status);
+  assert.equal(collect(f.window.qLb(props)).join(''),'Auto-proceeded with');
+});
+
+
+test('code references and unnamed themes translate only their generated display slots', () => {
+  const f=nativeFixture();
+  f.evaluate(`A.useContext=()=>null;A.useMemo=callback=>callback();
+    var Fj=()=>({get:name=>name==='customizations'?{enablePluginThemes:true}:undefined}),ZD={};
+    var iD=()=>null,Z=()=>null,xA=()=>null,gu=value=>value,ERa=()=>undefined;
+    var oE=(item,name)=>item.scopeItem?.case==='textBlock'&&item.scopeItem.value.identifier.case==='label'&&item.scopeItem.value.identifier.value===name;
+    var Hi=(...values)=>values.filter(Boolean).join(' ');
+    var Z5b=()=>false,a6b=()=>[],X2=()=>null,q6b=()=>null,K5b=()=>null,d6b=()=>null,h6b=()=>null,c6b=()=>null,Y2=()=>null,R5b=()=>null,g6b=()=>null;`);
+  f.evaluate("var NRa=({item:a,openUri:b,getFileIcon:c,artifactsDir:d,openWorkflow:f,openConversation:g,className:h,loading:k})=>{var l=Fj().get(\"dynamicContextCategories\"),m=a?.scopeItem,n=(0,A.useContext)(ZD),q=(t,u,v,w)=>A.createElement(iD,{className:h,fileUri:v,draggable:!1,iconOverride:typeof u===\"string\"?A.createElement(Z,{name:u,size:16,className:\"stroke-1 text-muted-foreground\"}):u,contentOverride:t,tooltip:w});switch(m?.case){case \"dynamicContext\":f=m.value.providerLabel;c=m.value.itemValue;var r=m.value.itemLabel;\nd=m.value.uri;n=m.value.iconUri;m=m.value.description;return k?A.createElement(iD,{className:h,fileUri:d||`ai-context-provider://${f??\"\"}/${c??\"\"}`,draggable:!1,contentOverride:\"Resolving link\\u2026\",iconOverride:A.createElement(jD,{size:14,className:\"h-3.5 w-3.5\"})}):(k=l?.getProvider(f))||r||d||n||c?(q=r||c||(f?`@${f}`:d||\"@context\"),l=d||`ai-context-provider://${f??\"\"}/${c||q}`,f=q.split(\"\\n\")[0].trim(),c=n||k?.categoryIconUri||tC(d||c),q=m?`${q} (${m})`:q,A.createElement(iD,{className:Hi(\"max-w-xs min-w-0\",\nh),fileUri:l,openUri:b,scopeItem:a,iconOverride:xC({iconUri:c,size:14,className:\"h-3.5 w-3.5\"}),contentOverride:f,tooltip:q,contentClassName:\"truncate min-w-0 inline-block align-bottom max-w-full leading-tight select-text text-left\"})):q(f?`@${f}`:\"@context\",\"notes\",`dynamicContext:${f||c||d}`);case \"textBlock\":if(m.value.identifier.case===\"label\"){if(oE(a,\"Quote\")){let u=m.value.content??\"\";b=u.replace(/\\s+/g,\" \").trim();b=gu(b);return A.createElement(iD,{className:h,fileUri:\"quote\",draggable:!1,\niconOverride:A.createElement(\"svg\",{className:\"text-muted-foreground\",width:\"16\",height:\"16\",viewBox:\"0 0 16 16\",fill:\"none\",xmlns:\"http://www.w3.org/2000/svg\"},A.createElement(\"path\",{d:\"M13.16 4.832L11.88 4 9.864 6.912c-.15.213-.299.437-.448.672a4.5 4.5 0 0 0-.32.736C9.032 8.555 9 8.8 9 9.056c0 .277.053.544.16.8.107.256.245.48.416.672.192.17.416.31.672.416.256.107.523.16.8.16.555 0 1.024-.192 1.408-.576.405-.405.608-.896.608-1.472 0-.533-.16-.95-.48-1.248-.299-.32-.63-.512-.992-.576l1.568-2.4zm-6 0L5.88 4 3.864 6.912c-.15.213-.299.437-.448.672a4.5 4.5 0 0 0-.32.736C3.032 8.555 3 8.8 3 9.056c0 .277.053.544.16.8.107.256.245.48.416.672.192.17.416.31.672.416.256.107.523.16.8.16.555 0 1.024-.192 1.408-.576.405-.405.608-.896.608-1.472 0-.533-.16-.95-.48-1.248-.299-.32-.63-.512-.992-.576l1.568-2.4z\",\nfill:\"currentColor\"})),contentOverride:b,openUri:(v,w)=>{ARa(u,w?.currentTarget)},tooltip:u})}if(oE(a,\"code_block\"))return q(\"Code snippet\",\"code\",\"code_block\",A.createElement(xA,null,A.createElement(\"span\",{className:\"font-mono select-text\"},m.value.content??\"\")));b=ERa(a);return b!==void 0?(a=m.value.content??\"\",q(gu(a.replace(/\\s+/g,\" \").trim()),\"handyman\",`mcpAppContext:${b}`,A.createElement(xA,{className:\"gap-1\",selectNone:!1},A.createElement(\"span\",{className:\"font-medium\"},b),A.createElement(\"span\",\n{className:\"whitespace-pre-wrap select-text\"},a)))):q(`@${m.value.identifier.value}`,\"notes\",`label:${m.value.identifier.value}`)}k=m.value.identifier.value;if(!k||typeof k===\"string\")return null;q=k.absoluteUri;if(!q)return null;m=m.value.content??\"\";if(k.startLine===0&&k.endLine===0&&m){let u=gu(m.replace(/\\s+/g,\" \").trim());return A.createElement(iD,{className:h,fileUri:q,getFileIcon:c,artifactsDir:d,openUri:b,isDirectory:!1,scopeItem:a,contentCustomizer:v=>A.createElement(A.Fragment,null,v,A.createElement(\"span\",\n{className:\"text-muted-foreground ml-0.5\"},`\"${u}\"`)),tooltip:m})}q=(m=k.startLine===0&&k.endLine===0?\"\":eD(k.startLine,k.endLine))?`${q}#${m}`:q;m=MRa(q);return A.createElement(iD,{className:h,fileUri:q,getFileIcon:c,artifactsDir:d,openUri:b,isDirectory:!1,scopeItem:a,tooltip:m});case \"directory\":case \"file\":case \"fileLineRange\":case \"codeContext\":return m.case===\"fileLineRange\"?r=`${m.value.absoluteUri}#${eD(m.value.startLine,m.value.endLine)}`:r=m.value.absoluteUri,q=MRa(r),A.createElement(iD,\n{className:h,fileUri:r,getFileIcon:c,artifactsDir:d,openUri:b,contentOverride:m.case===\"codeContext\"?m.value.nodeName:void 0,isDirectory:m.case===\"directory\",scopeItem:a,tooltip:q});case \"terminal\":return A.createElement(iD,{className:h,fileUri:`terminal:${m.value.name}`,contentOverride:`terminal:${m.value.name}`,iconOverride:A.createElement(es,{className:\"w-3.5 h-3.5 stroke-1.5 opacity-80\"}),tooltip:m.value.selectionContent,draggable:!1});case \"browserPage\":return b=m.value.title||m.value.url,b=\nb.length>80?b.slice(0,79)+\"...\":b,q(`web-page: ${b}`,\"language\",`browserPage:${m.value.url}`);case \"conversation\":let t=m.value.id;b=m.value.source===\"cli\";return A.createElement(iD,{className:h,fileUri:`conversation:${t}`,contentOverride:m.value.title,iconOverride:A.createElement(Z,{name:\"chat_bubble\",size:12,className:\"stroke-1\"}),openUri:g&&!b?()=>{g(t)}:void 0,draggable:!1});case \"userActivity\":return q(`@${m.value.branch===\"\"?\"current\":m.value.branch}`,\"commit\",`userActivity:${m.value.branch}`);\ncase \"slack\":return q(`@${m.value.displayName}`,\"chat\",`slack:${m.value.displayName}`);case \"github\":return q(`@${m.value.displayName}`,\"alternate_email\",`github:${m.value.displayName}`);case \"repository\":return q(`@${m.value.repoInfo?.repoName.split(\"/\").pop()}`,\"folder_code\",`repository:${m.value.repoInfo?.repoName}`);case \"cciWithSubrange\":return b=m.value.cci?.nodeName||\"code\",q(`@${b}`,\"code\",`cci:${b}`);case \"repositoryPath\":return q(`@${m.value.relativePath}`,\"folder\",`repositoryPath:${m.value.relativePath}`);\ncase \"jira\":return q(`@${m.value.displayName}`,\"assignment\",`jira:${m.value.displayName}`);case \"googleDrive\":return q=m.value.url||\"\",k?A.createElement(iD,{className:h,fileUri:q,openUri:b,draggable:!1,contentOverride:q,iconOverride:A.createElement(jD,{className:\"h-3.5 w-3.5\"})}):A.createElement(iD,{className:h,fileUri:q,openUri:b,scopeItem:a,contentOverride:m.value.displayName,iconOverride:A.createElement(nE,{url:q,className:\"h-3.5 w-3.5\"})});case \"link\":return q=m.value.url,k?A.createElement(iD,\n{className:h,fileUri:q,openUri:b,draggable:!1,contentOverride:q,iconOverride:A.createElement(jD,{size:14,className:\"h-3.5 w-3.5\"})}):A.createElement(kRa,{item:m.value,scopeItem:a,className:h,openUri:b});case \"rule\":return q(m.value.ruleName,\"menu_book\",`rule:${m.value.ruleName}`);case \"mcpResource\":return q(`@${m.value.serverName}/${m.value.name}`,\"handyman\",`mcpResource:${m.value.serverName}/${m.value.name}`);case \"mcpPrompt\":return q(`mcp:${m.value.serverName}:${m.value.name}`,\"chat\",`mcpPrompt:${m.value.serverName}:${m.value.name}`);\ncase \"knowledge\":return q(`@${m.value.displayName}`,\"info\",`knowledge:${m.value.displayName}`);case \"plugin\":return q(`@${m.value.displayName||m.value.name}`,\"extension\",`plugin:${m.value.name}`);case \"recipe\":return a=m.value,m=n[`recipe:${a.recipeId}`]||n[a.recipeId],m=a.description||m?.description||\"\",a.recipeId===\"btw\"?q(a.title,\"chat_add_on\",`recipe:${a.recipeId}`,m):f?A.createElement(mRa,{workflow:a,openWorkflow:f,tooltip:m}):a.uri?A.createElement(iD,{className:h,fileUri:a.uri,openUri:b,getFileIcon:c,\ntooltip:m}):q(a.title,\"code_blocks\",`recipe:${a.recipeId}`,m);case \"domElement\":return b=[\"dom-element\",m.value.tagName],m.value.id&&b.push(m.value.id),m.value.reactComponentName&&b.push(m.value.reactComponentName),q(`@${b.join(\":\")}`,\"code\",`domElement:${b.join(\":\")}`);case \"consoleLog\":return q(\"@web-context:console-logs\",\"terminal\",\"consoleLog:logs\");case \"browserText\":return q(\"@browser:text\",\"notes\",\"browserText:text\");case \"browserCodeBlock\":return q(\"@web-context:code-block\",\"code\",\"browserCodeBlock:code\");\ncase \"slashCommand\":return k=m.value.info,a=k?.name??\"unknown\",m=a.startsWith(\"/\")?a.slice(1):a,c=k?.type===B.SlashCommandType.SKILL,n=n[`slashCommand:${a}`]??n[`slashCommand:${m}`]??n[m]??n[a],d=n?.description??\"\",l=n?.definitionPath,k=A.createElement(iE,{icon:k?.icon||n?.icon,logo:k?.logo||n?.logo,fallbackSymbol:c?\"code_blocks\":\"code\",size:16,className:\"stroke-1 text-muted-foreground\"}),b=c&&(d||l)?A.createElement(lRa,{name:m,description:d,path:l,openUri:b}):d,q(m,k,`slashCommand:${a}`,b);default:return null}};var r6b=function r6b({plugin:a,uiExtensions:b=[],otherSidecars:c=[],contextProviders:d=[],isInstalled:f=!1,MarkdownRenderer:g}){var h=Fj().get(\"customizations\")?.enablePluginThemes===!0,[k,l]=(0,A.useMemo)(()=>[(a.skills??[]).filter(Z5b),(a.skills??[]).filter(n=>!Z5b(n))],[a.skills]),m=(0,A.useMemo)(()=>a6b(a.hooksJson)?.length??0,[a.hooksJson]);return A.createElement(\"div\",{className:\"flex flex-col gap-6\"},a.readme&&A.createElement(\"section\",{\"aria-label\":\"Readme\",className:\"px-3\"},A.createElement(g,{markdown:a.readme,\nbaseDirUri:a.path||void 0,className:\"text-sm\"})),k.length>0&&A.createElement(X2,{title:\"Commands\",count:k.length},A.createElement(q6b,{skills:k,showPaths:f,MarkdownRenderer:g})),l.length>0&&A.createElement(X2,{title:\"Skills\",count:l.length},A.createElement(q6b,{skills:l,showPaths:f,MarkdownRenderer:g})),a.agents.length>0&&A.createElement(X2,{title:\"Agents\",count:a.agents.length},A.createElement(K5b,{agents:a.agents,showPaths:f,MarkdownRenderer:g})),a.mcpServers.length>0&&A.createElement(X2,{title:\"MCP servers\",\ncount:a.mcpServers.length},A.createElement(d6b,{mcpServers:a.mcpServers})),a.rules.length>0&&A.createElement(X2,{title:\"Rules\",count:a.rules.length},A.createElement(h6b,{rules:a.rules,showPaths:f,MarkdownRenderer:g})),m>0&&A.createElement(X2,{title:\"Hooks\",count:m},A.createElement(c6b,{hooksJson:a.hooksJson})),b.length>0&&A.createElement(X2,{title:\"UI extensions\",count:b.length},A.createElement(Y2,{sidecars:b,isInstalled:f,type:\"extension\",pluginName:a.name})),c.length>0&&A.createElement(X2,{title:\"Automations\",\ncount:c.length},A.createElement(Y2,{sidecars:c,isInstalled:f,type:\"sidecar\",pluginName:a.name})),d.length>0&&A.createElement(X2,{title:\"Context Providers\",count:d.length},A.createElement(R5b,{contextProviders:d})),h&&a.themes.length>0&&A.createElement(X2,{title:\"Themes\",count:a.themes.length},A.createElement(\"div\",{className:\"flex flex-col gap-1.5\"},a.themes.map(n=>{var q=n.label||n.id||\"Unnamed Theme\",r=n.mode===\"light\";return A.createElement(\"div\",{key:n.id||q,className:\"flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-card/40 px-3 py-2.5\"},\nA.createElement(\"div\",{className:\"flex items-center gap-3 min-w-0\"},A.createElement(\"div\",{className:\"h-6 w-6 rounded-md shrink-0 flex items-center justify-center\",style:{background:n.seeds?.primary||\"#007acc\",padding:\"1.5px\"}},A.createElement(\"div\",{className:\"h-full w-full rounded-[4px]\",style:{background:n.seeds?.background||(r?\"#F9F9F9\":\"#101010\")}})),A.createElement(\"div\",{className:\"flex flex-col min-w-0\"},A.createElement(\"span\",{className:\"text-sm font-medium text-foreground truncate\"},q),\nA.createElement(\"span\",{className:\"text-xs text-muted-foreground font-mono truncate\"},n.id))),A.createElement(\"div\",{className:\"flex items-center gap-2 shrink-0\"},A.createElement(\"span\",{className:\"inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground capitalize\"},n.mode||\"dark\")))}))),A.createElement(\"div\",{className:\"px-3\"},A.createElement(g6b,{plugin:a})))};");
+  const originals={reference:f.window.NRa,themes:f.window.r6b},adapters=f.install();
+  const code='Code snippet\nRequested changes';
+  const item=Object.freeze({scopeItem:Object.freeze({case:'textBlock',value:Object.freeze({identifier:Object.freeze({case:'label',value:'code_block'}),content:code})})});
+  const chip=f.window.NRa({item});
+  assert.equal(chip.props.fileUri,'code_block');assert.equal(chip.props.contentOverride,'代码片段');
+  assert.equal(chip.props.tooltip.props.children.props.children,code);
+  const custom={scopeItem:{case:'textBlock',value:{identifier:{case:'label',value:'Code snippet'},content:code}}};
+  assert.equal(f.window.NRa({item:custom}).props.contentOverride,'@Code snippet');
+  const themes=Object.freeze([Object.freeze({label:'',id:'',mode:'dark'}),Object.freeze({label:'Unnamed Theme',id:'custom-theme',mode:'light'})]);
+  const plugin=Object.freeze({skills:[],agents:[],mcpServers:[],rules:[],themes,name:'Unnamed Theme'});
+  const result=f.window.r6b({plugin,MarkdownRenderer:()=>null});
+  const section=result.props.children.find(value=>value?.props?.title==='Themes');
+  const labels=section.props.children.props.children.map(row=>row.props.children[0].props.children[1].props.children[0]);
+  assert.equal(labels[0].props.children,'未命名主题');assert.equal(labels[1].props.children,'Unnamed Theme');
+  assert.equal(labels[0].props['data-ch-keep'],true);assert.equal(labels[1].props['data-ch-keep'],true);
+  assert.equal(plugin.themes,themes);assert.equal(plugin.name,'Unnamed Theme');
+  adapters.setStrings({'context-reference:code-snippet':'代码引用','plugin-theme:unnamed':'无名称主题'});
+  assert.equal(f.window.NRa({item}).props.contentOverride,'代码引用');
+  f.uninstall()();assert.equal(f.window.NRa,originals.reference);assert.equal(f.window.r6b,originals.themes);
+});
+
+
+test('image diff lexical sides share native UI projection and retain source images, file names and callbacks', () => {
+  const f=nativeFixture();f.window.eval=code=>f.evaluate(code);
+  f.evaluate(`var imageHooks=0,expands=[];var imageExpand=value=>expands.push(value);
+    A.useState=value=>{imageHooks++;return [value,imageExpand]};var JY=()=>null,Z=()=>null;`);
+  f.evaluate("const xIb=({src:a,label:b,fileName:c,onExpand:d})=>{c=`${b} ${c??\"image\"}`;return A.createElement(\"div\",{className:\"flex flex-col items-center gap-2 min-w-0 flex-1\"},A.createElement(\"div\",{className:\"text-xs font-medium font-sans text-secondary-foreground\"},b),a?A.createElement(\"img\",{src:a,alt:c,className:\"max-w-full max-h-[420px] object-contain cursor-zoom-in transition-opacity hover:opacity-70\",onClick:()=>d(a)}):A.createElement(\"div\",{className:\"text-xs text-secondary-foreground py-8\"},\"Not available\"))};var yIb=({originalSrc:a,modifiedSrc:b,fileName:c})=>{var [d,f]=(0,A.useState)(null);return a||b?A.createElement(\"div\",{className:\"flex flex-row items-start gap-6 p-4 overflow-x-auto\",\"data-testid\":\"image-diff-view\"},A.createElement(xIb,{src:a,label:\"Before\",fileName:c,onExpand:f}),A.createElement(xIb,{src:b,label:\"After\",fileName:c,onExpand:f}),A.createElement(JY,{media:null,src:d??\"\",mediaType:\"image\",isOpen:d!==null,onClose:()=>f(null)})):A.createElement(\"div\",{className:\"flex items-center justify-center gap-2 p-6 text-xs text-secondary-foreground\"},\nA.createElement(Z,{name:\"image\",size:16}),A.createElement(\"span\",null,\"Image preview not available\"))};");
+  const original=f.window.yIb,originalSide=f.evaluate('xIb'),adapters=f.install();
+  const props=Object.freeze({originalSrc:null,modifiedSrc:'blob:actual-image',fileName:'Not available'});
+  const before=f.window.imageHooks,tree=f.window.yIb(props),again=f.window.yIb(props);
+  assert.equal(f.window.imageHooks,before+2,'one native Hook per parent render');
+  const sides=tree.props.children.slice(0,2);
+  assert.notEqual(sides[0].type,originalSide);assert.equal(sides[0].type,again.props.children[0].type);
+  assert.equal(sides[0].props.fileName,props.fileName);assert.equal(sides[0].props.onExpand,f.window.imageExpand);
+  const missing=sides[0].type(sides[0].props),present=sides[1].type(sides[1].props);
+  assert.equal(missing.props.children[0].props.children,'修改前');assert.equal(missing.props.children[1].props.children,'不可用');
+  assert.equal(present.props.children[1].props.src,props.modifiedSrc);assert.equal(present.props.children[1].props.alt,'修改后 Not available');
+  assert.equal(f.window.expands.length,0);
+  assert.equal(f.window.yIb({}).props.children[1].props.children,'无法预览图片');
+  const cachedSide=sides[0].type;adapters.setStrings({'image-diff:not-available':'无可用图像'});
+  assert.equal(cachedSide(sides[0].props).props.children[1].props.children,'无可用图像');
+  f.uninstall()();assert.equal(f.window.yIb,original);
+  assert.equal(cachedSide(sides[0].props).props.children[1].props.children,'Not available','cached forwarding components restore native copy');
+});
+
+
+test('Mermaid const component follows its native getter through the shared UI projection without changing code or errors', () => {
+  const f=nativeFixture();f.window.eval=code=>f.evaluate(code);
+  f.evaluate(`var mermaidStateIndex=0,mermaidHooks=0,rawMermaidError='No answer provided';
+    A.useRef=value=>{mermaidHooks++;return {current:value}};
+    A.useState=value=>{mermaidHooks++;const index=mermaidStateIndex++;return [index===0?rawMermaidError:value,()=>{}]};
+    A.useCallback=value=>{mermaidHooks++;return value};A.useEffect=()=>{mermaidHooks++};
+    var fixtureMermaidContext;A.useContext=()=>{mermaidHooks++;return fixtureMermaidContext};
+    var Fj=()=>({get:()=>undefined}),cT={},NE=()=>null,IE=()=>null,lA=()=>null,Z=()=>null;const atb={};`);
+  f.evaluate("const pVc=function(a){return({code:b,theme:c,...d})=>{var f=(0,A.useRef)(null),g=(0,A.useRef)(`mermaid-${Math.random().toString(36).substring(2,11)}`).current,[h,k]=(0,A.useState)(null),[l,m]=(0,A.useState)(!1),[{scale:n,offset:q},r]=(0,A.useState)({scale:1,offset:{x:0,y:0}}),[t,u]=(0,A.useState)(!1),v=(0,A.useRef)(null),w=(0,A.useRef)({x:0,y:0}),x=(0,A.useCallback)(()=>{r({scale:1,offset:{x:0,y:0}});u(!1)},[]),y=(0,A.useCallback)((K,L)=>{r(M=>{var N=K(M.scale);N=Math.min(5,Math.max(.25,Math.round(N*\n100)/100));if(N<=1)return{scale:N,offset:{x:0,y:0}};var O=N/M.scale,P=L?.x??0,R=L?.y??0;return{scale:N,offset:{x:P-(P-M.offset.x)*O,y:R-(R-M.offset.y)*O}}})},[]),z=(0,A.useCallback)(K=>{v.current?.();v.current=null;if(K){var L=M=>{M.preventDefault();var N=Math.exp(-Math.max(-100,Math.min(100,M.deltaY))*(M.ctrlKey?.01:.0015));y(O=>O*N,DCc(K,M.clientX,M.clientY))};K.addEventListener(\"wheel\",L,{passive:!1});v.current=()=>{K.removeEventListener(\"wheel\",L)}}},[y]),C=(0,A.useCallback)(()=>{y(K=>K+.25)},\n[y]),D=(0,A.useCallback)(()=>{y(K=>K-.25)},[y]),E=(0,A.useCallback)(K=>{n>1&&K.button===0&&(K.preventDefault(),u(!0),w.current={x:K.clientX-q.x,y:K.clientY-q.y})},[q.x,q.y,n]);(0,A.useEffect)(()=>{if(t){var K=M=>{M.preventDefault();r(N=>({scale:N.scale,offset:{x:M.clientX-w.current.x,y:M.clientY-w.current.y}}))},L=()=>{u(!1)};window.addEventListener(\"mousemove\",K);window.addEventListener(\"mouseup\",L);return()=>{window.removeEventListener(\"mousemove\",K);window.removeEventListener(\"mouseup\",L)}}},[t]);\n(0,A.useEffect)(()=>{if(l){var K=L=>{if(!L.altKey)if(L.key===\"+\"||L.key===\"=\")L.preventDefault(),L.stopPropagation(),C();else if(L.key===\"-\"||L.key===\"_\")L.preventDefault(),L.stopPropagation(),D();else if(L.key===\"0\")L.preventDefault(),L.stopPropagation(),x();else if(!L.metaKey&&!L.ctrlKey&&!L.shiftKey){let M=0,N=0;L.key===\"ArrowLeft\"?M=50:L.key===\"ArrowRight\"?M=-50:L.key===\"ArrowUp\"?N=50:L.key===\"ArrowDown\"&&(N=-50);if(M!==0||N!==0)L.preventDefault(),L.stopPropagation(),r(O=>O.scale>1?{scale:O.scale,\noffset:{x:O.offset.x+M,y:O.offset.y+N}}:O)}};window.addEventListener(\"keydown\",K,{capture:!0});return()=>{window.removeEventListener(\"keydown\",K,{capture:!0})}}},[l,C,D,x]);var F=(0,A.useCallback)(()=>{m(!1);x()},[x]),G=Fj().get(\"download\")??cT,H=(0,A.useCallback)(()=>{ZGb(\"image\",G,f.current?.src,\"mermaid-diagram.svg\")?.onClick()},[G]),I=()=>!h&&f.current?.src?(m(!0),!0):!1;(0,A.useEffect)(()=>{var K=!0;(async()=>{var L=e,M=e;try{try{let N=M(await L(CCc(SCc(b),a(c))));if(K&&f.current){let O=(new TextEncoder).encode(N),\nP=Array.from(O,R=>String.fromCharCode(R)).join(\"\");f.current.src=`data:image/svg+xml;base64,${btoa(P)}`;k(null)}}catch(N){M(),K&&(f.current&&f.current.removeAttribute(\"src\"),console.error(\"Mermaid rendering error:\",N),k(FCc(N instanceof Error?N.message:\"Failed to render diagram\")))}}finally{L()}})();return()=>{K=!1}},[b,g,c]);return A.createElement(A.Fragment,null,A.createElement(\"div\",{className:`mermaid-wrapper relative my-4${h?\"\":\" cursor-pointer\"}`,onClick:I,onKeyDown:K=>{(K.key===\"Enter\"||K.key===\n\" \")&&I()&&K.preventDefault()},role:h?void 0:\"button\",tabIndex:h?void 0:0,...d},h&&A.createElement(A.Fragment,null,A.createElement(\"div\",{className:\"box-border min-w-0 mb-2 px-3 py-2 bg-muted text-foreground rounded text-sm break-words whitespace-pre-line\"},\"\\u26a0\\ufe0f Failed to render Mermaid diagram: \",h),A.createElement(\"div\",{className:\"relative whitespace-pre-wrap word-break-all p-3 my-2 rounded-sm bg-muted\"},A.createElement(NE,{value:b}))),A.createElement(\"img\",{ref:f,alt:\"Mermaid diagram\"})),\nA.createElement(IE,{isOpen:l,onClose:F,className:\"!max-w-fit !bg-transparent !p-0 overflow-hidden\",innerContentClassName:\"!overflow-hidden\"},A.createElement(\"div\",{ref:z,\"data-testid\":\"mermaid-lightbox-viewport\",onMouseDown:E,style:{backgroundColor:a(c).bg},className:`relative flex h-[85vh] w-[90vw] select-none items-center justify-center overflow-hidden rounded-xl bg-card ${n>1?t?\"cursor-grabbing\":\"cursor-grab\":\"cursor-default\"}`},A.createElement(\"div\",{\"data-testid\":\"mermaid-lightbox-toolbar\",onClick:K=>\n{K.stopPropagation()},onMouseDown:K=>{K.stopPropagation()},className:\"absolute right-3 top-3 z-10 flex items-center gap-1\"},A.createElement(\"div\",{className:\"flex h-8 items-center gap-0.5 rounded-lg border border-border px-1\"},A.createElement(lA,{variant:\"ghost\",size:\"icon\",\"data-testid\":\"mermaid-lightbox-zoom-out\",\"aria-label\":\"Zoom out\",title:\"Zoom out (-)\",disabled:n<=.25,onClick:D,className:\"!text-foreground\"},A.createElement(Z,{name:\"remove\",size:16})),A.createElement(lA,{variant:\"ghost\",size:\"xs\",\n\"data-testid\":\"mermaid-lightbox-zoom-reset\",\"aria-label\":\"Reset zoom\",title:\"Reset zoom (0)\",onClick:x,className:\"min-w-[48px] tabular-nums !text-foreground\"},Math.round(n*100),\"%\"),A.createElement(lA,{variant:\"ghost\",size:\"icon\",\"data-testid\":\"mermaid-lightbox-zoom-in\",\"aria-label\":\"Zoom in\",title:\"Zoom in (+)\",disabled:n>=5,onClick:C,className:\"!text-foreground\"},A.createElement(Z,{name:\"add\",size:16}))),A.createElement(lA,{variant:\"ghost\",size:\"custom\",\"data-testid\":\"mermaid-lightbox-download\",\n\"aria-label\":\"Download SVG\",title:\"Download SVG\",onClick:H,className:\"h-8 w-8 shrink-0 rounded-lg !text-foreground\"},A.createElement(Z,{name:\"download\",size:16})),A.createElement(lA,{variant:\"ghost\",size:\"custom\",\"data-testid\":\"mermaid-lightbox-close\",\"aria-label\":\"Close\",title:\"Close (Esc)\",onClick:F,className:\"h-8 w-8 shrink-0 rounded-lg !text-foreground\"},A.createElement(Z,{name:\"close\",size:16}))),A.createElement(\"img\",{\"data-testid\":\"mermaid-lightbox-image\",src:f.current?.src||\"\",alt:\"Enlarged Mermaid diagram\",\ndraggable:!1,style:{transform:`translate(${q.x}px, ${q.y}px) scale(${n})`,transformOrigin:\"center center\"},className:\"max-h-[85vh] max-w-[90vw] rounded-md object-contain\"}))))}}(a=>{switch(a){case \"dark\":return{bg:\"#18181B\",fg:\"#F4F4F5\",line:\"#71717A\",muted:\"#A1A1AA\",surface:\"#27272A\",border:\"#3F3F46\"};default:return{bg:\"#FFFFFF\",fg:\"#1E293B\",line:\"#64748B\",muted:\"#475569\",surface:\"#F8FAFC\",border:\"#CBD5E1\"}}});var ctb=()=>{var a=(0,A.useContext)(atb);if(!a)throw Error(\"MermaidDiagramComponent not found\");return a.MermaidDiagramComponent};var mermaidNativeRegistration=()=>({MermaidDiagramComponent:pVc});");
+  const original=f.window.ctb,originalView=f.evaluate('pVc');f.evaluate('fixtureMermaidContext={MermaidDiagramComponent:pVc}');
+  const adapters=f.install(),view=f.window.ctb();
+  assert.notEqual(view,originalView);assert.equal(view,f.window.ctb());
+  const code='graph TD; No_answer_provided-->Requested_changes',props={code,theme:'dark','data-original':'raw'};
+  f.window.mermaidStateIndex=0;const before=f.window.mermaidHooks,result=view(props),hooks=f.window.mermaidHooks-before;
+  f.window.mermaidStateIndex=0;const nativeBefore=f.window.mermaidHooks;originalView(props);assert.equal(hooks,f.window.mermaidHooks-nativeBefore,'the original Hook sequence runs once');
+  const wrapper=result.props.children[0],failure=wrapper.props.children[0].props.children[0],codeElement=wrapper.props.children[0].props.children[1].props.children;
+  assert.equal(failure.props.children[0],'⚠️ Mermaid 图表渲染失败：');assert.equal(failure.props.children[1],f.window.rawMermaidError);
+  assert.equal(failure.props['data-ch-keep'],true);assert.equal(codeElement.props.value,code);assert.equal(wrapper.props['data-original'],'raw');
+  f.uninstall()();assert.equal(f.window.ctb,original);assert.equal(f.window.ctb(),originalView);
+  f.window.mermaidStateIndex=0;assert.equal(view(props).props.children[0].props.children[0].props.children[0].props.children[0],'⚠️ Failed to render Mermaid diagram: ');
+});
+
+
+test('sidecar trust warning translates native callback copy while retaining markdown links, ids and operations', async () => {
+  const f=nativeFixture();f.window.eval=code=>f.evaluate(code);
+  f.evaluate(`var e=value=>value,wg={SIDECAR_TOGGLE_ENABLED:'toggle'},xg={SIDECAR_TOGGLE_FAILED:'toggle-failed'},J_=()=>({});`);
+  f.evaluate("var sidecarTrust=function sidecarTrust({sidecar,notifications,operations}){\n var k=[sidecar],c=()=>true,d=value=>notifications.push(value),g=()=>{},f=()=>{},a='automation';\n var b={setSidecarEnabled:async(id,enabled)=>operations.push([id,enabled])};\n const toggle=async(Y,W)=>{var ca=e,da=e;try{let fa=k.find(X=>X.sidecarId===Y),ea=!!fa&&!!fa.pluginPath;if(ea||b?.setSidecarEnabled){var pa=!W;W||fa&&c(fa)&&d?.({title:\"This sidecar runs from a path that is not officially supported. Make sure your code is in a trusted location in google3.\",\nmessage:\"See [go/jetski-agent-sidecars#trusted-locations](http://go/jetski-agent-sidecars#trusted-locations).\",tag:`untrusted-sidecar-warning-${Y}`,isMarkdown:!0,plainTextFallback:\"See go/jetski-agent-sidecars#trusted-locations.\"});try{g(wg.SIDECAR_TOGGLE_ENABLED,\"sidecar_toggle_switch\",{extra:{...(fa?J_(fa):{sidecar_id:Y}),dashboard_type:a,enabled:String(pa)}}),fa&&ea?da(await ca(b?.setPluginSidecarEnabled?.(fa,pa))):da(await ca(b?.setSidecarEnabled(Y,pa)))}catch(X){da(),f(xg.SIDECAR_TOGGLE_FAILED,\nX)}}}finally{ca()}};return A.createElement('button',{onClick:()=>toggle(sidecar.sidecarId,false)},'Enable');\n};");
+  const original=f.window.sidecarTrust,adapters=f.install(),notifications=[],operations=[];
+  const sidecar=Object.freeze({sidecarId:'my $& sidecar',config:{displayName:'See go/jetski-agent-sidecars#trusted-locations.'}});
+  const props={sidecar,notifications,operations};const button=f.window.sidecarTrust(props),callback=button.props.onClick;
+  await callback();
+  assert.equal(notifications[0].title,'此辅助任务从官方不支持的路径运行。请确保代码位于 google3 中的可信位置。');
+  assert.equal(notifications[0].message,'请参阅 [go/jetski-agent-sidecars#trusted-locations](http://go/jetski-agent-sidecars#trusted-locations)。');
+  assert.equal(notifications[0].plainTextFallback,'请参阅 go/jetski-agent-sidecars#trusted-locations。');
+  assert.equal(notifications[0].isMarkdown,true);assert.equal(notifications[0].tag,'untrusted-sidecar-warning-'+sidecar.sidecarId);
+  assert.equal(operations.length,1);assert.equal(operations[0][0],sidecar.sidecarId);assert.equal(operations[0][1],true);assert.equal(sidecar.config.displayName,'See go/jetski-agent-sidecars#trusted-locations.');
+  f.uninstall()();assert.equal(f.window.sidecarTrust,original);
+  await callback();assert.equal(notifications[1].message,'See [go/jetski-agent-sidecars#trusted-locations](http://go/jetski-agent-sidecars#trusted-locations).','saved native callback returns to English after uninstall');
+});
+
+
+test('current URL permission choices preserve the edited target and native decision fields in every scope', () => {
+  const f=nativeFixture();
+  f.window.eval=source=>f.evaluate(source);
+  f.evaluate(`
+    var permissionState={hooks:0,stateIndex:0,effects:[],projectId:'project-id',rawDetails:true,original:null,editedTarget:undefined};
+    A.useState=value=>{permissionState.hooks++;if(permissionState.stateIndex++===0&&permissionState.editedTarget!==undefined)value=permissionState.editedTarget;return [value,()=>{}]};
+    A.useMemo=fn=>{permissionState.hooks++;return fn()};A.useCallback=fn=>{permissionState.hooks++;return fn};
+    A.useContext=()=>{permissionState.hooks++;return null};A.useEffect=fn=>{permissionState.hooks++;permissionState.effects.push(fn)};
+    var J={PermissionInteractionSpec_PersistSuggestionType:{BLOCKED:1,SUGGESTED:2},PermissionScope:{ONCE:1,CONVERSATION:2,PROJECT:3,GLOBAL:4,WORKSPACE:5},
+      PermissionInteractionSpec_TriggerSource_Type:{EFFECTIVE_GRANT:1,FORCE_ASK_HOOK:2},AskQuestionEntrySchema:{},AskQuestionOptionSchema:{}};
+    var B={PermissionGrantsConfigSchema:{}},Vb=(schema,value)=>({...value});
+    var GZ=()=>({sendInteraction:()=>{throw Error('no permission action expected')}}),CF=()=>({logEvent:()=>{}});
+    var bC=()=>({stepHandler:{projectId:permissionState.projectId},tokenizationService:{}}),Fj=()=>({get:()=>({isEnabled:permissionState.rawDetails})});
+    var Dl=()=>({getProjectStateProvider:()=>({})}),sl=()=>({projectSettingsProvider:{}}),pl=()=>({project:{isWorkspaceOnly:false}});
+    var $sc=()=>undefined,Fm=()=>{throw Error('no effect expected')},NZ=()=>null,Zsc=()=>null,Z=()=>null,MZ=()=>null;
+    const Wsc={read_file:'read access to this path',write_file:'write access to this path',read_url:'reading this URL',execute_url:'executing actions on this URL',command:'running this command',unsandboxed:'running this command outside the sandbox',mcp:'using this MCP tool',escalate_admin:'a one-time administrator (UAC) elevation'};
+    const permissionCreateElement=A.createElement;
+    A.createElement=(type,props,...children)=>{const element=permissionCreateElement(type,props,...children);if(type===MZ)permissionState.original=element;return element};
+  `);
+  // Current atc URL-specific branch and its native question formatter.
+  f.evaluate("var Xsc=(a,b,c,d={})=>{if((c=c?.trim())&&(a===\"command\"||a===\"unsandboxed\"||a===\"custom\")){if(d.verbatim&&!b)return c;a=c.charAt(0).toLowerCase()+c.slice(1);a.endsWith(\".\")&&(a=a.slice(0,-1));return b?`Save rule to always allow ${a}?`:`Allow ${a}?`}a=Wsc[a]??\"access to this resource\";return b?`Save rule to always allow ${a}?`:`Allow ${a}?`};var atc=({permissionSpec:a,trajectoryId:b,stepIndex:c,cascadeId:d,toolName:f})=>{var g=a.resource,{sendInteraction:h}=GZ(),{logEvent:k}=CF(),{stepHandler:l,tokenizationService:m}=bC(),n=Fj(),q=Dl(),r=n.get(\"rawCommandDetails\")?.isEnabled??!0,t=sl(),u=l?.projectId;n=u?q.getProjectStateProvider(u):void 0;var v=pl(n)?.project?.isWorkspaceOnly??!1,w=f===\"ask_permission\"||f===\"ask_custom_permission\",[x,y]=(0,A.useState)(g?.target),[z,C]=(0,A.useState)(!1);f=a.persistSuggestionType;var D=a.suggestedPersistPattern,\nE=f===J.PermissionInteractionSpec_PersistSuggestionType.BLOCKED,F=f===J.PermissionInteractionSpec_PersistSuggestionType.SUGGESTED,G=g?.action===\"execute_url\",H=G?(x??g.target).trim():x,I=(0,A.useMemo)(()=>g?`${g.action}(${H})`:\"\",[g,H]),K=(0,A.useMemo)(()=>g&&F&&D?`${g.action}(${D})`:I,[g,D,F,I]),L=g?.action===\"command\"||g?.action===\"unsandboxed\";f=$sc({cascadeId:d,commandLine:L?g?.target:void 0,shellName:a.shellName});var M=x===g?.target?f:void 0,N;L&&(N=f===void 0?\"pending\":\"settled\");f=(0,A.useMemo)(()=>\n{if(!g)return null;var la=Xsc(g.action,w,a.actionDescription,{verbatim:!!M});return A.createElement(\"div\",{className:\"flex flex-col gap-0.5 w-full min-w-0 pb-1\",\"data-command-plugin-state\":N},M&&A.createElement(\"span\",{className:\"text-xs font-medium text-secondary-foreground animate-in fade-in duration-200\",\"data-testid\":\"permission-app-header\"},M.displayName||M.name),A.createElement(\"span\",{className:\"text-sm font-medium text-foreground min-w-0 break-words\"},la))},[g,w,a.actionDescription,M,N]);\nvar O=r||!L||!a.actionDescription?.trim();n=(0,A.useMemo)(()=>{var la=g?.action===\"unsandboxed\",ta=g?.action===\"custom\",Ba=g?.action===\"escalate_admin\",ra=A.createElement(\"div\",{className:\"grid min-w-0 w-full rounded-lg bg-muted max-h-32 overflow-y-auto\"},A.createElement(\"pre\",{\"aria-hidden\":\"true\",className:\"col-start-1 row-start-1 m-0 min-w-0 w-full px-2.5 py-1.5 font-mono text-xs text-foreground whitespace-pre-wrap break-all pointer-events-none\"},L?A.createElement(NZ,{commandLine:x??\"\",shellName:a.shellName||\nvoid 0,tokenizationService:m}):x,x?.endsWith(\"\\n\")?\" \":null),A.createElement(\"textarea\",{value:x??\"\",onChange:ha=>{y(ha.target.value)},onKeyDown:ha=>{ha.key===\"Enter\"&&ha.preventDefault()},rows:1,spellCheck:!1,\"data-testid\":\"permission-target-editor\",className:\"col-start-1 row-start-1 min-w-0 w-full h-full px-2.5 py-1.5 font-mono text-xs bg-transparent border-none text-transparent caret-foreground focus:outline-none no-focus-ring resize-none overflow-hidden break-all\",\"aria-label\":\"Edit permission target\"}));\nreturn A.createElement(\"div\",{className:\"flex flex-col gap-1 px-1 w-full\"},a.reason&&A.createElement(\"p\",{className:\"px-1 pb-0.5 text-xs text-secondary-foreground leading-relaxed\"},a.reason),la&&A.createElement(\"div\",{className:\"flex items-center gap-2 px-1 text-xs text-amber-500\"},A.createElement(\"span\",{className:\"shrink-0 flex items-center justify-center w-4\"},\"\\u26a0\\ufe0f\"),A.createElement(\"span\",{className:\"leading-relaxed truncate block\"},\"Confirm the command is safe to run outside of the sandbox with full network and disk access.\")),\n!ta&&!Ba&&(O?ra:A.createElement(\"div\",{className:\"flex flex-col gap-1 w-full\"},A.createElement(\"button\",{type:\"button\",onClick:()=>C(ha=>!ha),\"aria-expanded\":z,\"data-testid\":\"permission-details-toggle\",className:\"flex items-center gap-0.5 px-1 text-xs text-secondary-foreground hover:text-foreground transition-colors cursor-pointer select-none w-fit\"},A.createElement(Z,{name:\"chevron_right\",className:`h-3.5 w-3.5 shrink-0 transition-transform duration-200 ${z?\"rotate-90\":\"\"}`}),A.createElement(\"span\",\nnull,\"Show details\")),z&&ra)))},[g,L,x,a.reason,a.shellName,m,O,z]);(0,A.useEffect)(()=>{if(g){var la=g.action===\"escalate_admin\"?\"Requesting a one-time administrator (UAC) elevation\":`Requesting permission to ${(Vsc[g.action]??\"Access\").toLowerCase()} ${g.target}`;Fm(la);Q([\"1\"]);S(\"\");W(!1);y(g.target);C(!1)}},[g]);var [P,R]=(0,A.useState)([\"1\"]),Q=R,[V,T]=(0,A.useState)(\"\"),S=T,[U,Y]=(0,A.useState)(!1),W=Y,{entry:ca,idToScopeMap:da}=(0,A.useMemo)(()=>{var la=[],ta=new Map;if(!g)return{entry:Vb(J.AskQuestionEntrySchema,\n{question:\"\",options:[],isMultiSelect:!1}),idToScopeMap:ta};var Ba=1,ra=a.approvalScopeFilter,ha=(xa,ia)=>{if(ia===J.PermissionScope.ONCE||!ra?.length||ra.includes(ia))la.push(Vb(J.AskQuestionOptionSchema,{id:String(Ba),text:xa})),ta.set(String(Ba),ia),Ba++},oa=g.action===\"escalate_admin\",wa=G?H??\"\":\"\",ua=F&&r?D:\"\";w||(oa?ha(\"Yes, allow\",J.PermissionScope.ONCE):ha(\"Yes, allow this time\",J.PermissionScope.ONCE));E||oa||(g.action!==\"custom\"&&ha(w?ua?`Yes, save rule for '${ua}' in this conversation`:\n\"Yes, save rule in this conversation\":G&&wa?`Yes, allow ${wa} in this conversation`:ua?`Yes, and always allow '${ua}' in this conversation`:\"Yes, and always allow in this conversation\",J.PermissionScope.CONVERSATION),t?.projectSettingsProvider&&u&&!v&&(oa=u===\"outside-of-project\"?\"when not in a project\":\"in this project\",ha(w?ua?`Yes, save rule for '${ua}' ${oa}`:`Yes, save rule ${oa}`:G&&wa?`Yes, always allow ${wa} ${oa}`:ua?`Yes, and always allow '${ua}' ${oa}`:`Yes, and always allow ${oa}`,J.PermissionScope.PROJECT)),\nha(w?ua?`Yes, save rule for '${ua}' globally`:\"Yes, save rule globally\":G&&wa?`Yes, always allow ${wa}`:ua?`Yes, and always allow '${ua}'`:\"Yes, and always allow\",J.PermissionScope.GLOBAL));return{entry:Vb(J.AskQuestionEntrySchema,{question:I,options:la,isMultiSelect:!1}),idToScopeMap:ta}},[I,g,G,H,t,u,w,E,F,D,r,v,a.approvalScopeFilter]);q=(0,A.useMemo)(()=>P.filter(la=>da.has(la)),[P,da]);var pa=(0,A.useMemo)(()=>{var la=new Map,ta=a.triggerSource,Ba;ta?.type===J.PermissionInteractionSpec_TriggerSource_Type.EFFECTIVE_GRANT&&\nta.detail?Ba=`Conflicts with your configured Ask permission: ${ta.detail}`:ta?.type===J.PermissionInteractionSpec_TriggerSource_Type.FORCE_ASK_HOOK&&(Ba=ta.detail?`Requires manual confirmation: ${ta.detail}`:\"Requires manual confirmation.\");if(Ba)for(let [ra,ha]of da.entries())ta=ra,ha!==J.PermissionScope.ONCE&&la.set(ta,Ba);return la},[a.triggerSource,da]),fa=(0,A.useCallback)(async(la,ta=\"\")=>{var Ba=e,ra=e;try{if(g){var ha=J.PermissionScope.ONCE;if(la&&!U){var oa=da.get(P[0]);if(oa===void 0)return;\nha=oa}var wa=H!==g.target?H:void 0;oa=ha;var ua=ha===J.PermissionScope.GLOBAL||ha===J.PermissionScope.PROJECT||ha===J.PermissionScope.WORKSPACE||ha===J.PermissionScope.CONVERSATION?K:I;var xa=ua&&oa!==J.PermissionScope.ONCE?Vb(B.PermissionGrantsConfigSchema,{allow:la?[ua]:[],deny:la?[]:[ua]}):void 0;ua=\"ONCE\";ha===J.PermissionScope.GLOBAL?ua=\"GLOBAL\":ha===J.PermissionScope.PROJECT?ua=\"PROJECT\":ha===J.PermissionScope.WORKSPACE?ua=\"WORKSPACE\":ha===J.PermissionScope.CONVERSATION&&(ua=\"CONVERSATION\");\nk(\"permission_decision\",{extra:{allow:la.toString(),scope:ua}});ra(await Ba(h(d,b,c,{case:\"permission\",value:Vb(J.PermissionInteractionSchema,{allow:la,scope:ha,userDenyInstruction:ta,persistGrants:xa,editedTarget:wa})})))}}finally{Ba()}},[g,U,da,P,I,K,h,d,b,c,H,k]),ea=(0,A.useCallback)(()=>{U?fa(!1,V):fa(!0)},[fa,U,V]),X=(0,A.useCallback)(()=>{fa(!1)},[fa]),ja=(0,A.useCallback)(()=>{fa(!1)},[fa]);return g?A.createElement(MZ,{questions:[ca],questionNodes:[f],headerIcon:M&&A.createElement(Zsc,{name:M.name,\nlogo:M.logo,size:18}),headerInputSlot:n,toolName:\"ask_permission\",permissionAction:g?.action,selections:[q],writeIns:[V],clampedIdx:0,count:1,handlePrev:()=>{},handleNext:()=>{},handleSubmit:ea,handleSkip:X,handleSkipAll:ja,animationKey:0,onToggle:la=>{Q([la]);U&&W(!1)},onClearSelections:()=>{Q([])},onWriteInChange:S,onWriteInActiveChange:W,onNextNoWrap:()=>{},writeInActive:()=>U,writeInLabel:\"No\",writeInPlaceholder:\"(tell the agent what to do instead)\",disabledOptionIds:pa}):null};");
+  const originalView=f.window.atc,originalQuestion=f.window.Xsc,adapters=f.install();
+  const target='  https://example.test/a(b)?q=Overview  $&\n/Case  ',normalized=target.trim();
+  const spec=Object.freeze({resource:Object.freeze({action:'execute_url',target}),persistSuggestionType:0,reason:'Overview'});
+  const input=Object.freeze({permissionSpec:spec,trajectoryId:'trajectory-id',stepIndex:7,cascadeId:'cascade-id',toolName:'browser_interact'});
+  const render=value=>{f.window.permissionState.hooks=0;f.window.permissionState.stateIndex=0;return f.window.atc(value)};
+  const expected=value=>['是，仅允许这一次',`是，允许 ${value}（仅此对话）`,`是，始终允许 ${value}（仅此项目）`,`是，始终允许 ${value}（全局）`];
+  let result=render(input),raw=f.window.permissionState.original;
+  assert.deepEqual(Array.from(result.props.questions[0].options,o=>o.text),expected(normalized));
+  assert.equal(result.props.questions[0].question,`execute_url(${normalized})`);
+  assert.equal(raw.props.questions[0].options[1].text,`Yes, allow ${normalized} in this conversation`);
+  assert.deepEqual(Array.from(result.props.questions[0].options,o=>o.id),Array.from(raw.props.questions[0].options,o=>o.id));
+  for(const key of ['handleSubmit','handleSkip','handleSkipAll','onToggle','onWriteInChange'])assert.equal(result.props[key],raw.props[key]);
+  assert.equal(spec.resource.target,target);
+  const hooks=f.window.permissionState.hooks;f.window.permissionState.hooks=0;f.window.permissionState.stateIndex=0;originalView(input);
+  assert.equal(f.window.permissionState.hooks,hooks,'native Hooks execute once');
+  const edited='https://example.test/path in this project';f.window.permissionState.editedTarget=edited;
+  result=render(input);assert.deepEqual(Array.from(result.props.questions[0].options,o=>o.text),expected(edited));
+  assert.equal(result.props.questions[0].question,`execute_url(${edited})`);assert.equal(spec.resource.target,target);
+  f.window.permissionState.projectId='outside-of-project';
+  assert.equal(render(input).props.questions[0].options[2].text,`是，始终允许 ${edited}（未打开项目时）`);
+  const saving=render({...input,toolName:'ask_permission'});
+  assert.deepEqual(Array.from(saving.props.questions[0].options,o=>o.text),['是，保存规则（仅此对话）','是，保存规则（未打开项目时）','是，保存规则（全局）']);
+  adapters.setStrings({'permission-choice:allow-target':'允许访问 {target}'});
+  assert.equal(render(input).props.questions[0].options[1].text,`允许访问 ${edited}（仅此对话）`);
+  f.uninstall()();assert.equal(f.window.atc,originalView);assert.equal(f.window.Xsc,originalQuestion);
+});
+
+
+test('local and cloud connection states translate native fallbacks while same-name real accounts stay verbatim', () => {
+  const f=nativeFixture();
+  f.evaluate(`var stateHooks=0,nativeConnectionNode;A.useState=value=>{stateHooks++;return [value,()=>{}]};
+    var lA=()=>null,O5b=()=>null,P5b=()=>null,T4b=()=>null;
+    const nativeElement=A.createElement;
+    A.createElement=(type,props,...children)=>{const node=nativeElement(type,props,...children);if(type===P5b)nativeConnectionNode=node;return node};`);
+  f.evaluate("function M5b({name:a,connections:b,onInstall:c}){var d=b.local,f=b.pendingLocalSignIn,g=b.signInLocal,h=b.submitLocalCode,k=b.signOutLocal,[l,m]=(0,A.useState)(\"\");b=\"Not installed here\";d&&(b=d.connected?d.account||\"Signed in\":f?\"Finish signing in in your browser\":\"Not signed in\");a=d?d.connected?A.createElement(O5b,{label:`${a} on this computer`,onDisconnect:()=>{k()}}):f?.paste?A.createElement(\"div\",{className:\"flex flex-wrap items-center gap-2\"},A.createElement(T4b,{label:a,value:l,disabled:!1,\nonChange:m,onSubmit:()=>{h(l).then(n=>{n&&m(\"\")})}}),A.createElement(lA,{size:\"xs\",variant:\"secondary\",\"aria-label\":`Sign in to ${a} on this computer`,onClick:()=>{m(\"\");g()}},\"Restart sign-in\")):A.createElement(lA,{size:\"xs\",variant:\"primary\",\"aria-label\":`Sign in to ${a} on this computer`,onClick:()=>{g()}},f?\"Restart sign-in\":\"Sign in\"):A.createElement(lA,{size:\"xs\",variant:\"secondary\",\"aria-label\":`Install ${a}`,onClick:c},\"Install\");return A.createElement(P5b,{icon:\"computer\",title:\"This Computer\",\nsubtitle:b,action:a,testId:\"plugin-connection-local\"})};function N5b({name:a,connected:b,account:c,onSignIn:d,onDisconnect:f}){return A.createElement(P5b,{icon:\"cloud\",title:\"Cloud\",subtitle:b?c||\"Signed in\":\"Not connected\",action:b?A.createElement(O5b,{label:`${a} in the cloud`,onDisconnect:f}):A.createElement(lA,{size:\"xs\",variant:\"primary\",\"aria-label\":`Sign in to ${a} in the cloud`,onClick:d},\"Sign in\"),testId:\"plugin-connection-cloud\"})}");
+  const originals={local:f.window.M5b,cloud:f.window.N5b},adapters=f.install();
+  const callbacks={signInLocal:()=>{},submitLocalCode:()=>{},signOutLocal:()=>{}};
+  const renderLocal=state=>{const before=f.window.stateHooks;const result=f.window.M5b({name:'Not signed in',connections:Object.freeze({...callbacks,...state}),onInstall:callbacks.signInLocal});assert.equal(f.window.stateHooks,before+1);assert.equal(result.props.action,f.window.nativeConnectionNode.props.action);return result};
+  const subtitle=node=>node.props.subtitle.props.children;
+  assert.equal(subtitle(renderLocal({local:null})),'尚未在此电脑安装');
+  assert.equal(subtitle(renderLocal({local:{connected:false},pendingLocalSignIn:null})),'尚未登录');
+  assert.equal(subtitle(renderLocal({local:{connected:false},pendingLocalSignIn:{paste:false}})),'请在浏览器中完成登录');
+  assert.equal(subtitle(renderLocal({local:{connected:true,account:''}})),'已登录');
+  const supplied=Object.freeze({connected:true,account:'Not signed in'});
+  const local=renderLocal({local:supplied});assert.equal(subtitle(local),'Not signed in');assert.equal(local.props.subtitle.props['data-ch-keep'],true);
+  assert.equal(local.props.action.props.label,'Not signed in on this computer');assert.equal(supplied.account,'Not signed in');
+  const cloudInput={name:'Signed in',connected:true,account:'Signed in',onSignIn:callbacks.signInLocal,onDisconnect:callbacks.signOutLocal};
+  const cloud=f.window.N5b(cloudInput);assert.equal(subtitle(cloud),'Signed in');assert.equal(cloud.props.subtitle.props['data-ch-keep'],true);
+  assert.equal(cloud.props.action,f.window.nativeConnectionNode.props.action);assert.equal(cloud.props.action.props.onDisconnect,callbacks.signOutLocal);
+  assert.equal(subtitle(f.window.N5b({...cloudInput,account:''})),'已登录');
+  assert.equal(subtitle(f.window.N5b({...cloudInput,connected:false})),'尚未连接');
+  adapters.setStrings({'plugin-connection:signed-in':'已认证'});
+  assert.equal(subtitle(renderLocal({local:{connected:true,account:''}})),'已认证');assert.equal(subtitle(f.window.N5b({...cloudInput,account:''})),'已认证');
+  f.uninstall()();assert.equal(f.window.M5b,originals.local);assert.equal(f.window.N5b,originals.cloud);
+  assert.equal(f.window.N5b({...cloudInput,account:''}).props.subtitle,'Signed in');
+});
+
+
+test('native MCP defaults, provider prompts, canvas labels and missing entities preserve names and operation values', () => {
+  const f=nativeFixture();
+  f.evaluate(`A.useState=value=>[typeof value==='function'?value():value,()=>{}];
+    A.useMemo=callback=>callback();A.useCallback=callback=>callback;
+    var J={McpServerStatus:{DISABLED_BY_ADMIN:9}},LR=()=>null,Akb=()=>null,jjb=()=>null;
+    var lA=()=>null,Z=()=>null,iA=()=>null,IE=()=>null,jD=()=>null;
+    var Qv=()=>()=>{},canvasOwner=true,kGb=()=>canvasOwner;
+    var toggleCalls=[],toggle=(name,value)=>toggleCalls.push([name,value]);`);
+  // Current native owners; mock Hooks retain their original render sequence.
+  f.evaluate("var Bkb=({mcpStates:a,expandedServers:b,onExpandedChange:c,onToggle:d,onDelete:f,onToolToggle:g,onAuthorize:h,onSubmitAuthCode:k,onDisconnect:l,allowedServerNames:m})=>{var [n,q]=(0,A.useState)({}),[r,t]=(0,A.useState)(new Set);if(a.length===0)return null;var u=v=>{var w=n[v]?.trim();w&&(k?.(v,w),q(x=>({...x,[v]:\"\"})),t(x=>{x=new Set(x);x.delete(v);return x}))};return A.createElement(\"div\",{className:\"border border-border rounded-xl overflow-hidden divide-y divide-default\"},a.map((v,w)=>{var x=v.spec?.serverName||\n\"Unknown Server\",y=(!m||m.includes(x))&&v.status!==J.McpServerStatus.DISABLED_BY_ADMIN,z=!v.spec?.disabled&&y,C=b.has(x),D=v.spec?.disabledTools||[],E=v.tools.length-D.length;w=w===a.length-1;C=y?A.createElement(A.Fragment,null,r.has(x)&&A.createElement(\"div\",{className:\"flex items-center gap-1.5 mt-1 w-full\"},A.createElement(\"input\",{type:\"text\",placeholder:\"Paste auth code\",\"aria-label\":`Auth code for ${x}`,value:n[x]||\"\",onChange:F=>{var G=F.target.value;q(H=>({...H,[x]:G}))},onKeyDown:F=>{F.key===\n\"Enter\"&&u(x)},className:\"text-foreground placeholder:text-placeholder focus:outline-none transition-all border bg-muted\",style:{fontSize:\"12px\",borderRadius:\"4px\",padding:\"4px 8px\",flex:1},autoFocus:!0}),A.createElement(\"button\",{type:\"button\",onClick:()=>u(x),disabled:!n[x]?.trim(),className:\"text-xs px-2 py-1 rounded border bg-muted hover:bg-secondary transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0\"},\"Submit\")),v.tools.length>0&&A.createElement(\"button\",{type:\"button\",\n\"aria-expanded\":C,onClick:F=>{F.preventDefault();F.stopPropagation();F=new Set(b);F.has(x)?F.delete(x):F.add(x);c(F)},className:\"flex items-center gap-1 text-xs text-secondary-foreground hover:text-foreground transition-opacity cursor-pointer\"},C?A.createElement(Z,{name:\"keyboard_arrow_down\",className:\"w-3 h-3\"}):A.createElement(Z,{name:\"chevron_right\",className:\"w-3 h-3\"}),z?`${E} tool${E!==1?\"s\":\"\"} enabled`:`${v.tools.length} tool${v.tools.length!==1?\"s\":\"\"} disabled`),v.error&&A.createElement(\"div\",\n{className:\"text-xs text-red-500 break-words\"},\"Error: \",v.error),C&&v.tools.length>0&&A.createElement(\"div\",{className:\"flex flex-wrap gap-1.5 mt-1\"},v.tools.map(F=>{var G=!D.includes(F.name);if(!g)return A.createElement(\"span\",{key:F.name,className:`\n                          px-2 py-1 rounded border\n                          ${G&&z?\"border-border bg-muted\":\"border-border bg-transparent text-muted-foreground\"}\n                        `,style:{fontSize:\"10px\"}},F.name);var H=y?G?\"Click to disable tool\":\"Click to enable tool\":\"Blocked by organization policy\",I=`tool-${x}-${F.name}`;return A.createElement(\"span\",{key:F.name,\"data-tooltip-id\":I},A.createElement(\"button\",{type:\"button\",\"aria-label\":`${G?\"Disable\":\"Enable\"} ${F.name} tool for ${x}`,\"aria-pressed\":G,onClick:K=>{K.preventDefault();K.stopPropagation();y&&g(x,F.name,!G)},disabled:!z,className:`\n                          px-2 py-1 rounded border transition-all cursor-pointer\n                          ${G&&z?\"border-border bg-muted hover:bg-secondary hover:border-border\":\"border-border bg-transparent text-muted-foreground\"}\n                          ${z?\"\":\"cursor-not-allowed\"}\n                        `,style:{fontSize:\"10px\"}},F.name),A.createElement(iA,{id:I},H))}))):A.createElement(\"div\",{className:\"flex items-center gap-1 text-xs text-muted-foreground mt-1\"},A.createElement(Z,{name:\"lock\",className:\"w-3.5 h-3.5\"}),\"Blocked by organization policy\");return A.createElement(LR,{key:x,name:x,disabled:!z&&y,adminDisabled:!y,disabledReason:y?void 0:\"Blocked by organization policy\",toggleTooltip:y?void 0:\"Blocked by organization policy\",badge:A.createElement(\"div\",{className:\"flex gap-1 items-center\"},\nv.spec?.pluginName&&A.createElement(jjb,{pluginName:v.spec.pluginName}),Akb(y?v.status:J.McpServerStatus.DISABLED_BY_ADMIN),v.authUrl&&y&&A.createElement(\"button\",{onClick:F=>{F.preventDefault();F.stopPropagation();h?.(v.authUrl);t(G=>{G=new Set(G);G.add(x);return G})},className:\"flex items-center gap-1.5 text-xs px-2 py-1 rounded border bg-muted hover:bg-secondary hover:border-border transition-all cursor-pointer\"},A.createElement(Z,{name:\"open_in_new\",className:\"w-3 h-3\"}),\"Authenticate\"),v.hasAuthToken&&\ny&&A.createElement(\"button\",{onClick:F=>{F.preventDefault();F.stopPropagation();window.confirm(\"Sign out of this server?\")&&l?.(x)},className:\"flex items-center gap-1.5 text-xs px-2 py-1 rounded border bg-muted hover:bg-secondary hover:border-border transition-all cursor-pointer\"},\"Sign out\")),isLast:w,onDelete:f?()=>f(x):void 0,deleteTitle:\"Delete server\",onToggle:d?()=>{y&&d(x,!z)}:void 0,toggleChecked:y?z:!1,toggleDisabled:!y,expandableContent:C})}))};\nvar tS=({template:a,command:b,title:c,description:d,variables:f,initialValues:g,confirmLabel:h=\"Install\",disableUntilChanged:k=!1,isOpen:l,onClose:m,onSave:n})=>{var q=Qv(),r=(0,A.useMemo)(()=>f?f:(b?.variables||[]).map(E=>({name:E.name,title:E.title,description:E.description,link:E.link})),[f,b?.variables]);a=c||(a?`Configure ${a.title}`:\"Configure MCP Server\");d=d||\"Enter the required configuration values to install this MCP server.\";var [t,u]=(0,A.useState)(()=>{var E={...g};r.forEach(F=>{E[F.name]===\nvoid 0&&(E[F.name]=\"\")});return E}),[v,w]=(0,A.useState)(!1),[x,y]=(0,A.useState)(null),z=r.every(E=>(t[E.name]??\"\")===(g?.[E.name]??\"\")),C=(0,A.useCallback)((E,F)=>{u(G=>({...G,[E]:F}));x&&y(null)},[x]);c=(0,A.useCallback)(async()=>{var E=e,F=e;try{if(!k||!z){var G=r.filter(H=>!t[H.name]?.trim());if(G.length>0)y(`Please fill in all required fields: ${G.map(H=>H.title).join(\", \")}`);else{w(!0);y(null);try{F(await E(n(t))),m()}catch(H){F();q(xg.MCP_SERVER_CONFIG_SAVE_FAILED,H);let I=qq(H);y(`Failed to save configuration: ${I}`);\nw(!1)}}}}finally{E()}},[r,t,k,z,n,m,q]);var D=(0,A.useCallback)(()=>{v||m()},[v,m]);return l?A.createElement(IE,{isOpen:l,onClose:D,onSubmit:c,title:a,className:\"max-w-[640px] rounded-xl bg-background\",innerContentClassName:\"px-1 -mx-1\"},A.createElement(\"div\",{className:\"flex flex-col gap-4\",\"data-testid\":\"mcp-config-modal\"},A.createElement(\"div\",{className:\"text-secondary-foreground text-xs select-none\"},d),x&&A.createElement(\"div\",{className:\"text-xs text-red-500 bg-red-500/10 p-2 rounded\"},x),\nA.createElement(\"div\",{className:\"flex flex-col gap-3 max-h-96 overflow-y-auto p-1.5 -my-1.5\"},r.map(E=>A.createElement(\"div\",{key:E.name,className:\"flex flex-col gap-1\",\"data-testid\":\"mcp-config-variable\",\"data-variable-name\":E.name},A.createElement(\"div\",{className:\"flex items-center gap-1\"},A.createElement(\"label\",{htmlFor:`mcp-var-${E.name}`,className:\"text-xs font-semibold text-foreground\"},E.title),E.link&&A.createElement(\"a\",{href:E.link,target:\"_blank\",rel:\"noopener noreferrer\",className:\"text-primary hover:opacity-80 transition-all\",\ntitle:\"Learn more\"},A.createElement(Z,{name:\"open_in_new\",className:\"w-3 h-3\"}))),E.description&&A.createElement(\"span\",{className:\"text-xs text-muted-foreground\"},E.description),A.createElement(\"input\",{id:`mcp-var-${E.name}`,type:\"text\",\"data-testid\":\"mcp-config-variable-input\",value:t[E.name]||\"\",placeholder:E.title,onChange:F=>C(E.name,F.currentTarget.value),disabled:v,className:\"w-full rounded-lg border border-border bg-transparent px-2.5 h-8 text-sm text-foreground placeholder:text-placeholder focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50\"})))),\nA.createElement(\"div\",{className:\"flex items-center justify-end gap-3 mt-4\"},A.createElement(lA,{size:\"md\",variant:\"muted\",onClick:D,disabled:v},\"Cancel\"),A.createElement(lA,{size:\"md\",variant:\"primary\",onClick:c,disabled:v||k&&z,\"data-testid\":\"mcp-config-confirm\",className:\"flex items-center gap-1\"},v?A.createElement(A.Fragment,null,A.createElement(jD,{className:\"w-3 h-3\"}),h===\"Enable\"?\"Enabling...\":h===\"Install\"?\"Installing...\":\"Saving...\"):h)))):null};\nvar wmb=({displayName:a,isLoading:b,needsConnect:c,canConnect:d,onBack:f,onRefresh:g,onConnect:h,testId:k,\nbackButtonTestId:l,connectButtonTestId:m,retryButtonTestId:n,children:q})=>A.createElement(\"div\",{className:\"flex flex-col p-2 gap-2 w-full max-h-96\",\"data-testid\":k},A.createElement(\"div\",{className:\"flex items-center justify-between gap-1 pb-1 border-b border-border\"},A.createElement(lA,{type:\"button\",variant:\"ghost\",size:\"icon\",onClick:f,\"data-testid\":l,className:\"h-6 w-6\",tooltip:\"Back\",\"aria-label\":\"Back\"},A.createElement(Z,{name:\"arrow_back\",size:16})),A.createElement(\"span\",{className:\"text-xs font-medium flex-1 text-center\"},\n\"Add \",a,\" resources\"),A.createElement(lA,{type:\"button\",variant:\"ghost\",size:\"icon\",onClick:g,disabled:b,className:\"h-6 w-6\",tooltip:\"Refresh\",\"aria-label\":\"Refresh\"},A.createElement(Z,{name:\"refresh\",size:16,className:b?\"animate-spin\":\"\"}))),b?A.createElement(\"div\",{className:\"flex items-center justify-center py-6 text-xs text-muted-foreground\"},A.createElement(jD,{size:16,className:\"mr-1.5\"}),\"Loading resources...\"):c?A.createElement(\"div\",{className:\"flex flex-col items-center gap-2 py-2 text-center\"},\nA.createElement(\"span\",{className:\"text-xs text-muted-foreground\"},\"Connect your account to browse \",a,\".\"),A.createElement(\"div\",{className:\"flex items-center gap-2\"},d&&A.createElement(lA,{type:\"button\",variant:\"primary\",size:\"sm\",\"data-testid\":m,onClick:h,className:\"text-xs h-7 px-2.5\"},\"Connect\"),A.createElement(lA,{type:\"button\",variant:\"secondary\",size:\"sm\",\"data-testid\":n,onClick:g,className:\"text-xs h-7 px-2.5\"},\"Retry\"))):q);\nvar lGb=({sourceUri:a})=>{a=kGb(a);return A.createElement(\"div\",{className:\"flex items-center gap-1.5 px-2 shrink-0 box-border text-[11px] leading-none text-muted-foreground select-none\",style:{height:22,backgroundColor:\"var(--sidebar, var(--muted))\"},\"data-testid\":\"cos-canvas-label\"},A.createElement(Z,{name:\"dashboard\",size:13}),A.createElement(\"span\",null,a?\"Canvas \\u00b7 written by your Chief of Staff \\u00b7 display only\":\"Canvas page \\u00b7 display only\"))};\nfunction t5b({noun:a,id:b}){return A.createElement(\"div\",{className:\"text-sm text-muted-foreground py-12 text-center\"},`No ${a} found for`,\" \",A.createElement(\"span\",{className:\"font-mono\"},b),\".\")}");
+  const originals=Object.fromEntries(['Bkb','tS','wmb','lGb','t5b'].map(key=>[key,f.window[key]]));
+  const find=(node,predicate,result=[])=>{
+    if(Array.isArray(node))node.forEach(child=>find(child,predicate,result));
+    else if(node?.props){if(predicate(node))result.push(node);find(node.props.children,predicate,result);}
+    return result;
+  };
+  const text=node=>Array.isArray(node)?node.map(text).join(''):node?.props?text(node.props.children):node==null||node===false?'':String(node);
+  const adapters=f.install();
+  const mcpStates=Object.freeze([Object.freeze({tools:[],status:1}),Object.freeze({tools:[],status:1,spec:Object.freeze({serverName:'Unknown Server'})})]);
+  const rows=f.window.Bkb({mcpStates,expandedServers:new Set(),onToggle:f.window.toggle}).props.children;
+  assert.equal(rows[0].props.name,'未知服务器');assert.equal(rows[1].props.name,'Unknown Server');
+  assert.equal(rows[0].key,'Unknown Server');assert.equal(rows[1].key,'Unknown Server');
+  rows[0].props.onToggle();assert.equal(f.window.toggleCalls[0][0],'Unknown Server','the fallback is still the native operation key');
+  const configProps={variables:[],isOpen:true,onClose:()=>{},onSave:()=>{}};
+  const fallback=f.window.tS(configProps),supplied=f.window.tS({...configProps,description:'Enter the required configuration values to install this MCP server.'});
+  const defaultNode=find(fallback,node=>node.type==='div'&&node.props.className==='text-secondary-foreground text-xs select-none')[0];
+  const suppliedNode=find(supplied,node=>node.type==='div'&&node.props.className==='text-secondary-foreground text-xs select-none')[0];
+  assert.equal(defaultNode.props.children,'请填写安装此 MCP 服务器所需的配置项。');
+  assert.equal(suppliedNode.props.children,configProps.description??'Enter the required configuration values to install this MCP server.');
+  assert.equal(suppliedNode.props['data-ch-keep'],true);
+  const onConnect=()=>{},onRefresh=()=>{},displayName='Commit';
+  const provider=f.window.wmb({displayName,needsConnect:true,canConnect:true,onConnect,onRefresh});
+  assert.equal(text(provider).includes('添加 '+displayName+' 资源'),true);
+  assert.equal(text(provider).includes('连接账号后即可浏览 '+displayName+'。'),true);
+  const sourceNodes=find(provider,node=>node.props['data-ch-keep']&&node.props.children===displayName);
+  assert.equal(sourceNodes.length,2);
+  assert.equal(find(provider,node=>node.props.onClick===onConnect).length,1);
+  assert.equal(find(provider,node=>node.props.onClick===onRefresh).length,2);
+  assert.equal(text(f.window.lGb({sourceUri:'original-uri'})),'画布 · 由你的 Chief of Staff 编写 · 仅供查看');
+  f.window.canvasOwner=false;
+  assert.equal(text(f.window.lGb({sourceUri:'original-uri'})),'画布页面 · 仅供查看');
+  const id='My  Plugin $&';
+  for(const [noun,zh]of [['plugin','插件'],['bundle','插件包'],['app','应用']]){
+    const missing=f.window.t5b({noun,id});
+    assert.equal(text(missing),'未找到与 '+id+' 对应的'+zh+'。');
+    assert.equal(find(missing,node=>node.props['data-ch-keep']&&node.props.children===id).length,1);
+  }
+  assert.equal(text(f.window.t5b({noun:'repository',id})),'No repository found for '+id+'.');
+  adapters.setStrings({'mcp-server:unknown-name':'缺省服务器','mcp-config:default-description':'配置默认说明'});
+  assert.equal(f.window.Bkb({mcpStates,expandedServers:new Set()}).props.children[0].props.name,'缺省服务器');
+  assert.equal(find(f.window.tS(configProps),node=>node.type==='div'&&node.props.className==='text-secondary-foreground text-xs select-none')[0].props.children,'配置默认说明');
+  f.uninstall()();for(const [key,original]of Object.entries(originals))assert.equal(f.window[key],original);
+});
+
+
+test('native tool errors translate only the missing-message literal and retain supplied error parts and full logs', () => {
+  const f=nativeFixture();
+  f.evaluate(`A.useState=value=>[value,()=>{}];A.useMemo=callback=>callback();A.useCallback=callback=>callback;
+    var parseCalls=0,oq=value=>{parseCalls++;return {userErrorMessage:value.userErrorMessage,errorCodePrefix:value.errorCodePrefix,errorParts:value.structuredErrorParts,isBenign:value.isBenign}};
+    var wE=()=>({openUrlInAgyBrowser:()=>{}}),bC=()=>({userStatus:{},stepHandler:{},customLinks:{pricing:''}}),Fj=()=>({get:()=>false});
+    var J={CortexStepStatus:{INVALID:99},CortexStepType:{ERROR_MESSAGE:88}};
+    var wZ=()=>null,rZ=()=>null,QKb=()=>null,EQ=()=>null,uE=()=>null,pZ=()=>null,Z=()=>null,QY=()=>false,YKb=()=> 'Error';`);
+  f.evaluate("var ZKb=({step:a,errorDetails:b,debugMode:c})=>{var {openUrlInAgyBrowser:d}=wE(),f=a.type,g=a.status,{userStatus:h,stepHandler:k,customLinks:l,isGoogleInternal:m=!1}=bC(),n=Fj().get(\"enableRawErrorDetails\"),[q,r]=(0,A.useState)(!1),t=(0,A.useCallback)(()=>{r(!q)},[q]),u=(0,A.useCallback)(F=>{switch(F.part.case){case \"text\":return F.part.value;case \"fileUri\":return A.createElement(uE,{fileUri:F.part.value});case \"directoryUri\":return A.createElement(uE,{fileUri:F.part.value});case \"url\":let G=F.part.value||\n\"\";try{let H=new URL(G);return A.createElement(pZ,{onClick:()=>{d(G).catch(I=>console.error(I))},className:\"px-1\"},A.createElement(\"span\",{className:\"flex flex-row items-center justify-center gap-x-1\"},A.createElement(Z,{name:\"format_indent_increase\",className:\"h-3 w-3\"}),A.createElement(\"span\",{className:\"text-secondary-foreground\"},H.hostname)))}catch(H){return A.createElement(\"a\",{href:G},\"url\")}case \"codeText\":return A.createElement(\"code\",null,F.part.value);default:return null}},[d]),{userErrorMessage:v,\nerrorCodePrefix:w,errorParts:x,isBenign:y}=(0,A.useMemo)(()=>oq(b),[b]),z=y||g===J.CortexStepStatus.INVALID,C=(0,A.useMemo)(()=>x&&x.length!==0?A.createElement(\"span\",{className:\"flex-row flex-wrap items-center gap-1\"},w,x.map(u)):w?w+(v||\"The agent has encountered an internal error.\"):v,[x,v,w,u]),D=z&&f===J.CortexStepType.ERROR_MESSAGE,E=(0,A.useMemo)(()=>A.createElement(\"div\",{className:\"rounded-xs bg-gray-500/25 px-2 py-1\"},A.createElement(EQ,{title:\"Full Error\",defaultIsOpen:!1},A.createElement(\"pre\",\n{className:\"whitespace-pre-wrap text-sm\"},b.fullError))),[b.fullError]);f=(0,A.useMemo)(()=>{var F=n&&!z&&b.shortError&&b.shortError!==v;if(!c&&!C&&!F)return null;var G=C,H=h?.userTier?.upgradeSubscriptionUri??l.pricing;if(b.errorCode===429){let I=pHb(b.details,h?.userTier?.upgradeSubscriptionText||\"\",H,h?.userTier?.upgradeButtonText,void 0,void 0,k?.useAICredits,()=>{k?.logEvent(\"upgrade_subscription_clicked\",{extra:{upgrade_subscription_uri:H}})},m);I&&(G=I.message)}return A.createElement(\"div\",\n{className:\"flex flex-col gap-y-1\"},A.createElement(QKb,{text:G,asTitle:D}),F&&A.createElement(\"div\",{className:\"text-xs text-muted-foreground whitespace-pre-wrap mt-1\"},\"Details: \",b.shortError),c&&E)},[D,C,E,c,b,k,h?.userTier,l.pricing,m,z,v,n]);return D?A.createElement(rZ,{title:f,loading:QY(g),cta:null,supplementaryView:null}):A.createElement(rZ,{title:A.createElement(wZ,{prefix:YKb(a),content:C||\"\"}),stepDisplayElement:b?.errorId?A.createElement(\"div\",{className:\"text-xs text-muted-foreground select-none pb-1 flex flex-col gap-y-0.5\"},\nA.createElement(\"div\",null,\"Error ID: \",b.errorId)):void 0,loading:QY(g),cta:null,supplementaryView:f,isExpanded:q,onToggle:t,hasSupplementaryView:!!f,error:b})};");
+  const original=f.window.ZKb,adapters=f.install();
+  const step=Object.freeze({type:1,status:2});
+  const fallbackText='The agent has encountered an internal error.';
+  const render=details=>f.window.ZKb({step,errorDetails:details,debugMode:true});
+  const details=Object.freeze({errorCodePrefix:'Code: ',fullError:'Commit\nraw error'});
+  const fallback=render(details);
+  assert.equal(fallback.props.title.props.content,'Code: 智能体遇到了内部错误。');
+  assert.equal(f.window.parseCalls,1,'the native error parser and Hook body run once');
+  const actual=render({...details,userErrorMessage:fallbackText});
+  assert.equal(actual.props.title.props.content,'Code: '+fallbackText,'an identical supplied message is not the fallback');
+  const structured=render({...details,structuredErrorParts:[{part:{case:'text',value:fallbackText}}]});
+  assert.equal(structured.props.title.props.content.props.children[1][0],fallbackText);
+  const findPre=node=>{if(Array.isArray(node)){for(const item of node){const found=findPre(item);if(found)return found;}}else if(node?.props){if(node.type==='pre')return node;return findPre(node.props.children);}return null;};
+  assert.equal(findPre(fallback.props.supplementaryView).props.children,details.fullError);
+  assert.equal(details.fullError,'Commit\nraw error');
+  adapters.setStrings({'tool-error:internal-fallback':'内部错误缺省说明'});
+  assert.equal(render(details).props.title.props.content,'Code: 内部错误缺省说明');
+  f.uninstall()();assert.equal(f.window.ZKb,original);
+});
+
+
+test('native MCP account summaries and auth warnings retain real identities and supplied errors', () => {
+  const f=nativeFixture();
+  f.evaluate(`var J={McpServerStatus:{READY:1,PENDING:2,ERROR:3,DISABLED_BY_ADMIN:4}};
+    var Hi=(...values)=>values.filter(Boolean).join(' '),Z=()=>null,lA=()=>null,z2=()=>null,y5b=()=>null,x5b=()=>null;
+    var ZR=()=>null,$R=()=>null,aS=()=>null,bS=()=>null,uQ=()=>null,vQ=()=>null,wQ=()=>null,xQ=()=>null;`);
+  // Current native account summary, server row and manual-auth discriminator.
+  f.evaluate("function x4b(a){return!a||a.pluginAuthProvider||(a.variables?.length??0)===0?!1:Object.keys(a.headers??{}).some(b=>b.toLowerCase()===\"authorization\")}\nfunction z5b({state:a,isExpanded:b,onToggleExpanded:c,isAllowedByAdmin:d,isEnabled:f,disabledTools:g,showAuthInput:h,authCodeInput:k,onAuthCodeInputChange:l,onAuthCodeSubmit:m,onAuthCancel:n,onAuthorize:q,onDisconnect:r,onToggle:t,onDelete:u,onRestart:v,onConfigure:w,needsConfiguration:x=!1,onToolToggle:y,hidePluginBadge:z,note:C}){var D=a.spec?.serverName||\"Unknown Server\",E=a.spec?.originalServerName||D,F=a.tools.filter(N=>!g.includes(N.name)).length,G=d?void 0:\"Blocked by organization policy\",\nH=!!a.authUrl&&!a.hasAuthToken,I=x4b(a.spec);I=H&&!I;H=a.status===J.McpServerStatus.ERROR&&!!a.error&&d&&f&&!H&&!x;var K=!q&&I,L=d?a.status:J.McpServerStatus.DISABLED_BY_ADMIN,M=x&&d?\"Configuration parameters are required before this server can be started\":K&&d?a.spec?.pluginName?`MCP server ${E} requires authentication: sign in to \"${E}\" in the Accounts section of plugin \"${a.spec.pluginName}\"`:`MCP server ${E} requires authentication`:a.error;return A.createElement(\"div\",{\"data-testid\":\"mcp-server-row\",\nclassName:Hi(\"group relative flex flex-col rounded-lg px-3 py-1.5 transition-colors\",\"hover:bg-secondary focus-within:bg-secondary\",!f&&d&&\"opacity-60\",!d&&\"opacity-70\")},A.createElement(\"div\",{className:\"flex items-center justify-between min-w-0 min-h-6\"},A.createElement(\"div\",{className:\"flex items-center gap-2 flex-wrap min-w-0 pr-2\"},A.createElement(\"span\",{className:Hi(\"text-sm font-medium shrink-0\",!f&&d?\"line-through text-muted-foreground\":\"\",d?\"text-foreground\":\"text-muted-foreground\"),title:G||\nE},E),y5b(L,I),!z&&a.spec?.pluginName&&A.createElement(z2,{variant:\"purple\"},\"Plugin: \",a.spec.pluginName),w&&d&&A.createElement(lA,{variant:\"outline\",size:\"xs\",\"data-testid\":\"mcp-server-configure\",\"aria-label\":x?`Configure ${E}, values missing`:`Configure ${E}`,onClick:N=>{N.preventDefault();N.stopPropagation();w()},icon:A.createElement(Z,{name:\"tune\",size:12})},\"Configure\"),q&&I&&!x&&d&&A.createElement(lA,{variant:\"outline\",size:\"xs\",onClick:N=>{N.preventDefault();N.stopPropagation();q()},icon:A.createElement(Z,\n{name:\"open_in_new\",size:12})},\"Authenticate\"),r&&a.hasAuthToken&&d&&A.createElement(lA,{variant:\"outline\",size:\"xs\",onClick:N=>{N.preventDefault();N.stopPropagation();r()}},\"Sign out\"),a.tools.length>0&&!K&&A.createElement(lA,{variant:\"ghost\",size:\"xs\",\"aria-expanded\":b,onClick:N=>{N.preventDefault();N.stopPropagation();c()},className:\"text-muted-foreground hover:text-foreground font-normal px-1.5\",icon:A.createElement(Z,{name:b?\"keyboard_arrow_down\":\"chevron_right\",size:14})},f?`${F} tool${F!==\n1?\"s\":\"\"} enabled`:`${a.tools.length} tool${a.tools.length!==1?\"s\":\"\"} disabled`)),(t||u||v)&&A.createElement(\"div\",{onClick:N=>N.stopPropagation(),className:\"flex items-center flex-shrink-0 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto group-has-[[data-state=open]]:opacity-100 group-has-[[data-state=open]]:pointer-events-auto transition-opacity\"},A.createElement(ZR,null,A.createElement($R,\n{asChild:!0},A.createElement(lA,{variant:\"ghost\",size:\"icon\",\"aria-label\":`More actions for ${E}`},A.createElement(Z,{name:\"more_vert\",size:16}))),A.createElement(aS,{align:\"end\"},v&&A.createElement(bS,{\"data-testid\":\"mcp-server-restart\",onClick:v,disabled:!f||a.status===J.McpServerStatus.PENDING},A.createElement(Z,{name:\"restart_alt\",size:16}),\"Restart\"),t&&A.createElement(bS,{onClick:t,disabled:!d},A.createElement(Z,{name:f?\"cancel\":\"check_circle\",size:16}),A.createElement(\"span\",{title:G},f?\"Disable\":\n\"Enable\")),u&&A.createElement(bS,{onClick:u,className:\"text-red-500 hover:text-red-600 hover:bg-red-500/10\"},A.createElement(Z,{name:\"delete\",size:16,className:\"text-red-500\"}),\"Delete\"))))),C&&A.createElement(\"div\",{\"data-testid\":\"mcp-server-note\",className:\"text-xs text-muted-foreground break-words mt-0.5\"},C),M&&(H?A.createElement(\"div\",{className:\"flex flex-wrap items-center justify-between gap-2 mt-1.5 px-2 py-1.5 rounded-md border border-red-500/25 bg-red-500/5\"},A.createElement(\"div\",{className:\"text-xs text-red-500 break-words min-w-0 flex-1\"},\n\"Error: \",M),A.createElement(x5b,{state:a})):A.createElement(\"div\",{className:\"text-xs text-red-500 break-words mt-1\"},\"Error: \",M)),h&&A.createElement(\"div\",{onClick:N=>N.stopPropagation(),className:\"flex items-center gap-2 mt-2 p-2 rounded bg-muted/50 border border-border\"},A.createElement(\"input\",{type:\"text\",placeholder:\"Enter authorization code...\",\"aria-label\":`Auth code for ${E}`,value:k,onChange:N=>l(N.target.value),onKeyDown:N=>{N.key===\"Enter\"&&(N.preventDefault(),m())},className:\"flex-1 bg-background border border-border text-xs px-2 py-1 rounded text-foreground outline-none focus:border-primary\",\nautoFocus:!0}),A.createElement(lA,{variant:\"primary\",size:\"xs\",disabled:!k.trim(),onClick:m},\"Submit\"),A.createElement(lA,{variant:\"ghost\",size:\"xs\",onClick:n,className:\"text-muted-foreground hover:text-foreground\"},\"Cancel\")),b&&a.tools.length>0&&!K&&A.createElement(\"div\",{onClick:N=>N.stopPropagation(),className:\"flex flex-wrap gap-1.5 mt-2 pt-2 border-t border-border/40\"},a.tools.map(N=>{var O=!g.includes(N.name);if(!y)return A.createElement(\"span\",{key:N.name,className:Hi(\"px-2 py-0.5 rounded-full text-[11px] leading-4 border border-border shrink-0\",\nO&&f?\"bg-card text-foreground\":\"bg-transparent text-muted-foreground opacity-50 line-through\")},N.name);var P=d?O?\"Click to disable tool\":\"Click to enable tool\":\"Blocked by organization policy\",R=`tool-${D}-${N.name}`;return A.createElement(\"span\",{key:N.name,\"data-tooltip-id\":R},A.createElement(\"button\",{type:\"button\",\"aria-label\":`${O?\"Disable\":\"Enable\"} ${N.name} tool for ${E}`,\"aria-pressed\":O,disabled:!f,onClick:Q=>{Q.preventDefault();Q.stopPropagation();d&&y(N.name,!O)},className:Hi(\"px-2 py-0.5 rounded-full text-[11px] leading-4 border transition-all cursor-pointer shrink-0\",\nO&&f?\"border-border bg-card hover:bg-muted text-foreground\":\"border-border/60 bg-transparent text-muted-foreground opacity-40 line-through\",!f&&\"cursor-not-allowed\")},N.name),A.createElement(iA,{id:R},P))})))}\nfunction D5b({accounts:a,switchingTo:b,busy:c=!1,error:d,onSelectAccount:f,onOpenAccounts:g}){var h=a.find(l=>l.isDefault)??a[0];if(!h)return null;g=A.createElement(lA,{variant:\"link\",size:\"custom\",className:\"text-xs\",onClick:g},\"Accounts tab\");d=d&&A.createElement(\"span\",{className:\"block text-destructive\",role:\"alert\"},\"Couldn't switch accounts: \",d);if(a.length<2||!f)return A.createElement(A.Fragment,null,\"Signed in as \",h.label,\". To use another account, add it in the\",\" \",g,\" and make it the default.\",\nd);var k=a.find(l=>l.accountId===b)??h;return A.createElement(A.Fragment,null,\"Signed in as\",\" \",A.createElement(uQ,{value:k.accountId,onValueChange:l=>{l!==k.accountId&&f(l)},disabled:c,nativeOnMobile:!0},A.createElement(vQ,{asChild:!0},A.createElement(\"button\",{type:\"button\",disabled:c,\"aria-busy\":c,\"aria-label\":`Account this MCP server uses: ${k.label}`,\"data-testid\":\"mcp-server-account-select\",className:Hi(\"mx-0.5 inline-flex h-5 items-center gap-0.5 rounded-md border border-border bg-transparent pl-1.5 pr-1 align-middle text-xs text-foreground\",\n\"transition-colors hover:bg-secondary focus-visible:bg-secondary\",\"disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent\")},A.createElement(\"span\",{className:\"truncate\"},k.label),A.createElement(Z,{name:\"keyboard_arrow_down\",size:14,className:\"shrink-0 text-muted-foreground\"}))),A.createElement(wQ,null,a.map(l=>A.createElement(xQ,{key:l.accountId,value:l.accountId,className:\"text-xs\"},l.label)))),\". To add another account, go to the \",g,\".\",d)}");
+  const originals={summary:f.window.D5b,row:f.window.z5b};
+  const adapters=f.install();
+  const elements=(value,out=[])=>{if(Array.isArray(value))value.forEach(child=>elements(child,out));else if(value?.props){out.push(value);elements(value.props.children,out)}return out};
+  const text=value=>typeof value==='string'||typeof value==='number'?String(value):Array.isArray(value)?value.map(text).join(''):value?.props?text(value.props.children):'';
+  const account=Object.freeze({accountId:'id-$&',label:'Accounts tab',isDefault:true}),other=Object.freeze({accountId:'id-2',label:'Commit'});
+  let opened=0;const open=()=>opened++;
+  let summary=f.window.D5b({accounts:Object.freeze([account]),onOpenAccounts:open,error:'Settings'});
+  assert.equal(text(summary),'已登录账号：Accounts tab。如需使用其他账号，请在账号页添加并设为默认账号。切换账号失败：Settings');
+  assert.ok(elements(summary).some(node=>node.props['data-ch-keep']&&node.props.children===account.label));
+  const accountsButton=elements(summary).find(node=>node.props.onClick===open);
+  assert.equal(accountsButton.props.children,'账号页');assert.equal(opened,0);
+  const selected=[];
+  summary=f.window.D5b({accounts:Object.freeze([account,other]),onOpenAccounts:open,onSelectAccount:value=>selected.push(value)});
+  const select=elements(summary).find(node=>node.type===f.window.uQ);
+  assert.equal(select.props.value,account.accountId);select.props.onValueChange(other.accountId);assert.deepEqual(selected,[other.accountId]);
+  assert.ok(elements(summary).some(node=>node.props['data-ch-keep']&&node.props.children===other.label));
+  const server='Server $& {plugin}',plugin='Plugin $& {server}';
+  const state=Object.freeze({spec:Object.freeze({serverName:server,pluginName:plugin,variables:[],headers:{}}),tools:[],status:1,authUrl:'https://fixture.invalid/auth',hasAuthToken:false,error:'Commit'});
+  const props={state,isAllowedByAdmin:true,isEnabled:true,disabledTools:[]};
+  const errorNode=value=>elements(value).find(node=>node.type==='div'&&Array.isArray(node.props.children)&&node.props.children[0]==='错误：');
+  let row=f.window.z5b(props),error=errorNode(row);
+  assert.equal(text(error),'错误：MCP 服务器 '+server+' 需要身份验证：请在插件“'+plugin+'”的账号页登录“'+server+'”');
+  assert.equal(error.props['data-ch-keep'],true);
+  const originalWarning='MCP server '+server+' requires authentication: sign in to "'+server+'" in the Accounts section of plugin "'+plugin+'"';
+  row=f.window.z5b({...props,onAuthorize:()=>{},state:{...state,error:originalWarning}});
+  assert.equal(errorNode(row).props.children[1],originalWarning,'a supplied error is not a generated auth warning');
+  row=f.window.z5b({...props,state:{...state,spec:{...state.spec,variables:[{name:'token'}],headers:{Authorization:'token'}},error:originalWarning}});
+  assert.equal(errorNode(row).props.children[1],originalWarning,'the native manual-auth discriminator remains authoritative');
+  row=f.window.z5b({...props,needsConfiguration:true});
+  assert.equal(errorNode(row).props.children[1],'启动此服务器前需要填写配置参数');
+  row=f.window.z5b({...props,state:{...state,spec:{variables:[],headers:{}}}});
+  assert.equal(errorNode(row).props.children[1],'MCP 服务器 未知服务器 需要身份验证');
+  assert.equal(state.spec.serverName,server);assert.equal(state.spec.pluginName,plugin);assert.equal(state.error,'Commit');
+  adapters.setStrings({'Accounts tab':'账号页测试'});
+  summary=f.window.D5b({accounts:[account],onOpenAccounts:open});
+  assert.ok(text(summary).includes('Accounts tab'));assert.ok(text(summary).includes('账号页测试'));
+  f.uninstall()();assert.equal(f.window.D5b,originals.summary);assert.equal(f.window.z5b,originals.row);
+});
+
+
+test('native generated defaults preserve real Scratchpad files and Rule names, including cached owners after uninstall', () => {
+  const f=nativeFixture();
+  f.window.eval=code=>f.evaluate(code);
+  f.evaluate(`const rNa=/^scratchpad_[a-z0-9]+$/i;
+    var Hf=uri=>uri,vNa=()=> 'native-date';
+    var Xf={basename(uri){return (typeof uri==='string'?uri:uri.path).split('/').at(-1)},extname(uri){const name=this.basename(uri),dot=name.lastIndexOf('.');return dot<0?'':name.slice(dot)}};
+    function tNa(uri){const base=Xf.basename(uri),extension=Xf.extname(uri);return {artifactName:extension?base.slice(0,-extension.length):base,extension}};
+    var ER=value=>value??'',GR=value=>(value??'').split('/').at(-1)||'';`);
+  f.evaluate('var EB='+"function EB(a){if(!a.path)return\"\";a=Hf(a);({artifactName:a}=tNa(a));if(rNa.test(a))return\"Scratchpad\";var [,b,c]=a.match(/^(.+?)_(\\d{13})$/)||[null,a,null];a=b.replace(/[_-]/g,\" \").replace(/([a-z])([A-Z])/g,\"$1 $2\").split(/\\s+/).filter(d=>d.length>0).map(d=>d.toLowerCase()===\"cl\"?\"CL\":d.charAt(0).toUpperCase()+d.slice(1).toLowerCase()).join(\" \");return c?`${a} (${vNa(c)})`:a}"+';');
+  // Current qnc rule-row projection branch; title and basename precede the
+  // fixed fallback and the original rule/content objects remain untouched.
+  f.evaluate("function qnc(t){return t.map(Ja=>{var Qa=ER(Ja.absolutePath);return{key:`rule-${Qa||Ja.memoryId}`,name:Ja.title||GR(Ja.absolutePath)||\"Rule\",path:Qa,content:Ja.content}})}");
+  const originalFile=f.window.EB,originalRows=f.window.qnc;
+  const content=Object.freeze({text:'Rule / Scratchpad'});
+  const rules=Object.freeze([
+    Object.freeze({memoryId:'empty',content}),
+    Object.freeze({memoryId:'named',title:'Rule',content}),
+    Object.freeze({memoryId:'file',absolutePath:'/fixture/Rule',content})
+  ]);
+  f.install();
+  const savedFile=f.window.EB,savedRows=f.window.qnc;
+  assert.equal(savedFile({path:'/fixture/scratchpad_a1.md'}),'临时草稿');
+  assert.equal(savedFile({path:'/fixture/Scratchpad.md'}),'Scratchpad');
+  assert.equal(savedFile({path:'/fixture/my_report_1234567890123.md'}),'My Report (native-date)');
+  const rows=savedRows(rules);
+  assert.deepEqual(Array.from(rows,row=>row.name),['规则','Rule','Rule']);
+  assert.equal(rows[0].content,content);assert.equal(rows[2].path,'/fixture/Rule');
+  assert.equal(rules[1].title,'Rule');assert.equal(rules[0].title,undefined);
+  f.uninstall()();
+  assert.equal(f.window.EB,originalFile);assert.equal(f.window.qnc,originalRows);
+  assert.equal(savedFile({path:'/fixture/scratchpad_a1.md'}),'Scratchpad');
+  assert.equal(savedRows(rules)[0].name,'Rule');
+});
+
+
+test('native IWA instructions, harness defaults and cached Cider tips retain actions and supplied names', () => {
+  const f=nativeFixture();
+  f.evaluate(`var callbacks=0;
+    A.useEffect=()=>{};A.useCallback=callback=>callback;
+    var Kj=()=>[undefined,()=>{callbacks++}],DUa=value=>value!=='false',BUa=()=> 'https://fixture.invalid/jetski-shell.swbn';
+    var lD=()=>{callbacks++},qn=()=>{callbacks++},Zm=value=>value;
+    var Z=()=>null,ZR=()=>null,$R=()=>null,aS=()=>null,gS=()=>null,hS=()=>null,cS=()=>null,Qkc=()=>null,o6=()=>null;
+    var Rkc={loading:'Loading harnesses…',failed:"Couldn't load harnesses.",unavailable:'Harnesses are unavailable from this language server.'};`);
+  f.evaluate('var EUa='+"()=>{var [a,b]=Kj(\"jetski.iwa.installBannerDismissed\",String,Number),c=a!==void 0&&Number.isFinite(a)&&a>0&&Date.now()-a<6048E5;(0,A.useEffect)(()=>{a===void 0||c||b(void 0)},[c,a,b]);var [d,f]=Kj(\"jetski.iwa.installBannerExpanded\",String,DUa),g=d??!0,h=BUa(),k=(0,A.useCallback)(()=>{b(Date.now())},[b]),l=(0,A.useCallback)(()=>{f(t=>!(t??!0))},[f]),m=(0,A.useCallback)(()=>{lD(\"chrome://flags/#enable-isolated-web-apps\")},[]),n=(0,A.useCallback)(()=>{lD(\"chrome://flags/#enable-isolated-web-app-dev-mode\")},\n[]),q=(0,A.useCallback)(()=>{lD(\"chrome://iwa-dev\")},[]),r=(0,A.useCallback)(()=>{var t=window;var u=globalThis.document;var v=CUa(u);var w=(u?.defaultView??globalThis.window)?.location?.origin,x=NF(u);u=!(!u?.documentElement?.hasAttribute(\"data-jetski-iwa-parent-origin\")&&!u?.documentElement?.hasAttribute(\"data-jetski-iwa-parent-base-url\"));x=/^https?:\\/\\//i.test(x)&&(u||x!==w)?x:void 0;v?(w=(new URL(v)).origin,w=x?x:w,v=`${OF(w)?\"https://jetski.corp.google.com\":w}/iwa/relaunch.html?url=${encodeURIComponent(v)}`):\n(v=x??(OF(w)?\"https://jetski.corp.google.com\":\"\"),v=`${OF(v)?\"https://jetski.corp.google.com\":v}/iwa/relaunch.html`);qn(t,Zm(v),\"_blank\",\"noopener\")},[]);return c?null:A.createElement(\"div\",{className:\"flex flex-col items-start gap-2.5 px-3 py-2.5 text-left w-full border-b border-border bg-muted/20 shrink-0\",\"data-testid\":\"browser-iwa-install-state\"},A.createElement(\"div\",{className:\"flex items-center justify-between gap-2 w-full\"},A.createElement(\"div\",{className:\"flex items-center gap-2 min-w-0\"},\nA.createElement(\"div\",{className:\"flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 text-primary shrink-0\"},A.createElement(Z,{name:\"computer\",size:16})),A.createElement(\"div\",{className:\"min-w-0\"},A.createElement(\"h3\",{className:\"text-xs font-semibold text-foreground\"},\"Built-in Browser Requires Isolated Web App (IWA)\"),A.createElement(\"p\",{className:\"text-[11px] text-muted-foreground\"},\"Install and launch the Jetski Isolated Web App in three steps to embed pages with full browser capabilities.\"))),\nA.createElement(\"div\",{className:\"flex items-center gap-1 shrink-0\"},A.createElement(\"button\",{type:\"button\",\"data-testid\":\"browser-iwa-toggle-steps-button\",\"aria-expanded\":g,\"aria-label\":g?\"Collapse IWA installation steps\":\"Expand IWA installation steps\",onClick:l,className:\"inline-flex items-center justify-center rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors\"},A.createElement(Z,{name:g?\"unfold_less\":\"unfold_more\",size:16})),A.createElement(\"button\",{type:\"button\",\n\"data-testid\":\"iwa-install-banner-dismiss\",\"aria-label\":\"Dismiss IWA installation banner\",onClick:k,className:\"inline-flex items-center justify-center rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors\"},A.createElement(Z,{name:\"close\",size:16})))),g&&A.createElement(\"ol\",{className:\"w-full bg-muted/40 border border-border rounded-md p-3 text-left text-xs text-muted-foreground space-y-3 list-decimal list-inside\",\"data-testid\":\"browser-iwa-install-steps\"},A.createElement(\"li\",\n{className:\"space-y-1.5\"},A.createElement(\"span\",null,\"Enable Chrome IWA flags and relaunch Chrome:\"),A.createElement(\"div\",{className:\"flex flex-col gap-1 pl-4\"},A.createElement(\"button\",{type:\"button\",\"data-testid\":\"browser-iwa-copy-iwa-flag-button\",onClick:m,className:\"inline-flex items-center justify-between gap-1.5 rounded border border-border bg-background px-2 py-1 font-mono text-[11px] text-foreground hover:bg-muted transition-colors\"},A.createElement(\"span\",{className:\"truncate\"},\"chrome://flags/#enable-isolated-web-apps\"),\nA.createElement(Z,{name:\"content_copy\",size:12})),A.createElement(\"button\",{type:\"button\",\"data-testid\":\"browser-iwa-copy-dev-mode-flag-button\",onClick:n,className:\"inline-flex items-center justify-between gap-1.5 rounded border border-border bg-background px-2 py-1 font-mono text-[11px] text-foreground hover:bg-muted transition-colors\"},A.createElement(\"span\",{className:\"truncate\"},\"chrome://flags/#enable-isolated-web-app-dev-mode\"),A.createElement(Z,{name:\"content_copy\",size:12})))),A.createElement(\"li\",\n{className:\"space-y-1.5\"},A.createElement(\"span\",null,\"Download the signed bundle, open\",\" \",A.createElement(\"button\",{type:\"button\",\"data-testid\":\"browser-iwa-copy-internals-button\",onClick:q,className:\"inline-flex items-center gap-1 rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[11px] text-foreground hover:bg-muted transition-colors\"},A.createElement(\"span\",null,\"chrome://iwa-dev\"),A.createElement(Z,{name:\"content_copy\",size:11})),\", and click\",\" \",A.createElement(\"span\",\n{className:\"font-medium text-foreground\"},\"Install \\u2192 Signed Bundle \\u2192 Install\")),A.createElement(\"div\",{className:\"pl-4\"},A.createElement(\"a\",{href:h,download:\"jetski-shell.swbn\",target:\"_blank\",rel:\"noopener noreferrer\",\"data-testid\":\"browser-iwa-download-swbn-button\",className:\"inline-flex items-center gap-1.5 rounded bg-button-background text-button-foreground px-2.5 py-1 text-xs font-medium hover:bg-button-hoverBackground transition-colors\"},A.createElement(Z,{name:\"download\",size:14}),\nA.createElement(\"span\",null,\"Download Jetski IWA (jetski-shell.swbn)\")))),A.createElement(\"li\",{className:\"space-y-1.5\"},A.createElement(\"span\",null,\"Launch Jetski in its installed Isolated Web App window:\"),A.createElement(\"div\",{className:\"pl-4\"},A.createElement(\"button\",{type:\"button\",\"data-testid\":\"browser-iwa-launch-button\",onClick:r,className:\"inline-flex items-center gap-1.5 rounded bg-primary text-primary-foreground px-2.5 py-1 text-xs font-medium hover:bg-primary/90 transition-colors\"},A.createElement(Z,\n{name:\"open_in_new\",size:14}),A.createElement(\"span\",null,\"Open in Jetski IWA\"))))))}"+';var Skc='+"function Skc({harnesses:a,status:b,selected:c,setSelected:d,maxPicks:f,armPairs:g,placement:h=\"top-start\"}){var k=m=>{d(c.includes(m)?c.filter(n=>n!==m):[...c,m])},l=f!==void 0&&c.length>=f;f=c.length===0?\"Default harness\":c.join(\", \");h=h.startsWith(\"top\");return A.createElement(ZR,null,A.createElement($R,{asChild:!0},A.createElement(\"button\",{type:\"button\",\"data-testid\":\"best-of-n-harness-picker\",\"aria-label\":`Select harnesses, current: ${f}`,title:f,className:\"flex min-w-0 max-w-48 cursor-pointer items-center h-7 gap-1 rounded-lg pr-1 pl-2 text-xs outline-none hover:bg-secondary transition-colors\",\nonMouseDown:m=>{m.preventDefault()}},A.createElement(Z,{name:\"science\",size:14,className:\"text-secondary-foreground shrink-0\"}),A.createElement(\"span\",{className:\"min-w-0 select-none overflow-hidden text-ellipsis whitespace-nowrap text-secondary-foreground\"},f),A.createElement(Z,{name:h?\"keyboard_arrow_up\":\"keyboard_arrow_down\",size:14,className:\"text-secondary-foreground shrink-0\"}))),A.createElement(aS,{side:h?\"top\":\"bottom\",align:\"start\",className:\"min-w-56 max-w-96 !w-max p-1\"},A.createElement(gS,\nnull,A.createElement(\"div\",{className:\"flex items-center justify-between gap-2 pr-1\"},A.createElement(hS,null,\"Harness per Response\"),A.createElement(\"button\",{type:\"button\",\"data-testid\":\"best-of-n-harness-clear\",disabled:c.length===0,onClick:m=>{m.stopPropagation();d([])},className:\"text-xs px-1.5 py-0.5 rounded text-secondary-foreground hover:bg-secondary disabled:opacity-40 disabled:cursor-default\"},\"Clear\")),A.createElement(\"div\",{className:\"text-xs px-2 pb-1 text-muted-foreground\"},\"Pick order sets the harness for each response; the rest run control.\"),\nb===\"ready\"?A.createElement(\"div\",{className:\"max-h-56 overflow-y-auto\"},a.map(m=>{var n=c.indexOf(m);return A.createElement(cS,{key:m,checked:n>=0,onCheckedChange:()=>{k(m)},disabled:n<0&&l},A.createElement(\"span\",{\"data-testid\":\"best-of-n-harness-option\",[\"data-harness\"]:m,className:\"flex items-center gap-1.5 min-w-0\"},A.createElement(Qkc,{index:n}),A.createElement(\"span\",{className:\"truncate font-mono text-xs\"},m)))})):A.createElement(\"div\",{className:\"text-xs px-2 py-1 text-muted-foreground\"},\nRkc[b])),c.length>0&&g.length>0&&A.createElement(\"div\",{className:\"mt-1 border-t border-border px-2 pt-1.5 pb-1\"},A.createElement(\"div\",{className:\"text-xs text-muted-foreground pb-0.5\"},\"Pairs (arm order may be shuffled)\"),g.map((m,n)=>{m=`${n+1} \\u00b7 ${m.model||\"?\"} \\u00b7 ${m.harness}`;return A.createElement(\"div\",{key:n,\"data-testid\":\"best-of-n-harness-pair\",title:m,className:\"truncate font-mono text-xs text-secondary-foreground\"},m)}))))}"+';');
+  const config=f.evaluate(`(()=>{const render=function(){return A.createElement(o6,{id:"cider-welcome",title:"Welcome to Cider with Jetski"},A.createElement("div",{className:"text-sm text-secondary-foreground flex flex-col gap-2"},A.createElement("p",null,"Jetski and Cider are now more closely integrated:"),A.createElement("ul",{className:"list-disc pl-4 flex flex-col gap-1"},A.createElement("li",null,"Find all your Jetski conversations here."),A.createElement("li",null,"You can now switch seamlessly between Jetski Web and Cider using the icons above."),
+A.createElement("li",null,"You can opt-out temporarily using ","Help > Back to Cider V","."),A.createElement("li",null,"Use the ","Feedback"," button in the status bar to report any issues.")),A.createElement("p",null,A.createElement("a",{href:"https://docs.google.com/document/d/1CIsG41KJA3L4D14NOMXk2xGt2dRT0rwk_vcBoYdYQjg/edit?resourcekey=0-vPGQf50yhiL8sJu1Gl_TiA&tab=t.0#heading=h.tyh4svrgsbx5",target:"_blank",rel:"noopener noreferrer",className:"text-blue-400 hover:underline"},"Learn more"))))};
+    const card={$$typeof:Symbol.for('react.element'),type:render,key:null,props:{}};
+    return {features:{tipCards:{applyFirst:[{feature:A.createElement('div',null,card)}]}}};})()`);
+  f.window.fixtureTipConfig=config;
+  const tip=config.features.tipCards.applyFirst[0].feature.props.children,originalTip=tip.type;
+  const originalIwa=f.window.EUa,originalHarness=f.window.Skc;
+  const created=[],create=f.window.A.createElement;
+  f.window.A.createElement=(...args)=>{const value=create(...args);created.push(value);return value;};
+  const adapters=f.install();
+  const nodes=(value,out=[])=>{if(Array.isArray(value))value.forEach(child=>nodes(child,out));else if(value?.props){out.push(value);nodes(value.props.children,out);}return out;};
+  const text=value=>{if(typeof value==='string'||typeof value==='number')return String(value);if(Array.isArray(value))return value.map(text).join('');return value?.props?text(value.props.children):'';};
+  const iwa=f.window.EUa(),iwaNodes=nodes(iwa);
+  assert.ok(text(iwa).includes('下载签名安装包，打开 chrome://iwa-dev，再点击 Install → Signed Bundle → Install'));
+  const rawCopy=created.find(node=>node.props['data-testid']==='browser-iwa-copy-internals-button');
+  const copy=iwaNodes.find(node=>node.props['data-testid']==='browser-iwa-copy-internals-button');
+  assert.equal(copy.props.onClick,rawCopy.props.onClick);
+  const action=iwaNodes.find(node=>node.type==='span'&&node.props.children==='Install → Signed Bundle → Install');
+  assert.equal(action.props['data-ch-keep'],true);
+  const download=iwaNodes.find(node=>node.props['data-testid']==='browser-iwa-download-swbn-button');
+  assert.equal(download.props.href,'https://fixture.invalid/jetski-shell.swbn');assert.equal(download.props.download,'jetski-shell.swbn');
+  const harnesses=Object.freeze(['Default harness','Rule','Show']),setSelected=()=>{throw Error('unexpected selection')};
+  const empty=f.window.Skc({harnesses,status:'ready',selected:[],setSelected,armPairs:[]}),emptyNodes=nodes(empty);
+  const picker=emptyNodes.find(node=>node.props['data-testid']==='best-of-n-harness-picker');
+  assert.equal(picker.props.title,'默认执行配置');assert.ok(text(picker).includes('默认执行配置'));
+  assert.equal(picker.props['aria-label'],'Select harnesses, current: Default harness');
+  assert.equal(picker.props['data-ch-keep'],true);
+  for(const name of harnesses){const option=emptyNodes.find(node=>node.props['data-harness']===name);assert.equal(option.props['data-ch-keep'],true);assert.ok(text(option).includes(name));}
+  const selected=f.window.Skc({harnesses,status:'ready',selected:['Default harness'],setSelected,armPairs:[{model:'Native Model',harness:'Rule'}]});
+  const selectedNodes=nodes(selected),selectedPicker=selectedNodes.find(node=>node.props['data-testid']==='best-of-n-harness-picker');
+  assert.equal(selectedPicker.props.title,'Default harness');assert.ok(text(selectedPicker).includes('Default harness'));
+  assert.equal(selectedNodes.find(node=>node.props['data-testid']==='best-of-n-harness-pair').props.children,'1 · Native Model · Rule');
+  assert.notEqual(tip.type,originalTip,'the anonymous component is adapted through its cached feature element');
+  const welcome=tip.type(),welcomeNodes=nodes(welcome);
+  assert.ok(text(welcome).includes('使用状态栏中的“反馈”按钮报告问题。'));
+  assert.ok(text(welcome).includes('可通过 Help > Back to Cider V 暂时退出集成模式。'));
+  assert.equal(welcomeNodes.find(node=>node.type==='a').props.href,'https://docs.google.com/document/d/1CIsG41KJA3L4D14NOMXk2xGt2dRT0rwk_vcBoYdYQjg/edit?resourcekey=0-vPGQf50yhiL8sJu1Gl_TiA&tab=t.0#heading=h.tyh4svrgsbx5');
+  assert.ok(Array.from(adapters.uiKeys).includes('tip-card:cider-welcome'));
+  assert.equal(f.window.callbacks,0);
+  f.uninstall()();
+  assert.equal(tip.type,originalTip);assert.equal(f.window.EUa,originalIwa);assert.equal(f.window.Skc,originalHarness);
+});
+
+
+test('native formatter fallbacks keep supplied intent, skill names, paths and operation parameters unchanged', () => {
+  const f=fixture();f.window.URL=URL;f.evaluate('var ER=value=>value;');
+  // Current native intent formatter and complete browser action formatter.
+  f.evaluate("function wZa(a){a=(a||\"\").trim().split(/\\s+/).filter(Boolean);if(a.length!==0)return a=a.slice(0,3).join(\" \"),a.length>28&&(a=`${a.slice(0,27).trimEnd()}\\u2026`),a.charAt(0).toUpperCase()+a.slice(1)}\nfunction xZa(a,b){var c=wZa(b.intent);if(c)return c;switch(a){case \"open\":case \"new-tab\":case \"navigate\":a:{try{let g=new URL((b.url||\"\").trim());if(g.protocol===\"http:\"||g.protocol===\"https:\"){var d=g.hostname.replace(/^www\\./,\"\");var f=d.length<=20?d:void 0;break a}}catch{}f=void 0}return(a=f)?`Opening ${a}`:\"Opening page\";case \"back\":return\"Going back\";case \"forward\":return\"Going forward\";case \"reload\":return\"Reloading page\";case \"snapshot\":case \"get_state\":case \"capture\":return\"Reading page\";\ncase \"click\":case \"click-pixel\":return\"Clicking\";case \"dblclick-pixel\":return\"Double-clicking\";case \"hover\":case \"hover-pixel\":return\"Hovering\";case \"fill\":case \"type\":return\"Typing\";case \"press\":return(a=(b.key||\"\").split(\"+\").pop()||\"\")?wZa(`Pressing ${a}`):\"Pressing key\";case \"scroll\":return a=(b.direction||\"\").toLowerCase(),a===\"up\"||a===\"left\"||a===\"right\"?`Scrolling ${a}`:\"Scrolling down\";case \"select\":case \"select_option\":return\"Selecting option\";case \"wait\":return\"Waiting\";case \"activate-tab\":case \"select-tab\":return\"Switching tabs\"}}");
+  f.evaluate("function F5b(a){a=ER(a).replace(/\\/+$/,\"\").split(\"/\");var b=a.pop()||\"\";return b.toLowerCase()===\"skill.md\"||b.toLowerCase()===\"agent.md\"||b.toLowerCase()===\"agent.json\"?a.pop()||b:b}function G5b(a,b,c){return(a=a||(b?F5b(b):void 0))?a.startsWith(\"/\")?a:`/${a}`:`Unnamed skill ${(c??0)+1}`}");
+  const original=f.window.xZa,originalSkill=f.window.G5b;
+  const adapters=f.install();
+  const open=Object.freeze({url:'https://www.example.com/path?x=1',intent:''});
+  assert.equal(f.window.xZa('navigate',open),'正在打开 example.com');
+  assert.equal(open.url,'https://www.example.com/path?x=1');
+  for(const [action,params,expected] of [
+    ['forward',{},'正在前进'],['back',{},'正在后退'],['reload',{},'正在刷新页面'],
+    ['capture',{},'正在读取页面'],['click',{},'正在点击'],['dblclick-pixel',{},'正在双击'],
+    ['hover-pixel',{},'正在悬停'],['type',{},'正在输入'],['wait',{},'等待中'],
+    ['select_option',{},'正在选择选项'],['activate-tab',{},'正在切换标签页'],
+    ['scroll',{direction:'left'},'正在向左滚动'],['scroll',{direction:'right'},'正在向右滚动'],
+    ['scroll',{direction:'up'},'正在向上滚动'],['scroll',{direction:'down'},'正在向下滚动'],
+    ['press',{key:'Control+Enter'},'正在按下 Enter'],['press',{key:''},'正在按键'],
+    ['open',{url:'about:blank'},'正在打开页面']
+  ]) assert.equal(f.window.xZa(action,Object.freeze(params)),expected,action);
+  for(const intent of ['Typing','Opening example.com','Read  My  Custom  Title']) {
+    const params=Object.freeze({intent,url:'https://www.example.com'});
+    assert.equal(f.window.xZa('navigate',params),original('navigate',params),'supplied intent keeps native normalization and language');
+  }
+  assert.equal(f.window.xZa('unknown',{}),undefined);
+  assert.equal(f.window.G5b(undefined,undefined,0),'未命名技能 1');
+  assert.equal(f.window.G5b('Unnamed skill 2',undefined,1),'/Unnamed skill 2');
+  assert.equal(f.window.G5b(undefined,'/fixture/My Skill/SKILL.md',0),'/My Skill');
+  adapters.setStrings({Typing:'输入测试','browser-action:opening-host':'访问 {host}'});
+  assert.equal(f.window.xZa('type',{}),'输入测试');
+  assert.equal(f.window.xZa('type',{intent:'Typing'}),'Typing');
+  assert.equal(f.window.xZa('open',open),'访问 example.com');
+  f.uninstall()();assert.equal(f.window.xZa,original);assert.equal(f.window.G5b,originalSkill);
+});
+
+
+test('setup script validation translates only native defaults and keeps matching stdout bytes', async () => {
+  const f=nativeFixture();f.window.TextDecoder=TextDecoder;
+  f.evaluate(`var validationCalls=[],validationStates=[],validationReply;
+    var e=value=>value,lB=()=>({validateTerminalSetupScript:async(script,cwd)=>{validationCalls.push([script,cwd]);return validationReply}});
+    var UP=value=>({value,setValue(){},save(){},flushSave(){},onFocus(){},onBlur(){}});
+    A.useState=value=>[value,next=>validationStates.push(next)];A.useRef=value=>({current:value});
+    A.useCallback=callback=>callback;A.useMemo=callback=>callback();A.useEffect=()=>{};
+    var Vdb={debounce(callback){callback.cancel=()=>{};return callback;}};
+    var TP=()=>null,bgb=()=>null,cgb=()=>null,lA=()=>null;`);
+  f.evaluate("var dgb=({label:a,description:b,learnMoreUrl:c,placeholder:d,value:f,onSave:g,rows:h=4,cwd:k})=>{var {validateTerminalSetupScript:l}=lB(),{value:m,setValue:n,save:q,flushSave:r,onFocus:t,onBlur:u}=UP(f,g),[v,w]=(0,A.useState)({status:\"idle\"}),x=(0,A.useRef)(0),y=(0,A.useRef)(null),z=(0,A.useCallback)(async G=>{var H=e,I=e;try{let K=++x.current;y.current=G;if(G.trim()===\"\")w({status:\"idle\"});else{w({status:\"validating\"});try{let L=I(await H(l(G,k)));if(K===x.current)if(L.exitCode===0)w({status:\"valid\"});\nelse{let M=(new TextDecoder).decode(L.output).trim();w({status:\"invalid\",message:L.exitCode===-1?\"Validation timed out.\":M||`Exited with code ${L.exitCode}.`})}}catch(L){I(),K===x.current&&w({status:\"invalid\",message:L instanceof Error?L.message:String(L)})}}}finally{H()}},[l,k]),C=(0,A.useMemo)(()=>(0,Vdb.debounce)(G=>{z(G)},2E3),[z]);(0,A.useEffect)(()=>()=>{C.cancel()},[C]);f=(0,A.useCallback)(G=>{n(G);q(G);w({status:\"idle\"});C(G)},[n,q,C]);g=(0,A.useCallback)(()=>{r();C.cancel();z(m)},[r,C,z,\nm]);var D=(0,A.useCallback)(()=>{u();m!==y.current&&(C.cancel(),z(m))},[u,C,z,m]),E=v.status!==\"validating\"&&m.trim()!==\"\",F=v.status===\"invalid\"?v.message:void 0;return A.createElement(\"div\",{\"data-testid\":\"command-setup-script-input\"},A.createElement(TP,{label:a,description:b,placeholder:d,value:m,onChange:f,onFocus:t,onBlur:D,multiline:!0,rows:h,footer:A.createElement(\"div\",{className:\"mt-2 flex flex-col gap-2\"},A.createElement(\"div\",{className:\"flex items-center gap-2\"},c&&A.createElement(\"a\",\n{href:c,target:\"_blank\",rel:\"noopener noreferrer\",className:\"text-link-color hover:underline cursor-pointer font-medium text-xs w-fit\"},\"Learn more\"),A.createElement(\"div\",{className:\"flex-1\"}),A.createElement(bgb,{validation:v}),F&&A.createElement(cgb,{text:F}),A.createElement(lA,{variant:\"secondary\",size:\"sm\",\"data-testid\":\"setup-script-validate-button\",onClick:g,disabled:!E},\"Validate\")),F&&A.createElement(\"pre\",{\"data-testid\":\"setup-script-output\",className:\"max-h-32 w-full overflow-y-auto whitespace-pre-wrap rounded border border-border bg-muted p-2 font-mono text-xs text-foreground\"},\nF))}))};");
+  const original=f.window.dgb;f.install();
+  function validateButton(node) {
+    if(Array.isArray(node)){for(const child of node){const result=validateButton(child);if(result)return result;}}
+    if(!node?.props)return null;
+    return node.props['data-testid']==='setup-script-validate-button'?node:validateButton(node.props.children)||validateButton(node.props.footer);
+  }
+  const props=Object.freeze({value:'echo  $&\nraw',cwd:'/tmp/My  Project',onSave(){}});
+  for(const [exitCode,output,expected] of [[3,'','已退出，退出码为 3。'],[3,'Exited with code 3.','Exited with code 3.'],[-1,'','校验超时。'],[3,'Validation timed out.','Validation timed out.']]) {
+    f.window.validationReply={exitCode,output:new TextEncoder().encode(output)};
+    const view=f.window.dgb(props);validateButton(view).props.onClick();
+    await Promise.resolve();await Promise.resolve();
+    assert.equal(f.window.validationStates.at(-1).message,expected);
+    assert.equal(f.window.validationCalls.at(-1)[0],props.value);assert.equal(f.window.validationCalls.at(-1)[1],props.cwd);
+  }
+  assert.equal(f.window.validationCalls.length,4,'each click invokes the native validation provider once');
+  f.uninstall()();assert.equal(f.window.dgb,original);
+});
+
+
+test('internal modes tooltip localizes only its fixed combination and keeps supplied labels and aria', () => {
+  const f=nativeFixture();
+  f.evaluate(`A.useId=()=> 'fixture';var Ukc=()=>4,Hi=(...values)=>values.filter(Boolean).join(' ');
+    var rP=()=>null,sP=()=>null,Z=()=>null,iA=()=>null,tP=()=>null,Tkc=()=>null,Wkc=()=>null;`);
+  f.evaluate("function Zkc({battleMode:a,autonomousModeConfig:b,dropdownPlacement:c,label:d}){var f=(0,A.useId)(),g=!!b?.showToggle&&!!b.isEnabled,h=!!a?.shouldShowBattleModeToggle&&!!a.isBestOfNEnabled,k=(g?1:0)+(h?1:0);d=d??(k===0?\"Modes\":`${k} active mode${k>1?\"s\":\"\"}`);g=[...(g?[\"Autonomous Mode\"]:[]),...(h&&a?[`Best of N (${Ukc(a)})`]:[])];return A.createElement(rP,{placement:c},A.createElement(sP,{asChild:!0},A.createElement(\"button\",{type:\"button\",\"data-testid\":\"internal-modes-trigger\",\"aria-label\":k>0?\n`Select modes, current: ${g.join(\", \")}`:\"Select modes\",\"data-tooltip-id\":k>0?f:void 0,className:Hi(\"flex cursor-pointer items-center h-7 gap-1 rounded-full pl-2 [&:has(>[data-icon]:first-child)]:pl-1.5 [&:has(>svg:first-child)]:pl-1.5 [&:has(>.google-symbols:first-child)]:pl-1.5 pr-1 text-xs text-secondary-foreground select-none outline-none hover:bg-secondary transition-colors\",\"shrink-0 whitespace-nowrap\")},A.createElement(\"span\",null,d),A.createElement(Z,{name:c.startsWith(\"top\")?\"keyboard_arrow_up\":\n\"keyboard_arrow_down\",size:14,className:\"shrink-0\"}))),k>0&&A.createElement(iA,{id:f,place:\"top\"},g.join(\" \\u00b7 \")),A.createElement(tP,{className:\"w-64 p-2 gap-1\"},b?.showToggle&&A.createElement(Tkc,{config:b}),a&&A.createElement(Wkc,{battleMode:a})))}");
+  const original=f.window.Zkc;f.install();
+  const props={dropdownPlacement:'bottom-start',battleMode:{shouldShowBattleModeToggle:true,isBestOfNEnabled:true},autonomousModeConfig:{showToggle:true,isEnabled:true},label:'Autonomous Mode · Best of N (4)'};
+  const result=f.window.Zkc(props).props.children;
+  assert.equal(result[0].props.children.props.children[0].props.children,props.label,'a caller-supplied button label is not the tooltip');
+  assert.equal(result[0].props.children.props['aria-label'],'Select modes, current: Autonomous Mode, Best of N (4)');
+  assert.equal(result[1].props.children,'自主模式 · Best of N (4)');
+  f.uninstall()();assert.equal(f.window.Zkc,original);
+});
+
+
+test('account verification titles localize native defaults while supplied reasons keep their display origin', () => {
+  const f=nativeFixture();f.evaluate('var Z=()=>null,lA=()=>null;');
+  f.evaluate("var bmc=({productName:a,ineligibleReason:b=\"\",verificationUrl:c,appealInfo:d,onRetryAuth:f,onOpenFeedback:g})=>{var h=d?.linkText??\"Submit Appeal\";return(c=d?.url||c)?(a=d?b||`Sorry, this account is ineligible to use ${a}`:`Further action is required to use ${a}`,b=d?null:A.createElement(\"p\",{className:\"text-sm mb-4 text-muted-foreground\"},\"Please verify your account, then sign in again to continue. Learn more by visiting our\",\" \",A.createElement(\"a\",{href:\"https://antigravity.google/docs/faq\",target:\"_blank\",\nrel:\"noopener noreferrer\",className:\"underline hover:text-secondary-foreground\"},\"FAQ\"),\".\"),h=d?h:\"Verify\",d=d?\"Continue with different account\":\"Sign in again\",A.createElement(\"div\",{className:\"w-full h-full flex flex-col items-center justify-center p-4 text-center\"},A.createElement(\"div\",{className:\"bg-yellow-500/10 rounded-xl p-3 flex items-center justify-center flex-shrink-0 mb-6\"},A.createElement(Z,{name:\"warning\",className:\"h-6 w-6 text-yellow-500\"})),A.createElement(\"div\",{className:\"text-lg font-medium mb-2\"},\na),b,A.createElement(\"div\",{className:\"flex gap-3 mt-4\"},A.createElement(lA,{size:\"md\",variant:\"secondary\",asChild:!0},A.createElement(\"a\",{href:c,target:\"_blank\",rel:\"noopener noreferrer\"},h)),A.createElement(lA,{size:\"md\",variant:\"secondary\",onClick:f},d)),g&&A.createElement(lA,{size:\"md\",variant:\"link\",onClick:g,className:\"mt-2 text-sm text-muted-foreground hover:text-secondary-foreground font-normal\"},\"Having trouble signing in?\"))):A.createElement(\"div\",{className:\"w-full h-full flex flex-col items-center justify-center p-4 text-center\"},\nA.createElement(\"div\",{className:\"bg-yellow-500/10 rounded-xl p-3 flex items-center justify-center flex-shrink-0 mb-6\"},A.createElement(Z,{name:\"warning\",className:\"h-6 w-6 text-yellow-500\"})),A.createElement(\"div\",{className:\"text-lg font-medium mb-1\"},\"Sorry, this account is ineligible to use \",a),A.createElement(\"p\",{className:\"text-sm mb-4 text-muted-foreground\"},b,b&&(b.trim().endsWith(\".\")?\" \":\". \"),\"Learn more by visiting our\",\" \",A.createElement(\"a\",{href:\"https://antigravity.google/docs/faq\",\ntarget:\"_blank\",rel:\"noopener noreferrer\",className:\"underline hover:text-secondary-foreground\"},\"FAQ\"),\".\"),A.createElement(lA,{size:\"md\",variant:\"secondary\",onClick:f,className:\"mt-4\"},\"Continue with different account\"),g&&A.createElement(lA,{size:\"md\",variant:\"link\",onClick:g,className:\"mt-2 text-sm text-muted-foreground hover:text-secondary-foreground font-normal\"},\"Having trouble signing in?\"))};");
+  const original=f.window.bmc;f.install();
+  const product='Product  $& “Name”',url='https://fixture.invalid/verify';
+  const verify=f.window.bmc({productName:product,verificationUrl:url});
+  assert.equal(verify.props.children[1].props.children,'需要完成进一步验证，才能使用 '+product);
+  const appeal=f.window.bmc({productName:product,appealInfo:{url}});
+  assert.equal(appeal.props.children[1].props.children,'此账号不符合使用 '+product+' 的条件');
+  const supplied='Sorry, this account is ineligible to use '+product;
+  const custom=f.window.bmc({productName:product,appealInfo:{url},ineligibleReason:supplied});
+  assert.equal(custom.props.children[1].props.children,supplied);assert.equal(custom.props.children[1].props['data-ch-keep'],true);
+  assert.equal(verify.props.children[3].props.children[0].props.children.props.href,url);
+  f.uninstall()();assert.equal(f.window.bmc,original);
+});
+
+
+test('registered math renderer translates its error prefix and restores cached component calls on uninstall', () => {
+  const f=nativeFixture();
+  f.evaluate(`var mathCode=()=>null;
+    var mathFeature={remarkPlugins:[],renderer:function({math,displayMode:falseMode,error}) {
+      var settings={displayMode:falseMode,throwOnError:true};
+      return A.createElement(A.Fragment,null,
+        error&&A.createElement('span',{className:'math-error'},'⚠️ Failed to render LaTeX: ',error),
+        A.createElement(mathCode,{value:math,settings}));
+    }};`);
+  const object=f.window.mathFeature, original=object.renderer;
+  const adapters=f.install(), cached=object.renderer;
+  const props=Object.freeze({math:'\\text{Commit}',displayMode:true,error:'Show more'});
+  const result=object.renderer(props).props.children;
+  assert.equal(f.window.mathFeature,object);
+  assert.equal(Array.from(result[0].props.children).join(''),'⚠️ LaTeX 公式渲染失败：Show more');
+  assert.equal(result[0].props['data-ch-keep'],true);
+  assert.equal(result[1].props.value,props.math);
+  assert.equal(result[1].props.settings.throwOnError,true);
+  adapters.setStrings({'latex-error:prefix':'公式错误：'});
+  assert.equal(object.renderer(props).props.children[0].props.children[0],'公式错误：');
+  f.uninstall()();
+  assert.equal(object.renderer,original);
+  assert.equal(Array.from(cached(props).props.children[0].props.children).join(''),'⚠️ Failed to render LaTeX: Show more');
+});
+
+
+test('native embed and Markdown plugin slots localize fixed labels and keep source content', () => {
+  const f=nativeFixture();f.window.eval=code=>f.evaluate(code);
+  f.evaluate(`var hookCalls=0,latestCallback,contextReads=0,pluginContext={cascadeId:'fixture-conversation',stepIndex:7};
+    A.useCallback=callback=>{hookCalls++;latestCallback=callback;return callback};A.useMemo=callback=>callback();A.useEffect=()=>{};
+    A.useState=()=>[true,()=>{}];A.useRef=value=>({current:value});A.useContext=()=>({});
+    var Z=()=>null,BKb=()=>null,MKb=()=>null,FixtureMarkdown=()=>null,jD=()=>null,mJ=()=>null,lGb=()=>null;
+    var nKb=/^[A-Za-z0-9_ .@:/-]{1,256}$/;
+    var lZ=()=>{contextReads++;return pluginContext};
+    var openSetting=()=>{throw Error('must not invoke an action')};
+    var bC=()=>({stepHandler:{availableCredits:10,openSetting}}),XRb=()=>true;
+    var nl=()=>({}),iKb={},kB={},sB=()=>'',eE=()=>({content:null,error:'Commit'}),CF=()=>({logEvent(){}}),Qv=()=>()=>{},sY=()=>()=>{},oGb=callback=>callback;
+    var frameEnabled=false,oS=()=>frameEnabled,zY=()=>false;
+    const FixtureMarkdownComponents={};
+    var fixtureMemoOwner={$$typeof:Symbol.for('react.memo'),type:function markdownOwner(){
+      return A.createElement(FixtureMarkdown,{remarkPlugins:[],rehypePlugins:[],components:FixtureMarkdownComponents});
+    }};`);
+  // Current native const components, referenced through their mutable Markdown slots.
+  f.evaluate("const wKb=({src:a,openUri:b})=>{var c=a?a.split(\"/\").pop()||\"widget.html\":\"widget.html\";return A.createElement(\"div\",{\"data-testid\":\"agent-embed-fallback\",className:\"my-2 p-3 bg-muted/30 rounded-xl border border-dashed border-border flex items-center justify-between gap-3 text-xs\"},A.createElement(\"div\",{className:\"flex items-center gap-2 text-muted-foreground\"},A.createElement(\"span\",{className:\"font-medium text-foreground\"},c),A.createElement(\"span\",{className:\"text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground\"},\n\"Preview disabled (experiment off)\")),A.createElement(\"a\",{href:a,className:\"text-link hover:underline font-semibold flex items-center gap-1\",onClick:d=>{d.preventDefault();a&&b?.(a)}},\"Open Source Code\"))};const xKb=({src:a,width:b,style:c,cssVariables:d,DynamicUIRenderer:f,onSidecarLinkClick:g})=>{var h=sB(),{content:k,error:l}=eE(a,h);h=(0,A.useMemo)(()=>k?(new TextDecoder).decode(k):null,[k]);var m=(0,A.useContext)(kB),n=Qv(),{logEvent:q}=CF(),r=sY(),t=oGb((0,A.useCallback)(v=>{q(wg.AGENT_EMBED_INTERACTION,\n{extra:{interaction_type:v}})},[q])),u=(0,A.useCallback)(v=>{if(v&&typeof v===\"object\"&&!t(v))if(v.type===\"PROMPT\"){if(v=\"prompt\"in v&&typeof v.prompt===\"string\"?v.prompt:\"\")q(wg.AGENT_EMBED_INTERACTION,{extra:{interaction_type:\"prompt\"}}),r(v)}else v.type===\"OPEN_SIDECAR\"&&v.target&&g?.(String(v.target))},[t,q,r,g]);(0,A.useEffect)(()=>{l&&n(xg.AGENT_EMBED_FETCH_FAILED,Error(l))},[l,n]);return!l&&m&&a?h===null?A.createElement(\"div\",{className:\"flex items-center justify-center\",style:{width:b||\"100%\",\nheight:\"200px\",...c}},A.createElement(jD,null)):zY(a)?A.createElement(\"div\",{\"data-testid\":\"agent-embed\",style:{width:b||\"100%\",height:\"auto\",...c}},A.createElement(lGb,{sourceUri:a}),A.createElement(mJ,{htmlContent:h,title:\"Chief of Staff canvas\",cssVariables:d||{},height:\"500px\",scriptFree:!0,dataTestId:\"cos-canvas-iframe\"})):A.createElement(\"div\",{\"data-testid\":\"agent-embed\",style:{width:b||\"100%\",height:\"auto\",...c}},f?A.createElement(f,{html:h,cssVariables:d||{},maxHeight:500}):A.createElement(mJ,\n{htmlContent:h,title:\"Inline Widget\",cssVariables:d||{},autoResize:!0,autoResizeMaxHeight:500,onMessage:u,allowTailwind:!0,dataTestId:\"agent-embed-iframe\"})):A.createElement(\"div\",{className:\"p-2 border border-red-500 text-red-500 rounded text-sm\"},\"Invalid embed: \",a,\" \",l?`(${l})`:\"\")};const yKb=a=>{var b=(0,A.useContext)(kB),c=oS(\"jetski-generative-ui\"),[d,f]=(0,A.useState)(!1),{logEvent:g}=CF();(0,A.useEffect)(()=>{b?.getMendelFlags?b.getMendelFlags().then(()=>{f(!0)}).catch(()=>{f(!0)}):f(!0)},[b]);\n(0,A.useEffect)(()=>{d&&g(wg.AGENT_EMBED_LOAD,{extra:{generative_ui_enabled:String(c),render_mode:c?\"inline\":\"fallback\"}})},[d,c,g]);return d?c||a.src&&zY(a.src)?A.createElement(xKb,{...a}):A.createElement(wKb,{src:a.src,openUri:a.openUri}):A.createElement(\"div\",{className:\"flex items-center justify-center my-2\",style:{width:a.width||\"100%\",height:\"200px\",...a.style}},A.createElement(jD,null))};FixtureMarkdownComponents['plugin-card']=a=>\n{var {PluginCardRenderer:b,cascadeId:c,stepIndex:d}=lZ();a=a[\"catalog-id\"];a=typeof a===\"string\"?a.trim():\"\";return nKb.test(a)?b?A.createElement(b,{key:a,catalogId:a,cascadeId:c,stepIndex:d}):A.createElement(\"span\",{\"data-testid\":\"plugin-card-fallback\"},\"Suggested plugin:\",\" \",A.createElement(BKb,{href:`customization://${a}`},A.createElement(\"code\",null,a))):null};FixtureMarkdownComponents['agent-embed']=a=>{var {DynamicUIRenderer:b,openUri:c,cssVariablesProvider:d,onSidecarLinkClick:f}=lZ(),g=nl(d||iKb);return A.createElement(yKb,{cssVariables:g,DynamicUIRenderer:b,openUri:c,onSidecarLinkClick:f,...a})};var fixtureCredits=({stepIndex:a})=>{var {stepHandler:b}=bC(),c=XRb(a);a=(0,A.useCallback)(()=>{b?.openSetting({settingId:\"useAICredits\"})},[b]);if(!c||b?.availableCredits===void 0)return null;c=A.createElement(A.Fragment,null,\"AI Credits are used when you've exceeded your model quota. Keep track of your current AI Credits in the\",\" \",A.createElement(\"button\",{type:\"button\",className:\"text-blue-400 cursor-pointer hover:opacity-80\",onClick:a},\"Models Tab\"),\".\");return A.createElement(MKb,{text:\"AI Credits Used to Generate Response\",\ntooltipContent:c,onClick:a})};");
+  const originalSlot=f.evaluate("FixtureMarkdownComponents['plugin-card']"),originalEmbedSlot=f.evaluate("FixtureMarkdownComponents['agent-embed']"),originalCredits=f.window.fixtureCredits;
+  const installed=f.install();
+  assert.equal(f.window.contextReads,0,'discovery does not execute the Markdown component');
+  const slot=f.evaluate("FixtureMarkdownComponents['plugin-card']"),embedSlot=f.evaluate("FixtureMarkdownComponents['agent-embed']");
+  assert.notEqual(slot,originalSlot);assert.notEqual(embedSlot,originalEmbedSlot);
+  assert.ok(installed.hooks.some(h=>h.key==='plugin-card'&&h.owner===f.evaluate('FixtureMarkdownComponents')));
+  assert.equal(f.evaluate('Object.prototype.hasOwnProperty.call(window,"FixtureMarkdownComponents")'),false);
+  const catalog='antigravity-plugins-official/plugin/test',props=Object.freeze({'catalog-id':catalog});
+  const card=slot(props);
+  assert.equal(f.window.contextReads,1);assert.equal(card.props.children[0],'推荐插件：');
+  assert.equal(card.props.children[2].props.href,'customization://'+catalog);
+  assert.equal(card.props.children[2].props.children.type,'code');assert.equal(card.props.children[2].props.children.props.children,catalog);
+  assert.equal(props['catalog-id'],catalog);assert.equal(slot({'catalog-id':'<invalid>'}),null);
+  const Custom=()=>null;f.window.pluginContext.PluginCardRenderer=Custom;
+  const custom=slot(props);assert.equal(custom.type,Custom);assert.equal(custom.props.catalogId,catalog);assert.equal(custom.props.cascadeId,'fixture-conversation');assert.equal(custom.props.stepIndex,7);
+  const src='file:///fixture/Open Source Code',openUri=()=>{throw Error('must not open a file')};
+  function embedResult(){const mode=embedSlot({src,openUri});assert.notEqual(mode.type,f.evaluate('yKb'));const child=mode.type(mode.props);assert.notEqual(child.type,f.evaluate(f.window.frameEnabled?'xKb':'wKb'));return child.type(child.props);}
+  const embed=embedResult();
+  assert.equal(embed.props.children[0].props.children[0].props.children,'Open Source Code','an identical real filename stays verbatim');
+  assert.equal(embed.props.children[0].props.children[1].props.children,'预览未启用（实验功能已关闭）');
+  assert.equal(embed.props.children[1].props.children,'打开源码');assert.equal(embed.props.children[1].props.href,src);
+  f.window.frameEnabled=true;const invalid=embedResult();
+  assert.equal(invalid.props.children[0],'无法显示嵌入内容：');assert.equal(invalid.props.children[1],src);assert.equal(invalid.props.children[3],'(Commit)');assert.equal(invalid.props['data-ch-keep'],true);
+  f.window.hookCalls=0;
+  const credit=f.window.fixtureCredits({stepIndex:7});
+  assert.equal(f.window.hookCalls,1);assert.equal(credit.props.onClick,f.window.latestCallback);
+  assert.equal(credit.props.text,'生成此回复消耗了 AI 积分');
+  const tooltip=credit.props.tooltipContent.props.children;
+  assert.equal(tooltip[0],'超出模型额度后将使用 AI 积分。你可以在“');
+  assert.equal(tooltip[1].props.children,'模型选项卡');assert.equal(tooltip[1].props.onClick,credit.props.onClick);
+  installed.setStrings({'Suggested plugin:':'插件建议：','AI Credits Used to Generate Response':'此回复使用了积分'});
+  f.window.pluginContext.PluginCardRenderer=undefined;
+  assert.equal(slot(props).props.children[0],'插件建议：');assert.equal(f.window.fixtureCredits({stepIndex:7}).props.text,'此回复使用了积分');
+  f.uninstall()();
+  assert.equal(f.evaluate("FixtureMarkdownComponents['plugin-card']"),originalSlot);assert.equal(f.evaluate("FixtureMarkdownComponents['agent-embed']"),originalEmbedSlot);assert.equal(f.window.fixtureCredits,originalCredits);
+});
+
+
+test('lexical media children translate only default labels and preserve supplied descriptions and filenames', () => {
+  const f=nativeFixture();f.window.eval=code=>f.evaluate(code);
+  f.evaluate(`A.useMemo=callback=>callback();A.useState=value=>[value,()=>{}];A.useId=()=>':fixture';
+    var Z=()=>null,EY=()=>null,iA=()=>null,JY=()=>null,i1b=()=>null,jD=()=>null;
+    var sB=()=>'',FC=(_description,mime)=>({category:mime.startsWith('video/')?'video':'image'});
+    var DC=()=> 'data:image/fixture',GC=()=>{throw Error('must not resolve media')};
+    var bPa=items=>({images:items.filter(v=>v.mimeType.startsWith('image/')),videos:items.filter(v=>v.mimeType.startsWith('video/')),pdfs:[],audio:items.filter(v=>v.mimeType.startsWith('audio/'))});
+    var fixtureArtifact={ari:{sourceUri:{toString:()=> 'file:///'}},fileExt:'mp3',contents:''};
+    var mF=()=>fixtureArtifact,BB=()=> 'audio',Fj=()=>({get:()=>false}),oS=()=>false,tB=()=> 'readFile';
+    var hE=()=>({blobUrl:'blob:fixture',error:null}),Df=uri=>({path:uri}),Xf={basename:uri=>uri.path.split('/').at(-1)};`);
+  f.evaluate("const clc=({mediaItem:a,index:b})=>{var [c,d]=(0,A.useState)(!1),f=(0,A.useId)(),g=sB(),{category:h}=FC(a.description,a.mimeType),k=h===\"video\"?\"Video\":\"Image\",l=DC(a);b=`${f}-compact-media-${b}`;f=a.description||k;return A.createElement(A.Fragment,null,A.createElement(EY,{src:()=>GC(a,void 0,l),originalFilePath:a.description||a.uri,disabled:!(h===\"image\"&&l)},A.createElement(\"button\",{type:\"button\",onClick:()=>{d(!0)},className:\"w-6 h-6 rounded border border-border overflow-hidden cursor-pointer hover:opacity-80 flex-shrink-0 flex items-center justify-center bg-muted\",\n\"data-tooltip-id\":b,\"aria-label\":`View ${f}`},l?A.createElement(\"img\",{src:l,alt:k,className:\"w-full h-full object-cover\"}):A.createElement(Z,{name:\"image\",size:14,className:\"text-muted-foreground\"}))),A.createElement(iA,{id:b,content:f,place:\"top\"}),c&&A.createElement(JY,{media:a,isOpen:c,onClose:()=>{d(!1)},conversationId:g}))};const elc=({mediaItem:a,index:b})=>{b=`${(0,A.useId)()}-compact-audio-${b}`;a=a.description||\"Audio clip\";return A.createElement(A.Fragment,null,A.createElement(\"div\",{className:\"w-6 h-6 rounded border border-border flex-shrink-0 flex items-center justify-center bg-muted text-muted-foreground\",\"data-tooltip-id\":b},A.createElement(Z,{name:\"mic\",size:14})),A.createElement(iA,{id:b,content:a,place:\"top\"}))};const k1b=({ari:a,resolveArtifactUrl:b})=>{var c=tB(),d=sB();b=c===\"readFile\"?void 0:b(a.sourceUri.toString());var {blobUrl:f,error:g}=hE(b?void 0:a.sourceUri.toString(),void 0,void 0,d);d=b||f;if(!d&&!g)return A.createElement(\"div\",{className:\"flex items-center justify-center p-4\"},A.createElement(jD,{size:16}));if(!d)return A.createElement(\"div\",{className:\"p-4 text-error\"},\"Unable to resolve audio source URL\");a=Xf.basename(Df(a.sourceUri.toString()));return A.createElement(i1b,{url:d,filename:a||\n\"Audio File\"})};var glc=({media:a,resolveUrl:b})=>{var c=(0,A.useMemo)(()=>{var {images:g,videos:h,audio:k,pdfs:l}=bPa(a),\nm=[];for(let n of[...g,...h])m.push({type:\"media\",item:n});for(let n of l)m.push({type:\"pdf\",item:n});for(let n of k)m.push({type:\"audio\",item:n});return m},[a]),d=c.length,f=(0,A.useId)();c=d<=3?c:c.slice(0,2);d-=c.length;return A.createElement(\"div\",{className:\"flex flex-row items-center gap-1 flex-shrink-0\"},c.map(({type:g,item:h},k)=>g===\"media\"?A.createElement(clc,{key:k,mediaItem:h,index:k}):g===\"pdf\"?A.createElement(dlc,{key:k,mediaItem:h,index:k,resolveUrl:b}):A.createElement(elc,{key:k,mediaItem:h,\nindex:k})),d>0&&A.createElement(A.Fragment,null,A.createElement(\"div\",{className:\"w-6 h-6 rounded border border-border flex-shrink-0 flex items-center justify-center bg-muted text-muted-foreground text-[10px] font-semibold select-none cursor-default\",\"data-tooltip-id\":f},\"+\",d),A.createElement(iA,{id:f,content:`+${d} attachments`,place:\"top\"})))};var p1b=a=>{var {ari:b,fileExt:c,contents:d}=mF(),f=(0,A.useMemo)(()=>BB(c),[c]),g=Fj().get(\"pdfViewer\")??!1,h=oS(\"jetski-generative-ui\"),k=a.CodeFileViewer;switch(f){case \"image\":return A.createElement(V0b,{ari:b,resolveArtifactUrl:a.resolveArtifactUrl,activeCommentTarget:a.activeCommentTarget,onActiveCommentTargetFocused:a.onActiveCommentTargetFocused});case \"recording\":return A.createElement(j1b,{key:b.sourceUri.toString(),ari:b,resolveArtifactUrl:a.resolveArtifactUrl});case \"audio\":return A.createElement(k1b,\n{ari:b,resolveArtifactUrl:a.resolveArtifactUrl});case \"pdf\":return g?A.createElement(l1b,{key:b.sourceUri.toString(),ari:b,resolveArtifactUrl:a.resolveArtifactUrl}):A.createElement(n1b,{...a});case \"html\":return zY(b.sourceUri.toString())?A.createElement(o1b,{contents:d,cssVariablesProvider:a.cssVariablesProvider,cosCanvas:!0}):h?A.createElement(o1b,{contents:d,cssVariablesProvider:a.cssVariablesProvider}):A.createElement(a1b,{...a});default:return zNa(b.sourceUri.toString())?A.createElement(n1b,\n{...a}):k&&!wB.includes(c.toLowerCase())?A.createElement(k,{fileUri:b.sourceUri.toString(),fileContents:d}):A.createElement(a1b,{...a})}};");
+  const originals={compact:f.window.glc,artifact:f.window.p1b};
+  const installed=f.install();
+  function compact(mediaItem,childName){const node=f.window.glc({media:Object.freeze([mediaItem])}).props.children[0][0];assert.notEqual(node.type,f.evaluate(childName));assert.equal(node.props.mediaItem,mediaItem);return node.type(node.props);}
+  const audio=Object.freeze({mimeType:'audio/wav',uri:'file:///audio',description:''});
+  assert.equal(compact(audio,'elc').props.children[1].props.content,'音频片段');
+  const namedAudio=Object.freeze({...audio,description:'Audio clip'}),audioTooltip=compact(namedAudio,'elc').props.children[1].props.content;
+  assert.equal(audioTooltip.props.children,'Audio clip');assert.equal(audioTooltip.props['data-ch-keep'],true);
+  const image=Object.freeze({mimeType:'image/png',uri:'file:///image',description:''}),imageView=compact(image,'clc');
+  assert.equal(imageView.props.children[1].props.content,'图片');
+  assert.equal(imageView.props.children[0].props.children.props.children.props.alt,'图片');
+  const namedImage=Object.freeze({...image,description:'Image'}),imageTooltip=compact(namedImage,'clc').props.children[1].props.content;
+  assert.equal(imageTooltip.props.children,'Image');assert.equal(imageTooltip.props['data-ch-keep'],true);
+  const video=Object.freeze({mimeType:'video/mp4',uri:'file:///video',description:''});
+  assert.equal(compact(video,'clc').props.children[1].props.content,'视频');
+  const resolveArtifactUrl=()=>{throw Error('must not resolve artifact')};
+  function artifact(){const node=f.window.p1b({resolveArtifactUrl});assert.notEqual(node.type,f.evaluate('k1b'));return node.type(node.props);}
+  assert.equal(artifact().props.filename,'音频文件');assert.equal(artifact().props.url,'blob:fixture');
+  f.window.fixtureArtifact.ari={sourceUri:{toString:()=> 'file:///Audio File'}};
+  assert.equal(artifact().props.filename,'Audio File','a real filename matching the fallback stays verbatim');
+  installed.setStrings({'media-default:Audio clip':'录音片段','media-default:Image':'图像','media-default:Audio File':'音频'});
+  assert.equal(compact(audio,'elc').props.children[1].props.content,'录音片段');
+  assert.equal(compact(namedAudio,'elc').props.children[1].props.content.props.children,'Audio clip');
+  f.window.fixtureArtifact.ari={sourceUri:{toString:()=> 'file:///'}};assert.equal(artifact().props.filename,'音频');
+  f.uninstall()();assert.equal(f.window.glc,originals.compact);assert.equal(f.window.p1b,originals.artifact);
+  assert.equal(f.window.glc({media:[audio]}).props.children[0][0].type,f.evaluate('elc'));
+});
+
+
+test('native default names and approval status preserve supplied names, task payloads and localized counts', () => {
+  const f=nativeFixture();
+  f.window.eval=code=>f.evaluate(code);
+  f.evaluate(`
+    var fixtureAgentConfig={},fixtureHideSubagents=true,fixtureApproval=true,fixtureCount=2,fixtureRawDetails=true,fixtureOpens=[];
+    var fixtureNoop=()=>{},fixtureActionCalls=0;
+    A.useState=value=>[value,fixtureNoop];A.useMemo=callback=>callback();A.useCallback=callback=>callback;A.useEffect=fixtureNoop;A.useRef=value=>({current:value});A.useContext=()=>null;A.useId=()=> 'native';
+    var Fj=()=>({get:key=>key==='agentScriptsFeature'?fixtureAgentConfig:key==='conversationView'?{hideSubagents:fixtureHideSubagents}:key==='rawCommandDetails'?{isEnabled:fixtureRawDetails}:undefined});
+    var TV=()=>({triggerShowAgentScriptConfigModal:fixtureNoop,registerOpenSelector:()=>({dispose:fixtureNoop})}),jJ={},lB=()=>({updateCustomization:()=>{fixtureActionCalls++},cancelCascadeSteps:()=>{fixtureActionCalls++}});
+    var Qtc=()=>true,ZR=fixtureNoop,$R=fixtureNoop,pA=fixtureNoop,Z=fixtureNoop,aS=fixtureNoop,gS=fixtureNoop,hS=fixtureNoop,iA=fixtureNoop,lA=fixtureNoop,k7=fixtureNoop,Rtc=fixtureNoop;
+    var Ktc=fixtureNoop,Ltc=fixtureNoop,Mtc=fixtureNoop,Ntc=fixtureNoop;
+    var kl=()=>fixtureNoop,jl=()=>({getState:()=>({})}),EF=()=>fixtureNoop,GH=()=>fixtureNoop;
+    var uA=()=>({scrollRef:{current:null},overflow:{top:false,bottom:false},onScroll:fixtureNoop}),JNb=()=>fixtureNoop;
+    var v2=()=>payload=>fixtureOpens.push(payload),No=value=>value,gP=()=>false,FQ=()=>[true,fixtureNoop],NH=()=>undefined,hYa=()=>[];
+    var WSb=function WSb(scope){var count=fixtureCount,noun='tasks';return {text:count?\`\${count} \${noun} running\`:'',mentionsSubagents:false,mentionsTasks:count>0}};
+    var htc=items=>items.map(item=>({item,key:item.key,show:true})),iNb=fixtureNoop,JZ=fixtureNoop,itc={},XW='480px';
+    var tE=()=> 'conversation',sC=()=>fixtureApproval,SSb={},qZ=fixtureNoop,XSb=fixtureNoop;
+    var Hi=(...values)=>values.filter(Boolean).join(' '),J={CortexStepStatus:{RUNNING:1}},wg={VIEW_BACKGROUND_TASK:'view'};
+  `);
+  // Current native selector, running panel and status owners.
+  f.evaluate("var Stc=({agentScriptsEnabled:a,selectedAgentScriptItem:b,setSelectedAgentScriptItem:c,agentCustomizations:d,refreshAgentScripts:f,isLoadingAgentScripts:g,agentScriptsError:h})=>{var [k,l]=(0,A.useState)(!1),{triggerShowAgentScriptConfigModal:m,registerOpenSelector:n}=TV(),q=Fj().get(\"agentScriptsFeature\")?.mainAgentName??\"Main Agent\",r=Fj(),t=r.get(\"agentScriptsFeature\"),u=t?.disableScriptModification,v=t?.allowNewAgentScript,w=t?.disableScriptCreation,x=t?.allowScriptConfiguration!==!1;r=r.get(\"inputComponent\");\nt=(0,A.useContext)(jJ)?.product?.customLinks?.docsAgents;var {updateCustomization:y}=lB(),z=(0,A.useCallback)(async E=>{var F=e,G=e;try{try{E.agent&&(G(await F(y(Vb(Yh,{path:E.path,operation:2,customization:{case:\"agent\",value:E.agent}})))),f())}catch(H){G(),console.error(\"Failed to remove agent:\",H)}}finally{F()}},[y,f]);(0,A.useEffect)(()=>{var E=n(()=>{!g&&a&&l(!0)});return()=>{E.dispose()}},[n,g,a]);var C=(0,A.useCallback)(E=>{l(E);E&&f()},[f]),D=(0,A.useMemo)(()=>d.filter(E=>!E.agent?.disabled),\n[d]);(0,A.useEffect)(()=>{g||h||!b||D.find(E=>E.agent?.name===b.name)||c(void 0)},[g,h,b,D,c]);return Qtc({agentScriptsEnabled:a,isLoadingAgentScripts:g,agentScriptsError:h,hideAgentSelectorIfEmpty:r?.hideAgentSelectorIfEmpty,agentCustomizationsCount:d.length,selectedAgentScriptItem:b})?A.createElement(ZR,{open:k,onOpenChange:C},A.createElement($R,{asChild:!0},A.createElement(pA,{\"aria-label\":\"Select Agent\"},A.createElement(\"span\",{className:\"select-none\",\"data-testid\":\"agent-selector-label\"},b?.name??\nq),A.createElement(Z,{name:\"keyboard_arrow_down\",size:14}))),A.createElement(aS,{align:\"end\",className:\"border-border w-max min-w-[200px] max-w-[280px] max-h-80 overflow-y-auto overscroll-contain\"},A.createElement(gS,null,A.createElement(hS,{className:\"flex items-center gap-1\"},A.createElement(\"span\",null,\"Agents\"),t&&A.createElement(A.Fragment,null,A.createElement(iA,{id:\"custom-agents-docs-tooltip\",place:\"top\"},\"Click to Open Docs\"),A.createElement(\"a\",{href:t,target:\"_blank\",rel:\"noopener noreferrer\",\n\"data-tooltip-id\":\"custom-agents-docs-tooltip\",\"aria-label\":\"Click to open docs\",className:\"text-muted-foreground hover:text-foreground inline-flex items-center p-0.5 rounded hover:bg-secondary transition-colors\",onClick:E=>E.stopPropagation()},A.createElement(Z,{name:\"info\",size:13})))),A.createElement(k7,{icon:Ktc,label:q,onSelect:()=>{c(void 0)}}),D.map(E=>{var F=E.agent;if(!F)return null;var G=!u?.(F.name);return A.createElement(k7,{key:`${E.path}/${F.name}`,icon:Ktc,label:F.name,onSelect:()=>\n{c(F,E.path)},kebab:G?A.createElement(Rtc,{showConfigure:x,onConfigure:()=>{m({initialCustomization:E});l(!1)},onRemove:()=>{z(E)}}):void 0})}),g?A.createElement(k7,{icon:Ltc,iconClassNames:\"animate-spin\",label:\"Getting scripts...\",disabled:!0}):h?A.createElement(k7,{icon:Mtc,iconClassNames:\"text-red-500\",label:`Error: ${h.message}`,disabled:!0}):v&&!w&&A.createElement(k7,{icon:Ntc,label:\"New Agent Script\",onSelect:()=>{m({})}})))):null};\nvar jtc=({tasks:a,cascadeId:b,trajectoryId:c,accumulatedSections:d})=>{var f=kl(),g=jl(),h=EF(),k=GH(),{scrollRef:l,overflow:m,onScroll:n}=uA(),{cancelCascadeSteps:q}=lB(),r=JNb(),t=v2(b?No({cascadeId:b}):void 0,\"running_items_panel\"),u=gP(),[v,w]=FQ(`running-items-panel-expanded-${b}`,I=>JSON.stringify(I),I=>JSON.parse(I)),x=v??!u;u=WSb(\"tree\").text;var y=Fj(),z=y.get(\"rawCommandDetails\")?.isEnabled??!0,C=y.get(\"browserSubagentWebview\")===!0,D=NH(),E=hYa(b),F=(0,A.useMemo)(()=>E.filter(I=>I.status===\nJ.CortexStepStatus.RUNNING),[E]),G=(0,A.useMemo)(()=>[...a].sort((I,K)=>(K.taskSnapshot?.stepIndex??0)-(I.taskSnapshot?.stepIndex??0)),[a]),H=(0,A.useMemo)(()=>(d??[]).filter(I=>I.locations&&I.locations.length!==0&&I.locations.includes(J.RenderLocation.ABOVE_INPUT)?I.items?.some(K=>!!K.renderInfo)??!1:!1),[d]);y=F.length+G.length+H.length;F=[...F.map(I=>({key:`subagent-${I.conversationId}`,icon:A.createElement(LZ,{isPendingUserInteraction:I.needsAttention,toolName:I.firstWaitingStep?.metadata?.toolCall?.name,\nisLoading:I.status===J.CortexStepStatus.RUNNING,isUnread:!1,idleFallback:A.createElement(Z,{name:\"check_circle\",size:16,className:\"shrink-0 opacity-50\"})}),label:I.toolSummary||I.subagentName,onClick:()=>{h(wg.VIEW_SUBAGENT_FROM_PANEL,\"running_subagent_item\");var K=C&&b&&I.subagentName===\"browser\"?$qa(g.getState(),b,I.conversationId,D):void 0;K&&ara(f,I.conversationId,K,D);f($q.actions.viewSubagent({parentConversationId:b,childConversationId:I.conversationId,subagentName:I.subagentName,toolSummary:I.toolSummary}));\nK?k(b,I.conversationId,{tab:K}):k(b,I.conversationId)},onStop:K=>{K.stopPropagation();h(wg.STEP_REJECT,\"subagent_stop_button_panel\");r(I.conversationId)},tooltipId:`stop-subagent-${I.conversationId}`,tooltipContent:\"Stop Subagent\",labelTooltipId:`label-subagent-${I.conversationId}`,needsAttention:I.needsAttention})),...G.map((I,K)=>{var L=I.taskSnapshot,M=L?.description||L?.toolSummary||\"Background Task\";I=z?M:L?.toolSummary||\"Background task\";return{key:`task-${L?.stepIndex??`index-${K}`}`,icon:A.createElement(iNb,\n{size:16,className:\"shrink-0 opacity-70\"}),label:I,onClick:()=>{t&&L?.stepIndex!==void 0&&(h(wg.VIEW_BACKGROUND_TASK,\"running_task_item\"),t({type:\"backgroundTaskView\",backgroundTaskView:{cascadeId:b,taskId:L.taskId,trajectoryId:c??\"\",stepIndex:L.stepIndex,commandText:M}}))},onStop:N=>{N.stopPropagation();h(wg.STEP_REJECT,\"task_stop_button\");b&&L?.stepIndex!==void 0&&q(b,[L.stepIndex])},tooltipId:`stop-task-${L?.stepIndex}`,tooltipContent:\"Stop Task\",labelTooltipId:`label-task-${L?.stepIndex}`,fontClass:z?\n\"font-mono\":void 0}}),...H.flatMap(I=>(I.items?.filter(K=>!!K.renderInfo)??[]).map((K,L)=>{var {iconName:M,isSpinning:N,label:O,itemKey:P}=Ioc(I,K,L);return{key:`section-${P}`,icon:A.createElement(\"div\",{className:\"flex items-center justify-center w-4 h-4 shrink-0\"},A.createElement(Z,{name:M,size:16,className:`shrink-0 ${N?\"animate-spin opacity-50\":\"opacity-70\"}`})),label:O,onClick:()=>{t&&(h(wg.VIEW_ACCUMULATED_SECTION_FROM_PANEL,`running_${I.key}_item`),t({type:\"overview\",overview:{cascadeId:b}}))}}}))];\nF=htc(F,I=>I.key);return A.createElement(\"div\",{\"data-testid\":\"running-items-panel\",className:Hi(\"grid transition-[grid-template-rows] ease-expo-out motion-reduce:transition-none\",y>0?\"grid-rows-[1fr]\":\"grid-rows-[0fr]\"),style:itc},A.createElement(\"div\",{className:\"min-h-0 overflow-hidden\"},A.createElement(\"div\",{className:\"flex flex-col px-3 py-1.5 rounded-t-2xl w-full\"},A.createElement(\"button\",{\"data-testid\":\"running-items-panel-toggle\",className:\"flex items-center justify-between cursor-pointer h-6 shrink-0 text-secondary-foreground hover:text-foreground border-none bg-transparent outline-none w-full\",\n\"aria-label\":u,\"aria-expanded\":x,onClick:()=>{h(wg.RUNNING_ITEMS_PANEL_TOGGLE,\"running_items_toggle\",{extra:{expanded:String(!x)}});w(!x)}},A.createElement(\"span\",{className:\"text-sm\"},u),A.createElement(Z,{name:\"keyboard_arrow_up\",size:16,className:Hi(\"shrink-0 transition-transform duration-150\",x&&\"rotate-180\")})),A.createElement(\"div\",{className:Hi(\"grid transition-[grid-template-rows] ease-expo-out motion-reduce:transition-none\",x?\"grid-rows-[1fr]\":\"grid-rows-[0fr]\"),style:itc},A.createElement(\"div\",\n{className:\"min-h-0 overflow-hidden\"},A.createElement(\"div\",{className:\"py-1\"},A.createElement(\"div\",{ref:l,onScroll:n,className:\"flex flex-col max-h-32 overflow-y-auto\",style:{maskImage:m.top&&m.bottom?\"linear-gradient(to bottom, transparent, black 15%, black 85%, transparent)\":m.top?\"linear-gradient(to bottom, transparent, black 15%)\":m.bottom?\"linear-gradient(to bottom, black 85%, transparent)\":void 0}},F.map(({item:I,key:K,show:L})=>A.createElement(JZ,{key:K,shouldShow:L,durationMs:500,easingClassName:\"ease-expo-out\",\nclassName:\"shrink-0\"},A.createElement(\"div\",{className:\"flex items-center gap-1.5 mb-0.5 text-secondary-foreground hover:text-foreground h-6 group relative overflow-hidden cursor-pointer shrink-0\"},A.createElement(\"button\",{className:\"flex items-center gap-1.5 flex-1 min-w-0 text-left border-none bg-transparent outline-none cursor-pointer\",onClick:I.onClick},I.icon,A.createElement(\"div\",{className:\"flex items-center gap-1 min-w-0\",\"data-tooltip-id\":I.labelTooltipId},A.createElement(\"span\",{className:`text-sm truncate ${I.fontClass??\n\"\"}`},I.label),I.needsAttention&&A.createElement(\"span\",{className:\"text-sm text-muted-foreground group-hover:text-secondary-foreground whitespace-nowrap\"},\"Needs Attention\"))),I.labelTooltipId&&A.createElement(iA,{id:I.labelTooltipId,place:\"top\"},A.createElement(\"div\",{style:{maxWidth:`min(${XW}, calc(100vw - 32px))`},className:\"whitespace-pre-wrap break-all\"},I.label)),I.onStop&&A.createElement(A.Fragment,null,A.createElement(\"div\",{className:Hi(\"absolute top-0 bottom-0 right-0 pl-3 flex items-center justify-end gap-px\",\n\"can-hover:opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 group-has-[:focus-visible]:opacity-100 has-[:focus-visible]:opacity-100\"),style:{background:\"linear-gradient(to right, transparent 0%, var(--card-border) 25%)\"}},A.createElement(lA,{variant:\"ghost\",size:\"icon\",onClick:I.onStop,\"aria-label\":I.tooltipContent??\"Stop\",\"data-tooltip-id\":I.tooltipId,className:\"mr-0.5\"},A.createElement(Z,{name:\"stop_circle\",size:16,className:\"text-secondary-foreground hover:text-foreground transition-colors\"}))),\nI.tooltipId&&A.createElement(iA,{id:I.tooltipId,content:I.tooltipContent??\"Stop\",place:\"left\"}))))))))))))};\nvar YSb=({className:a}={})=>{var {text:b,mentionsSubagents:c,mentionsTasks:d}=WSb(\"direct\"),f=tE();f=!!sC(f);var g=(0,A.useContext)(SSb),h=Fj().get(\"conversationView\")?.hideSubagents??!1;if(h){if(!f&&!c&&!d)return null}else if(!b)return null;var k=h?f?\"Waiting for your approval\":\"Working\":b,l=[];h||(c&&l.push(\"subagents\"),d&&l.push(\"backgroundTasks\"));return g&&l.length!==0?A.createElement(XSb,{statusText:b,sections:l,renderRunningItems:g,className:a}):A.createElement(\"div\",{\"data-testid\":\"idle-status-text\",\nclassName:Hi(\"flex items-center text-sm text-muted-foreground min-w-0 max-w-full\",a)},A.createElement(qZ,{active:!(h&&f),className:\"truncate\"},k))};");
+  const original={agent:f.window.Stc,panel:f.window.jtc,idle:f.window.YSb};
+  const adapters=f.install();
+
+  const elements=value=>{
+    const out=[];function walk(node){if(Array.isArray(node))node.forEach(walk);else if(node?.props){out.push(node);walk(node.props.children)}}walk(value);return out;
+  };
+  const selectedLabel=tree=>elements(tree).find(node=>node.props['data-testid']==='agent-selector-label').props.children;
+  const agentProps={agentScriptsEnabled:true,agentCustomizations:[],refreshAgentScripts:f.window.fixtureNoop};
+  assert.equal(selectedLabel(f.window.Stc(agentProps)),'主智能体');
+  f.window.fixtureAgentConfig={mainAgentName:'Main Agent'};
+  assert.equal(selectedLabel(f.window.Stc(agentProps)),'Main Agent','configured labels remain native even when equal to the fallback');
+  f.window.fixtureAgentConfig={};
+  assert.equal(selectedLabel(f.window.Stc({...agentProps,selectedAgentScriptItem:{name:'Main Agent'}})),'Main Agent');
+  const taskLabel=tree=>elements(tree).find(node=>node.type==='span'&&node.props.className?.startsWith('text-sm truncate')).props.children;
+  const nativeTask={taskSnapshot:{stepIndex:1,taskId:'task'}};
+  assert.equal(taskLabel(f.window.jtc({tasks:[nativeTask],cascadeId:'conversation'})),'后台任务');
+  const actualTask={taskSnapshot:{stepIndex:1,taskId:'task',description:'Background Task'}};
+  const actualTree=f.window.jtc({tasks:[actualTask],cascadeId:'conversation'});
+  assert.equal(taskLabel(actualTree),'Background Task');
+  elements(actualTree).find(node=>node.type==='button'&&node.props.className?.includes('flex-1 min-w-0 text-left')).props.onClick();
+  assert.equal(f.window.fixtureOpens[0].backgroundTaskView.commandText,'Background Task');
+  assert.equal(f.window.fixtureOpens[0].backgroundTaskView.taskId,'task');
+  f.window.fixtureRawDetails=false;
+  assert.equal(taskLabel(f.window.jtc({tasks:[{taskSnapshot:{stepIndex:1,toolSummary:'Background task'}}],cascadeId:'conversation'})),'Background task');
+  assert.equal(taskLabel(f.window.jtc({tasks:[nativeTask],cascadeId:'conversation'})),'后台任务');
+  let idle=f.window.YSb({});assert.equal(idle.props.children.props.children,'等待你批准');assert.equal(idle.props.children.props.active,false);
+  f.window.fixtureHideSubagents=false;
+  idle=f.window.YSb({});assert.equal(idle.props.children.props.children,'2 个任务运行中','the existing idle-summary source adapter still runs');
+  assert.equal(f.window.fixtureActionCalls,0);
+  adapters.setStrings({'native-fallback:main-agent-name-fallback:Main Agent':'默认主代理'});
+  assert.equal(selectedLabel(f.window.Stc(agentProps)),'默认主代理');
+  f.uninstall()();
+  assert.equal(f.window.Stc,original.agent);assert.equal(f.window.jtc,original.panel);assert.equal(f.window.YSb,original.idle);
+});
+
+
+test('native sign-in defaults keep their original action callbacks', () => {
+  const f=nativeFixture();
+  f.window.eval=code=>f.evaluate(code);
+  // Current native auth-status factory.
+  f.evaluate("function Gsc(a,b){if(a===\"validatingLogin\")return{key:\"auth-status\",message:\"Authenticating...\"};if(a===\"loginError\")return{key:\"auth-status\",message:\"There was an error with your authentication. To log in, click \",action:{label:\"here\",onClick:b}};if(a&&a!==\"signedIn\"&&a!==\"uninitialized\"&&a!==\"projectPicker\")return a===\"signedOut\"?{key:\"auth-status\",message:\"To use the agent, please login \",action:{label:\"here\",onClick:b}}:{key:\"auth-status\",message:\"Log in to use the agent\"}}");
+  const originalAuth=f.window.Gsc,login=()=> 'login';
+  const adapters=f.install();
+  for(const [state,message,action]of [['signedOut','登录后即可使用智能体。','登录'],['loginError','登录验证失败。','重新登录']]) {
+    const result=f.window.Gsc(state,login);assert.equal(result.message,message);assert.equal(result.action.label,action);assert.equal(result.action.onClick,login);
+    assert.equal(originalAuth(state,login).action.label,'here','native source records are not mutated');
+  }
+  assert.equal(f.window.Gsc('validatingLogin').message,'正在验证登录…');
+  assert.equal(f.window.Gsc('signedIn'),undefined);
+  f.uninstall()();assert.equal(f.window.Gsc,originalAuth);
+});
+
+
+test('native browser command callbacks localize setup and retain gated copy, URLs and bypass branches', async () => {
+  const f=nativeFixture();
+  f.window.eval=code=>f.evaluate(code);
+  f.evaluate(`var e=value=>value,a0=()=>{};const wic=props=>A.createElement('code',null,props.url);`);
+  // Current input's default commandHooks parameter/marker, and the complete
+  // lexical async browser handler. No browser service or business callback runs.
+  f.evaluate("const xic=async(a,b)=>{var c=a=e;try{if(b.isBrowserAllowed===!1)return b.triggerWarning(\"Browser Configuration Required\",A.createElement(\"div\",{className:\"text-foreground font-normal\"},A.createElement(\"p\",null,b.gatingMessage))),\"Browser control is gated in remote sessions.\";try{if(c(await a(b.services.checkDevToolsActivePort())).exists)return!1}catch(d){c()}b.triggerWarning(\"Remote Debugging Required\",\nA.createElement(\"div\",{className:\"text-foreground font-normal\"},A.createElement(\"p\",{className:\"mb-2\"},b.isRemoteControl?\"Chrome on the machine you are controlling is not accepting remote debugging. Complete these steps on that machine, not in this tab:\":\"To use browser tools, you need to enable remote debugging:\"),A.createElement(\"ol\",{className:\"list-decimal pl-4 space-y-1\"},A.createElement(\"li\",null,b.isRemoteControl?A.createElement(\"span\",null,\"Open Google Chrome on the machine running Antigravity.\",\nb.isGoogleInternal&&A.createElement(A.Fragment,null,\" \",\"If that machine is a cloudtop, reach it via\",\" \",A.createElement(\"a\",{href:\"http://go/crd\",target:\"_blank\",rel:\"noopener noreferrer\",className:\"text-link underline\"},\"go/crd\"),\".\")):b.isGoogleInternal?A.createElement(\"span\",null,\"Go to\",\" \",A.createElement(\"a\",{href:\"http://go/crd\",target:\"_blank\",rel:\"noopener noreferrer\",className:\"text-link underline\"},\"go/crd\"),\", open Chrome \",A.createElement(\"em\",null,\"on your cloudtop server\"),\" that runs Jetski Web.\"):\nA.createElement(A.Fragment,null,\"Open\",\" \",A.createElement(\"a\",{href:\"https://www.google.com/chrome/\",target:\"_blank\",rel:\"noopener noreferrer\",className:\"text-link hover:underline\"},\"Google Chrome\"))),A.createElement(\"li\",null,\"Navigate to \",A.createElement(wic,{url:\"chrome://inspect/#remote-debugging\"})),A.createElement(\"li\",null,\"Enable\",\" \",A.createElement(\"strong\",null,'\"Allow remote debugging for this browser instance\"'),\".\"))));return\"DevTools port is still closed. Please make sure Chrome is running with remote debugging enabled.\"}finally{a()}};\nvar yic=[{command:\"browser\",onTrigger:async function(a,b){return b.isWebviewBrowserUse?!1:xic(a,b)}},{command:\"browser-vision\",onTrigger:xic}];\nvar Llc=({isLoading:a,dropdownPlacement:b,openConversationOptimistically:c,conversationId:d,agentSelector:f,showBottomToolbar:g,topToolbarContent:h,aboveContent:k,takeoverContent:l,hideModelSelector:m,commandHooks:n=yic,initialQuery:q})=>{a0(\"AgentManagerInputBox\");return n};");
+  const hooks=f.window.yic,plain=hooks[0],vision=hooks[1],originalPlain=plain.onTrigger,originalVision=vision.onTrigger;
+  assert.equal(f.evaluate('Object.prototype.hasOwnProperty.call(window,"xic")'),false);
+  const adapters=f.install();
+  assert.equal(f.window.yic,hooks);assert.equal(f.window.yic[0],plain);assert.equal(f.window.yic[1],vision);
+  assert.notEqual(plain.onTrigger,originalPlain);assert.notEqual(vision.onTrigger,originalVision);
+  const elements=value=>{const out=[];function walk(node){if(Array.isArray(node))node.forEach(walk);else if(node?.props){out.push(node);walk(node.props.children)}}walk(value);return out};
+  const text=value=>{if(typeof value==='string')return value;if(Array.isArray(value))return value.map(text).join('');return value?.props?text(value.props.children):''};
+  const context=extra=>{
+    const calls={checks:0,warnings:[]};
+    const value={services:{checkDevToolsActivePort(){calls.checks++;return Promise.resolve({exists:false})}},
+      triggerWarning(title,body){calls.warnings.push({title,body,receiver:this})},...extra};
+    return {calls,value};
+  };
+  const gated=context({isBrowserAllowed:false,gatingMessage:'Open'}),gatedServices=gated.value.services;
+  assert.equal(await vision.onTrigger('browser',gated.value),'当前远程会话未启用浏览器控制。');
+  assert.equal(gated.calls.checks,0);assert.equal(gated.calls.warnings[0].title,'需要配置浏览器');
+  assert.equal(gated.calls.warnings[0].receiver,gated.value);assert.equal(gated.value.services,gatedServices);
+  const gate=elements(gated.calls.warnings[0].body).find(node=>node.type==='p');
+  assert.equal(gate.props.children,'Open');assert.equal(gate.props['data-ch-keep'],true);
+  const remote=context({isRemoteControl:true,isGoogleInternal:true});
+  const remoteResult=await plain.onTrigger('browser',remote.value);
+  assert.equal(remoteResult,'DevTools 端口仍未开放。请确认 Chrome 正在运行，并已启用远程调试。');
+  assert.equal(remote.calls.checks,1);assert.equal(remote.calls.warnings[0].title,'需要启用远程调试');
+  assert.ok(text(remote.calls.warnings[0].body).includes('请在该设备上完成以下步骤：'));
+  assert.ok(text(remote.calls.warnings[0].body).includes('如果该设备是 cloudtop，请通过以下入口连接：'));
+  assert.equal(elements(remote.calls.warnings[0].body).find(node=>node.type==='a').props.href,'http://go/crd');
+  assert.equal(elements(remote.calls.warnings[0].body).find(node=>node.props.url).props.url,'chrome://inspect/#remote-debugging');
+  assert.ok(text(remote.calls.warnings[0].body).includes('（允许此浏览器实例进行远程调试）'));
+  const internal=context({isGoogleInternal:true});await vision.onTrigger('browser-vision',internal.value);
+  assert.ok(text(internal.calls.warnings[0].body).includes('访问 go/crd，然后在运行 Jetski Web 的 cloudtop 服务器上打开 Chrome。'));
+  const bypass=context({isWebviewBrowserUse:true,isBrowserAllowed:false});
+  assert.equal(await plain.onTrigger('browser',bypass.value),false);assert.equal(bypass.calls.checks,0);assert.equal(bypass.calls.warnings.length,0);
+  const ready=context({services:{checkDevToolsActivePort:()=>Promise.resolve({exists:true})}});
+  assert.equal(await vision.onTrigger('browser-vision',ready.value),false);assert.equal(ready.calls.warnings.length,0);
+  adapters.setStrings({'browser-command:Remote Debugging Required':'远程调试设置'});
+  const refreshed=context({});await vision.onTrigger('browser-vision',refreshed.value);assert.equal(refreshed.calls.warnings[0].title,'远程调试设置');
+  f.uninstall()();assert.equal(plain.onTrigger,originalPlain);assert.equal(vision.onTrigger,originalVision);
+  const restored=context({isBrowserAllowed:false,gatingMessage:'Open'});
+  assert.equal(await vision.onTrigger('browser-vision',restored.value),'Browser control is gated in remote sessions.');
+  assert.equal(restored.calls.warnings[0].title,'Browser Configuration Required');
+});
+
+
+test('Git push reporters translate native review notifications and fallback only in explicit Git push scope', () => {
+  const f=nativeFixture();
+  f.window.performance={now:()=>100};
+  f.evaluate(`var sent=[],dispatches=[],events=[],hookCalls=0,cachedCreate;
+    var kl=()=>value=>dispatches.push(value),Kn=()=>value=>sent.push(value);
+    var CF=()=>({logEvent:(...args)=>events.push(args)}),Qv=()=>()=>{};
+    var zf=()=> 'fixture-action',uub=value=>value===4?'git':'other';
+    var jGa=value=>({kind:'start',...value}),kGa=value=>({kind:'finish',...value});
+    var wg={VCS_ACTION_FAILED:'failed',VCS_ACTION_RAN:'ran'},xg={VCS_ACTION_FAILED:'failed'};
+    A.useCallback=callback=>{hookCalls++;return cachedCreate??=callback;};`);
+  // Current 10,652,357-character application bundle, vub native progress Hook.
+  f.evaluate("var vub=()=>{var a=kl(),b=Kn(),{logEvent:c}=CF(),d=Qv();return{createStartProgress:(0,A.useCallback)((f,g,h,k)=>{var l=f??\"\";return(m,n)=>{var q=zf(),r=performance.now(),t={action_key:n??g,action_label:h,vcs_type:uub(k)};a(jGa({workspaceUri:l,actionId:q,message:m}));var u=!1;return{reportProgress:v=>{u||a(jGa({workspaceUri:l,actionId:q,message:v.message}))},reportError:v=>{u||(u=!0,a(kGa({workspaceUri:l,actionId:q})),c(wg.VCS_ACTION_FAILED,{durationMs:Math.round(performance.now()-r),extra:{...v.telemetry,\n...t}}),d(xg.VCS_ACTION_FAILED,v.message),b({...v,tag:`vcs-action-error-${g}`}))},reportFinished:v=>{u||(u=!0,a(kGa({workspaceUri:l,actionId:q})),c(wg.VCS_ACTION_RAN,{durationMs:Math.round(performance.now()-r),extra:{...v?.telemetry,...t}}),v&&b({...v,tag:`vcs-action-success-${g}`}))}}}},[a,b,c,d])}};");
+  const original=f.window.vub;
+  const adapters=f.install();
+  const first=f.window.vub(),second=f.window.vub();
+  assert.equal(f.window.hookCalls,2,'the original Hook runs once per provider call');
+  assert.equal(first.createStartProgress,second.createStartProgress,'wrappers follow the stable native callback');
+  const callback=()=>{},telemetry=Object.freeze({fixture:true}),url='https://fixture.invalid/review/a(b)?name=x%20y&literal=$&';
+  const cases=[
+    ['Created a new branch on GitHub.','Open a pull request','已在 GitHub 创建新分支。','创建拉取请求'],
+    ['The branch was pushed to GitLab.','Open a merge request','分支已推送到 GitLab。','创建合并请求'],
+    ['Created a new branch on Origin.','Open a pull request','已在 Origin 创建新分支。','创建拉取请求'],
+    ['The change was pushed to Gerrit.','Open the change','改动已推送到 Gerrit。','打开改动'],
+    ['The remote shared a link for this push.','Open link','远程仓库提供了此次推送的链接。','打开链接']
+  ];
+  const input=(message,link)=>Object.freeze({title:'Push succeeded',isMarkdown:true,
+    message:`${message} [${link}](${url})`,plainTextFallback:`${message} ${link}: ${url}`,openUri:callback,telemetry});
+  for(const [message,link,translated,translatedLink] of cases){
+    const raw=input(message,link),start=first.createStartProgress('file:///fixture','git-push','Push',4),reporter=start('Pushing...');
+    reporter.reportFinished(raw);
+    const output=f.window.sent.at(-1);
+    assert.equal(output.title,'推送成功');assert.equal(output.message,`${translated} [${translatedLink}](${url})`);
+    assert.equal(output.plainTextFallback,`${translated} ${translatedLink}: ${url}`);
+    assert.equal(output.openUri,callback);assert.equal(output.telemetry,telemetry);
+    assert.equal(output.tag,'vcs-action-success-git-push');
+    assert.equal(raw.message,`${message} [${link}](${url})`);assert.equal(raw.title,'Push succeeded');
+  }
+  const raw=input(cases[0][0],cases[0][1]);
+  for(const [key,vcs] of [['git-commit',4],['git-push',3]]){
+    first.createStartProgress('file:///fixture',key,'Push',vcs)('Pushing...').reportFinished(raw);
+    assert.equal(f.window.sent.at(-1).message,raw.message,'identical data outside Git push remains supplied text');
+  }
+  const custom=Object.freeze({...raw,plainTextFallback:'A user supplied fallback'});
+  first.createStartProgress('file:///fixture','git-push','Push',4)('Pushing...').reportFinished(custom);
+  assert.equal(f.window.sent.at(-1).message,custom.message);assert.equal(f.window.sent.at(-1).plainTextFallback,custom.plainTextFallback);
+  adapters.setStrings({'Open a pull request':'发起 PR'});
+  first.createStartProgress('file:///fixture','git-push','Push',4)('Pushing...').reportFinished(raw);
+  assert.equal(f.window.sent.at(-1).message,`已在 GitHub 创建新分支。 [发起 PR](${url})`);
+  const cached=first.createStartProgress('file:///fixture','git-push','Push',4)('Pushing...');
+  f.uninstall()();assert.equal(f.window.vub,original);
+  cached.reportFinished(raw);
+  assert.equal(f.window.sent.at(-1).message,raw.message,'already-created reporters pass through after uninstall');
+  first.createStartProgress('file:///fixture','git-push','Push',4)('Pushing...').reportFinished(raw);
+  assert.equal(f.window.sent.at(-1).plainTextFallback,raw.plainTextFallback,'cached factory wrappers also pass through after uninstall');
+});
+
+
+test('Git push ToastItem projection covers the lexical memo without changing native notification or component identity', () => {
+  const f=nativeFixture();
+  f.window.eval=source=>f.evaluate(source);
+  f.evaluate(`var hookCalls=0,openCalls=0;
+    Object.assign(A,{memo(type){return {$$typeof:Symbol.for('react.memo'),type};},
+      useRef(value){hookCalls++;return {current:value};},useContext(){hookCalls++;return null;},
+      useMemo(callback){hookCalls++;return callback();},useCallback(callback){hookCalls++;return callback;},
+      useEffect(){hookCalls++;},useLayoutEffect(){hookCalls++;}});
+    var kC=()=>({isBrowserPaneAvailable:false,resolveLinkOpenTarget:()=>{},openUrlInBrowserPane:()=>{},openWebUrlExternally:()=>{},getTargetTreeId:()=>null});
+    var V_=()=>[],qB=()=>()=>null,kB={},W_=view=>view.kind==='notification'?view.notification:view.request;
+    var HUb=()=>null,IUb=()=>null,JUb=()=>null,KUb=()=>null,LUb=()=>null,MUb=()=>null,Z=()=>null,oZ=()=>null,QD=()=>null;
+    var WA={Provider:()=>null},jC={Provider:()=>null},eVb=['notification'];
+    var BDa=value=>value,gVb=value=>value;`);
+  // The memo itself is a page lexical const; only its shared type slot is writable.
+  f.evaluate("const jVb=A.memo(({toastItem:a,tokenizationService:b,close:c,onNestedOverlayOpenChange:d})=>{var f=a.data?.viewModel,g=a.data?.instanceId??0,h=f?.kind===\"notification\"?f.notification:void 0,{isBrowserPaneAvailable:k,resolveLinkOpenTarget:l,openUrlInBrowserPane:m,openWebUrlExternally:n,getTargetTreeId:q}=kC(),r=V_(),t=qB(),u=A.useContext(kB),v=(0,A.useRef)(!0),w=(0,A.useRef)(new Map),x=f?W_(f):void 0,y=a.transitionStatus===\"ending\"?void 0:x,z=(0,A.useRef)(y),C=(0,A.useRef)(l),D=(0,A.useRef)(m),E=(0,A.useRef)(n),\nF=(0,A.useRef)(q);(0,A.useLayoutEffect)(()=>{z.current=y;C.current=l;D.current=m;E.current=n;F.current=q});(0,A.useEffect)(()=>{v.current=!0;return()=>{v.current=!1}},[]);var G=(0,A.useMemo)(()=>({onNestedOverlayOpenChange:d?O=>{d(a.id,O)}:void 0}),[d,a.id]),H=(0,A.useCallback)(async(O,P,R)=>{var Q=e,V=e;try{if(O&&v.current&&y&&z.current===y){var T=F.current(),S=MB(),U=O;if(FB(O)){let Y=O.split(\"#\",1)[0],W=(w.current.get(Y)??0)+1;w.current.set(Y,W);let ca=OB(t(RB(O))?.artifactSnapshots,O);if(ca)U=\nca;else if(typeof u?.readFile===\"function\"){let da=V(await Q(NB(Y,pa=>u.readFile(pa))));if(!v.current||z.current!==y||w.current.get(Y)!==W||JB!==S)return;U=OB(t(RB(O))?.artifactSnapshots,O)??da??O}}(R?.useExternalBrowser||R?.target===\"external\"||!h?.openUri&&P&&(P.button!==0||P.metaKey||P.ctrlKey||P.shiftKey||P.altKey))&&/^https?:\\/\\//i.test(U)?E.current(U):h?.openUri?R?.target===\"preview\"||R?.useExternalBrowser?h.openUri(U,{target:R?.target,useExternalBrowser:R?.useExternalBrowser}):h.openUri(U):\nC.current(U,{event:P,target:R?.target,useExternalBrowser:R?.useExternalBrowser})===\"preview\"&&D.current&&D.current(U,T)!==!1||/^https?:\\/\\//i.test(U)&&E.current(U);c(a.id)}}finally{Q()}},[y,t,u,h,a.id,c]);x=(0,A.useCallback)((O,P)=>{if(!v.current||!y||z.current!==y)return!1;MB();if(h?.openUri)return h.openUri(O,{target:\"preview\"}),c(a.id),!0;if(!D.current)return!1;O=D.current(O,P);O!==!1&&c(a.id);return O},[y,h,c,a.id]);var I=k&&m?x:void 0,K=(0,A.useMemo)(()=>({isBrowserPaneAvailable:!!I,openUrlInBrowserPane:I,\ngetTargetTreeId:q,isOverridden:!0,linkWrapper:QD}),[I,q]),L=(0,A.useCallback)((O,P,R)=>{P&&(O.actionCallback?(O.actionCallback(),c(a.id)):P.url?H(P.url,R):c(a.id))},[H,a.id,c]);if(!f)return null;x=f.kind===\"notification\"?[\"down\",\"right\"]:[];if(f.kind===\"permission\")return b=f.request,g=[...b.actions.filter(O=>O.style===\"primary\"),...b.actions.filter(O=>O.style!==\"primary\")],A.createElement(HUb,{key:a.id,toast:a,swipeDirection:x},A.createElement(IUb,null,A.createElement(\"div\",{className:\"flex flex-col gap-1\"},\nA.createElement(JUb,null,b.title),b.message&&A.createElement(KUb,null,b.message)),A.createElement(\"div\",{className:\"flex justify-start gap-2 pt-1\"},g.map((O,P)=>A.createElement(MUb,{key:P,render:A.createElement(lA,{variant:O.style===\"primary\"?\"primary\":\"secondary\",size:\"sm\"}),onClick:R=>{R.stopPropagation();O.onClick();c(a.id)}},O.label)))));var M=f.notification,N=M.primaryAction?.url;f=M.editorWorkspaceUri?BDa(M.editorWorkspaceUri):void 0;return A.createElement(HUb,{key:a.id,toast:a,swipeDirection:x,\n\"data-testid\":\"toast-notification\",\"data-notification-tag\":M.tag},A.createElement(WA.Provider,{value:G},A.createElement(jC.Provider,{value:K},A.createElement(IUb,null,A.createElement(A.Fragment,{key:g},A.createElement(\"div\",{className:\"flex flex-col gap-1\"},A.createElement(\"div\",{className:\"flex items-start justify-between gap-2\"},A.createElement(JUb,{className:\"flex-1 min-w-0\"},M.isMarkdown?A.createElement(oZ,{markdown:M.title,openUri:H,openUrlInPreview:I,tokenizationService:b,chatPills:r}):A.createElement(\"span\",\nnull,gVb(M.title,H,I))),A.createElement(LUb,{\"aria-label\":\"Dismiss notification\"},A.createElement(Z,{name:\"close\",size:16}))),M.message&&A.createElement(KUb,{render:M.isMarkdown?A.createElement(\"div\",null):void 0},M.isMarkdown?A.createElement(oZ,{markdown:M.message,openUri:H,openUrlInPreview:I,tokenizationService:b,customUrlSchemes:eVb,chatPills:r}):A.createElement(\"span\",{className:\"whitespace-pre-line\"},gVb(M.message,H,I))),f&&A.createElement(\"span\",{className:\"text-[10px] opacity-75 font-mono\"},\nf)),M.primaryAction&&A.createElement(\"div\",{className:\"flex justify-start pt-1\"},A.createElement(QD,{href:N,as:\"span\",onOpenInPreview:k&&m&&N?()=>{H(N,void 0,{target:\"preview\"})}:void 0,onOpenInExternal:N?()=>{H(N,void 0,{useExternalBrowser:!0,target:\"external\"})}:void 0},A.createElement(MUb,{\"data-testid\":\"toast-notification-action\",onClick:O=>{O.stopPropagation();L(M,M.primaryAction,O)}},M.primaryAction.label))))))))});");
+  f.evaluate(`function kVb(){var g={toasts:[]};return A.createElement('div',null,g.toasts.map(z=>A.createElement(jVb,{key:z.id,toastItem:z,tokenizationService:null,close:()=>{},onNestedOverlayOpenChange:undefined})));}`);
+  const component=f.evaluate('jVb'),original=component.type;
+  assert.equal(Object.prototype.hasOwnProperty.call(f.window,'jVb'),false);
+  const adapters=f.install();
+  assert.equal(f.evaluate('jVb'),component);assert.notEqual(component.type,original);
+  const callback=()=>{f.window.openCalls++;},url='https://fixture.invalid/review/a(b)?name=x%20y&literal=$&';
+  const raw=Object.freeze({title:'Push succeeded',isMarkdown:true,message:`Created a new branch on GitHub. [Open a pull request](${url})`,
+    plainTextFallback:`Created a new branch on GitHub. Open a pull request: ${url}`,tag:'vcs-action-success-git-push',openUri:callback});
+  const props=notification=>({toastItem:Object.freeze({id:'fixture-toast',data:Object.freeze({instanceId:1,viewModel:Object.freeze({kind:'notification',notification})})}),tokenizationService:{},close:callback});
+  function markdowns(value,out=[]){if(Array.isArray(value))value.forEach(child=>markdowns(child,out));else if(value?.props){if(typeof value.props.markdown==='string')out.push(value.props.markdown);markdowns(value.props.children,out);}return out;}
+  const supplied=props(raw),before=f.window.hookCalls,tree=component.type(supplied);
+  assert.ok(f.window.hookCalls>before);
+  assert.deepEqual(markdowns(tree),['推送成功',`已在 GitHub 创建新分支。 [创建拉取请求](${url})`]);
+  assert.equal(supplied.toastItem.data.viewModel.notification,raw);assert.equal(raw.title,'Push succeeded');
+  assert.equal(raw.openUri,callback);assert.equal(f.window.openCalls,0);
+  const other=Object.freeze({...raw,title:'User announcement'});
+  assert.deepEqual(markdowns(component.type(props(other))),[other.title,other.message]);
+  const userFallback=Object.freeze({...raw,plainTextFallback:'A supplied text'});
+  assert.deepEqual(markdowns(component.type(props(userFallback))),[userFallback.title,userFallback.message]);
+  adapters.setStrings({'Open a pull request':'发起 PR'});
+  assert.equal(markdowns(component.type(supplied))[1],`已在 GitHub 创建新分支。 [发起 PR](${url})`);
+  f.uninstall()();assert.equal(f.evaluate('jVb'),component);assert.equal(component.type,original);
+  assert.deepEqual(markdowns(component.type(supplied)),[raw.title,raw.message]);
+});
+
+
+test('lexical native FileHeaderItem translates only the conflict badge and retains the original memo, refs, stats and navigation', () => {
+  const f=nativeFixture();
+  f.window.eval=code=>f.evaluate(code);
+  f.evaluate(`A.memo=type=>({$$typeof:Symbol.for('react.memo'),type});
+    var dragCalls=[],nativeRef={current:null};
+    var L7b=(original,modified,stats)=>stats,YC=(...args)=>{dragCalls.push(args);return {ref:nativeRef}};
+    var y7b=()=>null,u2=()=>null;
+    var Y7b=({reviewCommentsSubscription:f,node:Ua,resolvedContent:b,titleProps:g})=>{
+      var type='expansion_banner';return A.createElement(U7b,{node:Ua,resolvedContent:b,titleProps:g});};`);
+  // Current FileHeaderItem render; its native parent call shape identifies the
+  // lexical memo without mounting or executing the virtualized file list.
+  f.evaluate("const U7b=A.memo(({node:a,resolvedContent:b,isOpen:c,isLoading:d,onToggle:f,titleProps:g})=>{b=L7b(b?.originalContents,b?.modifiedContents,a.diffStats);var {ref:h}=YC(a.fileUri,void 0,!g.draggable),k=a.groupKey===\"staged\"?\"Staged\":void 0;return A.createElement(y7b,{isOpen:c,isLoading:d,onToggle:f,title:A.createElement(u2,{ref:h,diffStats:b,fileUri:a.fileUri,onNavigate:()=>{g.onOpenFile?.(a.fileUri,{groupKey:a.groupKey})},Icon:g.getFileIcon(a.fileUri,!1),workspaceUri:g.workspaceUri,workspaceUris:g.workspaceUris,\nfileNameClassName:\"!text-foreground\",badge:a.isConflict?\"Conflict\":k,badgeVariant:a.isConflict?\"warning\":\"default\"})})});");
+  const object=f.evaluate('U7b'),original=object.type;
+  assert.equal(Object.prototype.hasOwnProperty.call(f.window,'U7b'),false);
+  const adapters=f.install();
+  assert.equal(f.evaluate('U7b'),object);assert.notEqual(object.type,original);
+  const stats=Object.freeze({additions:3,deletions:1}),calls=[],toggle=()=>{};
+  const titleProps=Object.freeze({draggable:true,onOpenFile:(...args)=>calls.push(args),getFileIcon:()=>null,
+    workspaceUri:'file:///original',workspaceUris:Object.freeze(['file:///original'])});
+  const node=Object.freeze({fileUri:'file:///original/Conflict',groupKey:'workingDirectory',isConflict:true,diffStats:stats});
+  let result=object.type({node,isOpen:true,isLoading:false,onToggle:toggle,titleProps}),title=result.props.title;
+  assert.equal(title.props.badge,'冲突');assert.equal(title.props.badgeVariant,'warning');
+  assert.equal(title.props.ref,f.window.nativeRef);assert.equal(title.props.diffStats,stats);
+  assert.equal(title.props.fileUri,node.fileUri);assert.equal(result.props.onToggle,toggle);
+  assert.equal(title.props.workspaceUris,titleProps.workspaceUris);
+  title.props.onNavigate();assert.equal(calls[0][0],node.fileUri);assert.equal(calls[0][1].groupKey,node.groupKey);
+  assert.equal(f.window.dragCalls.length,1);
+  result=object.type({node:{...node,isConflict:false,groupKey:'staged'},titleProps});
+  assert.equal(result.props.title.props.badge,'Staged','the non-conflict badge remains with its original owner');
+  adapters.setStrings({'file-header:conflict':'合并冲突'});
+  assert.equal(object.type({node,titleProps}).props.title.props.badge,'合并冲突');
+  assert.equal(node.isConflict,true);assert.equal(node.fileUri,'file:///original/Conflict');
+  f.uninstall()();assert.equal(object.type,original);assert.equal(f.evaluate('U7b'),object);
+});
+
+
+test('native queue fallback translates separately from same-name message bodies and preserves edit/send data', () => {
+  const f=nativeFixture();
+  f.evaluate(`A.useMemo=callback=>callback();A.useContext=()=>({});
+    var deletionCalls=[],D3b=()=>id=>deletionCalls.push(id),jlc=()=>{};
+    var bC=()=>({stepHandler:{}}),Fj=()=>({get:()=>undefined}),FQ=()=>[true,()=>{}];
+    var q6=()=>null,JZ=()=>null,lA=()=>null,Z=()=>null,glc=()=>null,flc=()=>null,klc=()=>null;
+    var Hi=(...values)=>values.filter(Boolean).join(' '),jC={Provider:()=>null},QD=()=>null,sE=()=>null;`);
+  // Current llc, its text extractor/announcement label helper, and the shared
+  // quoted-message component that owns the actual user text DOM.
+  f.evaluate("var rIb=function rIb(a){if(!a)return\"\";var b=[];for(let c of a)c.chunk.case===\"text\"?b.push(c.chunk.value):c.chunk.case===\"item\"&&(a=qIb(c.chunk.value))&&b.push(a);return b.join(\"\")};\nvar ilc=function ilc(a,b,c){return a.trim()||(b>0?`${b} attachment(s)`:\"\")||(c?\"review comments\":\"\")||\"empty message\"};\nvar eMb=({items:a,className:b})=>{var {artifactsDir:c,stepHandler:d,isBrowserPaneAvailable:f,openUrlInBrowserPane:g}=bC(),h=(0,A.useContext)(jC),k=(0,A.useMemo)(()=>({...h,isBrowserPaneAvailable:!!(h.isOverridden?h.isBrowserPaneAvailable:f||h.isBrowserPaneAvailable),openUrlInBrowserPane:h.isOverridden?h.openUrlInBrowserPane:g??h.openUrlInBrowserPane,linkWrapper:h.linkWrapper??QD}),[h,f,g]);return A.createElement(jC.Provider,{value:k},A.createElement(\"div\",{\"data-quotable\":\"true\",className:Hi(\"whitespace-pre-wrap text-sm\",\nb),style:{wordBreak:\"break-word\"}},a.map((l,m)=>{l=l.chunk;if(l.case===\"text\")return l.value;var n=l.value;return A.createElement(\"span\",{key:m,className:\"context-scope-mention\",\"data-quotable-inline\":\"true\"},A.createElement(sE,{item:n,artifactsDir:c,openUri:(q,r,t)=>{d?.openFile(q,void 0,void 0,!1,{event:r,useExternalBrowser:!(!t?.useExternalBrowser&&t?.target!==\"external\"),target:t?.target,isDirectory:n?.scopeItem?.case===\"directory\"})},getFileIcon:d?.getFileIcon,openWorkflow:d?.openWorkflow,openConversation:d?.openConversation}))})))};\nvar llc=({pendingUserInputs:a,cascadeId:b,className:c,onEdit:d,onSendNow:f})=>{var g=D3b(b,jlc),{stepHandler:h}=bC(),k=Fj().get(\"resolveUrl\")??h?.resolveArtifactUrl,[l,m]=FQ(`queued-messages-card-expanded-${b}`,n=>JSON.stringify(n),n=>JSON.parse(n),!0);return A.createElement(q6,\n{role:\"region\",\"aria-label\":\"Queued messages\",title:A.createElement(\"div\",{className:\"flex items-center gap-1.5\"},A.createElement(\"span\",{className:\"shrink-0\"},\"Queued Messages\"),A.createElement(\"span\",{className:\"shrink-0 text-[10px] bg-secondary text-secondary-foreground rounded-full px-1.5 py-0.5 leading-none\"},a.length),A.createElement(\"span\",{className:\"text-muted-foreground overflow-hidden text-ellipsis font-normal\"},\"Sends after agent finishes working\")),headerActions:A.createElement(lA,{variant:\"ghost\",\nsize:\"icon-sm\",onClick:()=>{m(!l)},\"aria-label\":l?\"Collapse queued messages\":\"Expand queued messages\",\"aria-expanded\":l,\"data-testid\":\"queued-messages-expand-button\",className:\"shrink-0 text-muted-foreground hover:text-foreground\"},A.createElement(Z,{name:\"keyboard_arrow_up\",size:16,className:Hi(\"transition-transform duration-150\",l&&\"rotate-180\")})),className:Hi(l?\"gap-0.5\":\"gap-0\",c),\"data-testid\":\"queued-messages-card\"},A.createElement(JZ,{shouldShow:l,durationMs:500,easingClassName:\"ease-expo-out\"},\nA.createElement(\"div\",{className:\"flex flex-col\"},a.map(({msgId:n,step:q,metadata:r},t)=>{var u=q.media&&q.media.length>0,v=q.artifactComments.length+q.fileDiffComments.reduce((y,z)=>y+z.diffCommentInfos.length,0)+q.fileComments.reduce((y,z)=>y+z.fileCommentInfos.length,0),w=v>0,x=rIb(q.items);return A.createElement(\"div\",{key:n,className:\"flex flex-row items-center justify-between gap-3 w-full py-0.5 min-h-7\"},A.createElement(\"div\",{className:\"flex-1 flex flex-row items-center gap-1.5 overflow-hidden\"},\nu&&A.createElement(glc,{media:q.media,resolveUrl:k}),w&&A.createElement(flc,{step:q,index:t}),x?A.createElement(eMb,{items:q.items,className:\"line-clamp-2 min-w-0\"}):A.createElement(\"span\",{className:\"text-muted-foreground line-clamp-2\"},w?v===1?\"1 comment\":`${v} comments`:\"Empty message\")),A.createElement(\"div\",{className:\"flex-shrink-0\"},A.createElement(klc,{messageLabel:ilc(x,u?q.media.length:0,w),onDelete:g?()=>{g(n)}:void 0,onEdit:d?()=>{d(n,q,r)}:void 0,onSendNow:f?()=>{f(n,q)}:void 0})))}))))};");
+  const originals={queue:f.window.llc,message:f.window.eMb},adapters=f.install();
+  const empty=Object.freeze({items:Object.freeze([]),media:Object.freeze([]),artifactComments:Object.freeze([]),fileDiffComments:Object.freeze([]),fileComments:Object.freeze([])});
+  const items=Object.freeze([Object.freeze({chunk:Object.freeze({case:'text',value:'Empty message'})})]);
+  const body=Object.freeze({...empty,items}),comment=Object.freeze({...empty,artifactComments:Object.freeze([Object.freeze({comment:'original comment'})])});
+  const metadata=Object.freeze({fixture:'original'}),records=Object.freeze([
+    Object.freeze({msgId:'empty',step:empty,metadata}),Object.freeze({msgId:'body',step:body,metadata}),
+    Object.freeze({msgId:'comment',step:comment,metadata})]);
+  const editCalls=[],sendCalls=[];
+  const props={pendingUserInputs:records,cascadeId:'fixture',onEdit:(...args)=>editCalls.push(args),onSendNow:(...args)=>sendCalls.push(args)};
+  const nodes=(value,out=[])=>{if(Array.isArray(value))value.forEach(child=>nodes(child,out));else if(value?.props){out.push(value);nodes(value.props.children,out);}return out;};
+  const result=f.window.llc(props),all=nodes(result);
+  const summaries=all.filter(node=>node.type==='span'&&node.props.className==='text-muted-foreground line-clamp-2');
+  assert.equal(summaries[0].props.children,'空消息');
+  assert.equal(summaries.length,2,'the real message body uses its native quoted component');
+  assert.notEqual(summaries[1].props.children,'空消息','a comment-only queue item is not the empty-message fallback');
+  const message=all.find(node=>node.type===f.window.eMb);
+  assert.equal(message.props.items,items);
+  const quoted=f.window.eMb(message.props),quotedBody=quoted.props.children;
+  assert.equal(quotedBody.props['data-ch-keep'],true);
+  assert.equal(Array.from(quotedBody.props.children).join(''),'Empty message');
+  const decorators=all.filter(node=>node.type===f.window.klc),decorator=decorators[1];
+  assert.equal(decorator.props.messageLabel,'Empty message');
+  decorator.props.onEdit();decorator.props.onSendNow();decorator.props.onDelete();
+  assert.equal(editCalls[0][0],'body');assert.equal(editCalls[0][1],body);assert.equal(editCalls[0][2],metadata);
+  assert.equal(sendCalls[0][0],'body');assert.equal(sendCalls[0][1],body);
+  assert.equal(f.window.deletionCalls[0],'body');
+  adapters.setStrings({'queued-message:empty':'空白消息'});
+  assert.equal(nodes(f.window.llc(props)).find(node=>node.type==='span'&&node.props.className==='text-muted-foreground line-clamp-2').props.children,'空白消息');
+  assert.equal(body.items[0].chunk.value,'Empty message');
+  f.uninstall()();assert.equal(f.window.llc,originals.queue);assert.equal(f.window.eMb,originals.message);
+});
+
+
+test('native dynamic display slots preserve supplied names, actions, and placeholder ownership', () => {
+  const f=nativeFixture();
+  f.evaluate(`
+    var Info=()=>null,Action=()=>null,Setting=()=>null,Switch=()=>null,Tip=()=>null,App=()=>null;
+    var CopyTarget=()=> 'unchanged',appRequests=[],projectService={addPlaceholderProject(value){appRequests.push(value);return value}};
+    var PQa=function({clNumber:a,status:f}) {
+      var k='cl/'+a,t=f.lgtmsCount>0?\`In review · \${f.lgtmsCount} LGTM\${f.lgtmsCount===1?'':'s'}\`:'In review · waiting on reviewers';
+      return A.createElement('div',null,
+        A.createElement('h1',null,f.title),
+        A.createElement(Info,{label:'Status'},t),
+        A.createElement(Info,{label:'Comments'},\`\${f.unresolvedCommentCount} unresolved\`),
+        A.createElement(Action,{'data-testid':'critique-cl-hover-card-copy',tooltip:\`Copy \${k}\`,'aria-label':\`Copy \${k}\`,onClick:CopyTarget}));
+    };
+    var vdb=function({description:b,userSettings:c,plan:m,product:n}) {
+      var h=c.userDataCollectionForceDisabled;
+      h&&(b+=\`\\n\\nFor \${m}, this setting is disabled. This means \${n} does not collect any of your prompts, content, or model responses, but will still collect general usage patterns (e.g., feature adoption, active user counts).\`);
+      m=h?\`For \${m}, telemetry is force disabled.\`:'';
+      return A.createElement(Setting,{description:b,rightElement:A.createElement(Switch,{'data-testid':'telemetry-switch',tooltip:m})});
+    };
+    var KNb=function(props) {
+      var n=props.title&&props.subtitle?\`Open Subagent: \${props.title} (\${props.subtitle})\`:\`Open Subagent: \${props.title||props.subtitle||'Subagent'}\`;
+      return A.createElement('div',{'data-testid':'agent-status-killed'},A.createElement(Tip,null,n));
+    };
+    var ORb=function({mcpStep:a,cascadeId:b}) {
+      var sourceKey=\`mcp_app_inline__\${a.toolCall?.id??''}\`;
+      return A.createElement(App,{placement:'inline',title:\`App view for \${a.toolCall?.name||'tool'}\`,cascadeId:b,sourceKey});
+    };
+    var qRb=function(vocabulary,id) {
+      return projectService.addPlaceholderProject({id,name:\`Creating \${vocabulary.lowercase}\\u2026\`,isWorkspaceOnly:!0});
+    };
+  `);
+  f.install();
+  const title='In review · 2 LGTMs';
+  const status=Object.freeze({title,lgtmsCount:2,unresolvedCommentCount:3});
+  const review=f.window.PQa({clNumber:42,status}).props.children;
+  assert.equal(review[0].props.children,title);
+  assert.equal(review[1].props.children,'审查中 · 2 人已认可');
+  assert.equal(review[2].props.children,'3 条未解决');
+  assert.equal(review[3].props.tooltip,'复制 cl/42');
+  assert.equal(review[3].props['aria-label'],'Copy cl/42');
+  assert.equal(review[3].props.onClick,f.window.CopyTarget);
+  const description='My  supplied description',plan='Custom  Plan';
+  const setting=f.window.vdb({description,userSettings:{userDataCollectionForceDisabled:true},plan,product:'Antigravity'});
+  assert.ok(setting.props.description.startsWith(description+'\n\n对于 '+plan));
+  assert.equal(setting.props.rightElement.props.tooltip,plan+' 已被强制关闭遥测。');
+  assert.equal(setting.props.rightElement.props['aria-label'],'For '+plan+', telemetry is force disabled.');
+  assert.equal(f.window.vdb({description,userSettings:{userDataCollectionForceDisabled:false},plan,product:'Antigravity'}).props.description,description);
+  const name='My  Agent $&';
+  assert.equal(f.window.KNb({conversationId:'fixture',title:name,subtitle:'custom'}).props.children.props.children,'打开子智能体：'+name+' (custom)');
+  assert.equal(f.window.ORb({mcpStep:{toolCall:{id:'fixture',name:'tool'}},cascadeId:'fixture'}).props.title,'tool 的应用视图');
+  assert.equal(f.window.ORb({mcpStep:{},cascadeId:'fixture'}).props.title,'工具应用视图');
+  assert.equal(f.window.qRb({lowercase:'project'},'fixture').name,'正在创建项目…');
+  assert.equal(f.window.qRb({lowercase:'other'},'fixture').name,'Creating other…');
+  assert.equal(status.title,title);
+});
+
+
+test('native navigator labels keep user messages and generated chapter titles verbatim', () => {
+  const f=nativeFixture();
+  f.window.eval=source=>f.evaluate(source);
+  f.evaluate(`A.useMemo=fn=>fn();A.useRef=value=>({current:value});A.useEffect=()=>{};
+    var fixtureChapterTitle,fixtureData={text:'Turn 2',responsePreview:'No message text'};
+    var NCa=()=>({data:fixtureData}),Qrc=value=>value?.text??'',Wrc=()=>fixtureChapterTitle,Xrc=()=>({current:null});
+    var Vrc=(chapter,turns)=>Urc(chapter),Trc={format:()=> '12:00'},Rrc=()=>undefined,DW=()=> '12:00';
+    var Em=value=>value,kl=()=>()=>{},OH=value=>({current:value}),Hi=(...values)=>values.filter(Boolean).join(' ');
+    var EF=()=>()=>{},cBa=resource=>resource.forkable,dBa=resource=>resource.local,ws=resource=>resource.label;
+    var x6=()=>null,Z=()=>null,wg={WORKTREE_SELECTOR_TOGGLE:'toggle'};`);
+  // Current navigator formatters and row/card snapshots.
+  f.evaluate("var ejc=({availableResources:a=[],rawResources:b=[],onSelectNewCopy:c,setIsOpen:d,disabledSubtitle:f,className:g})=>{var h=EF(),k=a.filter(cBa);if(!(k.length>0))return A.createElement(x6,{title:\"New Worktree\",icon:A.createElement(Z,{name:\"call_split\",size:14,className:\"mt-0.5\"}),subtitle:f,disabled:!0,className:g,onClick:()=>{}});f=a.some(r=>r.type===2);var l=a.filter(r=>dBa(r)&&!cBa(r));a=f||a.length>=2;var m=k.filter(r=>r.type===2),n=k.filter(r=>r.type===1);b=b.find(r=>r.type.case===\"google3\");\nvar q=b?.type.case===\"google3\"?b.type.value.forkType:void 0;b=\"Fig\";q===1?b=\"Piper\":q===2&&(b=\"JJ\");q=[];m.length>0&&q.push(`Automatically create a new ${b} workspace when the conversation starts`);n.length>0&&q.push(`Worktree from ${n.map(r=>ws(r)).join(\", \")}`);a=a?l.length>0?`${q.join(\", \")}, and reuse ${l.map(r=>ws(r)).join(\", \")}`:q.join(\", \"):void 0;return A.createElement(x6,{title:f?\"New Workspace\":\"New Worktree\",icon:A.createElement(Z,{name:\"call_split\",size:14,className:\"mt-0.5\"}),subtitle:a,\nclassName:g,onClick:()=>{h(wg.WORKTREE_SELECTOR_TOGGLE,\"new_worktree_item\",{extra:{enabled:\"true\",forkable_count:String(k.length),git_folder_count:String(n.length),google3_count:String(m.length),reused_folder_count:String(l.length)}});c();d(!1)}})};\nfunction Urc({startIndex:a,endIndexExclusive:b}){a+=1;return a===b?`Turn ${a}`:`Turns ${a}\\u2013${b}`}\nconst Zrc=({arg:a,timeMs:b,onJump:c})=>{var {data:d}=NCa(a);d=Qrc(d);return A.createElement(\"li\",null,A.createElement(\"button\",{type:\"button\",className:\"flex w-full min-w-0 cursor-pointer items-baseline gap-2 rounded-md px-1.5 py-1 text-left text-xs outline-none no-focus-ring hover:bg-foreground/5 focus-visible:bg-foreground/5\",onClick:()=>{c(a.turnIndex)}},A.createElement(\"span\",{className:\"shrink-0 text-[11px] tabular-nums text-muted-foreground\"},b===void 0?a.turnIndex+1:Trc.format(b)),A.createElement(\"span\",\n{className:Hi(\"min-w-0 truncate\",d?\"text-secondary-foreground\":\"text-muted-foreground\")},d||`Turn ${a.turnIndex+1}`)))};\nvar $rc=({chapter:a,turns:b,getTurnQueryArg:c,getChapterTitleArg:d,onJump:f})=>{var g=a.endIndexExclusive-a.startIndex;d=Wrc(d(a));var h=Xrc(d);g=[`${g} turn${g===1?\"\":\"s\"}`];d&&g.unshift(Vrc(a,b));var k=[];for(let l=a.startIndex;l<a.endIndexExclusive;l++)k.push(A.createElement(Zrc,{key:l,arg:c(l),timeMs:b[l]?.startTimeMs,onJump:f}));return A.createElement(\"div\",{\"data-testid\":\"conversation-navigator-group-card\",className:\"flex min-w-0 flex-col gap-1\"},A.createElement(\"button\",{type:\"button\",\"data-testid\":\"conversation-navigator-group-card-header\",\nonClick:()=>{f(a.startIndex)},className:\"-mx-1.5 -mt-1 flex min-w-0 cursor-pointer flex-col gap-1.5 rounded-md px-1.5 py-1 text-left outline-none no-focus-ring hover:bg-foreground/5 focus-visible:bg-foreground/5\"},A.createElement(\"span\",{ref:h,\"data-titled\":d?\"true\":void 0,className:\"text-sm font-medium leading-snug text-foreground\"},d??Vrc(a,b)),A.createElement(\"span\",{className:\"text-[11px] leading-none tabular-nums text-muted-foreground\"},g.join(\" \\u00b7 \"))),A.createElement(\"ul\",{className:\"-mx-1.5 my-0 flex max-h-56 list-none flex-col overflow-y-auto p-0\"},\nk))};\nvar bsc=({arg:a,prefetchArgs:b,total:c,onJump:d})=>{var {data:f,error:g,isError:h,isLoading:k}=NCa(a),l=kl(),m=OH(b);b=b?.map(ICa).join();(0,A.useEffect)(()=>{var v=(m.current??[]).map(w=>l(nt.endpoints.getTurn.initiate(w)));return()=>{for(let w of v)w.unsubscribe()}},[b,m,l]);var n=Qrc(f),q=Em(f?.responsePreview??\"\",{codeBlock:\" \"}).replace(/\\s+/g,\" \").trim(),r=Rrc(f),t=typeof g===\"string\"?g:g?.message;b=!f&&k&&!h;var u=n;n||(u=A.createElement(\"span\",{className:\"text-muted-foreground\"},h?\"Couldn't load message\":\n\"No message text\"));a=a.turnIndex+1;n=A.createElement(A.Fragment,null,b?A.createElement(A.Fragment,null,A.createElement(\"span\",{className:\"sr-only\"},\"Loading\\u2026\"),A.createElement(asc,{count:2,lineClassName:\"h-[19px]\",barClassName:\"h-3\"}),A.createElement(asc,{count:3,lineClassName:\"h-[16.5px]\",barClassName:\"h-2.5\"})):A.createElement(\"span\",{className:\"line-clamp-2 break-words text-sm font-medium leading-[19px] text-foreground\"},u),q&&A.createElement(\"span\",{className:\"line-clamp-3 break-words text-xs leading-[16.5px] text-secondary-foreground\"},\nq),!n&&h&&t&&A.createElement(\"span\",{className:\"line-clamp-3 select-text break-words text-xs leading-[16.5px] text-muted-foreground\"},t),A.createElement(\"span\",{className:\"flex items-center justify-between gap-2 pt-0.5 text-[11px] leading-none tabular-nums text-muted-foreground\"},A.createElement(\"span\",null,a,\" of \",c),r&&A.createElement(\"span\",null,DW(r))));return d?A.createElement(\"button\",{type:\"button\",\"data-testid\":\"conversation-navigator-card\",\"aria-busy\":b||void 0,\"aria-label\":`Go to turn ${a} of ${c}`,\nonClick:()=>{window.getSelection()?.isCollapsed!==!1&&d()},className:Hi(\"flex min-w-0 flex-col gap-1.5\",\"-m-1.5 w-[calc(100%+0.75rem)] cursor-pointer rounded-lg p-1.5 text-left outline-none no-focus-ring hover:bg-foreground/5 focus-visible:bg-foreground/5\")},n):A.createElement(\"div\",{\"data-testid\":\"conversation-navigator-card\",\"aria-busy\":b||void 0,className:\"flex min-w-0 flex-col gap-1.5\"},n)};");
+  const originalRange=f.window.Urc,originalGroup=f.window.$rc,originalWorktree=f.window.ejc;
+  f.install();
+  assert.equal(f.window.Urc({startIndex:0,endIndexExclusive:1}),'第 1 轮对话');
+  assert.equal(f.window.Urc({startIndex:0,endIndexExclusive:3}),'第 1–3 轮对话');
+  const props={chapter:{startIndex:0,endIndexExclusive:2},turns:[],getTurnQueryArg:turnIndex=>({turnIndex}),getChapterTitleArg:()=>null,onJump:()=>{}};
+  let group=f.window.$rc(props),header=group.props.children[0];
+  assert.equal(header.props.children[0].props.children,'第 1–2 轮对话');
+  assert.equal(header.props.children[1].props.children,'2 轮对话');
+  const row=group.props.children[1].props.children[0];
+  assert.equal(row.type(row.props).props.children.props.children[1].props.children,'Turn 2','a real first message keeps its text');
+  assert.equal(row.type(row.props).props.children.props.children[1].props['data-ch-keep'],true);
+  f.window.fixtureData=undefined;
+  assert.equal(row.type(row.props).props.children.props.children[1].props.children,'第 1 轮对话','only the missing-message fallback is translated');
+  f.window.fixtureChapterTitle='Turn 2';
+  group=f.window.$rc(props);
+  assert.equal(group.props.children[0].props.children[0].props.children,'Turn 2','the generated chapter title is supplied data');
+  f.window.fixtureData={text:'Turn 2',responsePreview:'No message text'};
+  const card=f.window.bsc({arg:{turnIndex:0},total:2,onJump:()=>{}}),body=card.props.children.props.children;
+  assert.equal(body[0].props.children,'Turn 2');assert.equal(body[0].props['data-ch-keep'],true);
+  assert.equal(body[1].props.children,'No message text');assert.equal(body[1].props['data-ch-keep'],true);
+  assert.equal(Array.from(body[3].props.children[0].props.children).join(''),'1 / 2');
+  const resources=Object.freeze([{type:2,forkable:true,label:'system'},{type:1,forkable:true,label:'My  Folder, and reuse Other'},{type:1,local:true,label:'Shared  $&  Folder'}]);
+  const worktree=f.window.ejc({availableResources:resources,rawResources:[{type:{case:'google3',value:{forkType:2}}}]});
+  assert.equal(worktree.props.subtitle,'对话开始时自动创建新的 JJ 工作区, 创建工作树，来源：My  Folder, and reuse Other；复用：Shared  $&  Folder');
+  assert.equal(f.window.ejc({availableResources:[],disabledSubtitle:'Worktree from My Folder'}).props.subtitle,'Worktree from My Folder');
+  assert.equal(resources[1].label,'My  Folder, and reuse Other');
+  f.uninstall()();
+  assert.equal(f.window.Urc,originalRange);assert.equal(f.window.$rc,originalGroup);assert.equal(f.window.ejc,originalWorktree);
+  f.window.fixtureData=undefined;
+  assert.equal(row.type(row.props).props.children.props.children[1].props.children,'Turn 1','a cached shared lexical proxy runs the original row after uninstall');
+  f.window.fixtureData={text:'Turn 2'};
+  assert.equal(row.type(row.props).props.children.props.children[1].props.children,'Turn 2');
+  assert.equal(row.type(row.props).props.children.props.children[1].props['data-ch-keep'],undefined);
+});
+
+
+test('plugin resume translates only native display metadata and restores cached callbacks on uninstall', () => {
+  const f=nativeFixture();
+  f.evaluate(`A.useCallback=fn=>fn;var nativeSent=[];
+    var Fj=()=>({get:()=>true}),lB=()=>({sendAgentMessage:value=>{nativeSent.push(value);return {then(){}}}});
+    var jl=()=>({getState:()=>({})}),Qv=()=>()=>{},L2=()=>({logAutoResume(){}});
+    var $l=()=>({fixture:{}}),p5b=()=>true,q5b=()=>false;`);
+  f.evaluate("function r5b(a){var b=Fj().get(\"pluginCardAutoResume\")??!1,{sendAgentMessage:c}=lB(),d=jl(),f=Qv(),{logAutoResume:g}=L2(),h=a?.cascadeId,k=a?.stepIndex;a=(0,A.useCallback)(l=>{if(c&&h&&k!==void 0){var m={id:l.catalogId,marketplace:l.marketplace,kind:l.kind,surface:\"chat\"},n=$l(d.getState())[h];if(p5b(k,n?.lastUserInputStepIndex))if(q5b(n?.status))g(m,\"skipped_running\");else{var {displayTitle:q,content:r}=l.signedIn?{displayTitle:`Signed in: ${l.name}`,content:`The user signed in to the plugin \"${l.name}\" (catalog id: ${l.catalogId}) from the card in your last reply. Retry the task with it.`}:\n{displayTitle:`${l.kind===\"skill\"?\"Skill\":\"Plugin\"} installed: ${l.name}`,content:`The user installed the ${l.kind} \"${l.name}\" (catalog id: ${l.catalogId}) from the suggestion card in your last reply. ${l.kind===\"skill\"?\"The skill is now available\":\"Its customizations are now available\"}. If the task needs it, continue the task using it; otherwise, briefly acknowledge the install.`};c({recipient:h,content:r,displayTitle:q}).then(()=>{g(m,\"sent\")},t=>{f(xg.PLUGIN_CARD_AUTO_RESUME_FAILED,t);g(m,\"failed\")})}else g(m,\n\"skipped_stale\")}},[c,h,k,d,f,g]);if(b&&c&&h&&k!==void 0)return a}");
+  const original=f.window.r5b;
+  f.install();
+  const resume=f.window.r5b({cascadeId:'fixture',stepIndex:1}),record={name:'My  $&  Plugin',catalogId:'catalog-id',marketplace:'official',signedIn:true};
+  resume(record);
+  assert.equal(f.window.nativeSent[0].displayTitle,'已登录：My  $&  Plugin');
+  assert.equal(f.window.nativeSent[0].recipient,'fixture');
+  assert.equal(f.window.nativeSent[0].content,'The user signed in to the plugin "My  $&  Plugin" (catalog id: catalog-id) from the card in your last reply. Retry the task with it.');
+  resume({...record,signedIn:false,kind:'skill'});
+  assert.equal(f.window.nativeSent[1].displayTitle,'技能已安装：My  $&  Plugin');
+  assert.ok(f.window.nativeSent[1].content.startsWith('The user installed the skill "My  $&  Plugin"'));
+  f.uninstall()();assert.equal(f.window.r5b,original);
+  resume(record);
+  assert.equal(f.window.nativeSent[2].displayTitle,'Signed in: My  $&  Plugin');
+});
+
+
+test('current environment selector localizes a lexical const helper and keeps real labels, values and actions', () => {
+  const f=nativeFixture();f.window.eval=code=>f.evaluate(code);
+  f.evaluate(`
+    var fixtureEnvironmentActions=[],fixtureEnvironmentRegistrations=[];
+    var fixtureNoop=()=>{};
+    A.useState=value=>[value,next=>fixtureEnvironmentActions.push(['state',next])];
+    A.useMemo=callback=>callback();A.useRef=value=>({current:value});A.useEffect=fixtureNoop;
+    A.useCallback=callback=>callback;A.useId=()=> 'environment-fixture';
+    var ys=(resources,mode)=>resources.filter(item=>mode==='sot'?item.isSot:item.isCopy);
+    var yF=()=> '⌘.',HF=(action,callback)=>fixtureEnvironmentRegistrations.push({action,callback});
+    var Hi=(...values)=>values.filter(Boolean).join(' ');
+    var Z=()=>null,cjc=()=>null,bjc=()=>null,rP=()=>null,sP=()=>null,y6=()=>null,tP=()=>null;
+    var djc=()=>null,ejc=()=>null,fjc=()=>null,iA=()=>null,qP=()=>null;
+  `);
+  // Current source snapshot: gjc is a const and hjc is the writable selector.
+  // The visible span and tooltip each invoke that lexical helper directly.
+  f.evaluate("const gjc=(a,b,c=[])=>{switch(a.type){case \"sot\":return\"Local Checkout\";case \"copy\":return c.some(d=>d.type===2)?\"New Workspace\":\"New Worktree\";case \"environment\":return(b=b.find(d=>d.envId===a.id))?b.envLabel:\"Unknown Environment\";case \"jj_worktree\":return`Work in ${a.worktreeUri}`;case \"cloud\":return\"Cloud\";default:return\"Unknown Environment\"}};\nvar hjc=({resourceManagementProps:a,dropdownPlacement:b,disabledWorktreeSubtitle:c})=>{var d=a.availableEnvironments,f=a.selectedEnvironment,g=a.onSelectEnvironment,h=a.onSelectNewCopy,k=a.onSelectSot,l=a.availableResources,m=a.isSotAllowed,n=a.onTriggerEnrichment,[q,r]=(0,A.useState)(!1),[t,u]=(0,A.useState)(\"\"),v=(0,A.useMemo)(()=>t?d.filter(N=>N.envLabel.toLowerCase().includes(t.toLowerCase())):d,[d,t]),w=(0,A.useMemo)(()=>ys(l,\"sot\"),[l]),x=(0,A.useMemo)(()=>ys(l,\"copy\"),[l]),y=(0,A.useMemo)(()=>\nl?.some(N=>N.type===2),[l]),z=(0,A.useId)(),C=(0,A.useId)(),D=yF(\"toggleEnvironmentSelector\"),E=(0,A.useId)(),F=(0,A.useMemo)(()=>{var N=l?.filter(O=>O.type===3);return N&&N.length!==0?N.every(O=>O.vcsType===3):!1},[l]),G=(0,A.useMemo)(()=>{var N=l?.filter(O=>O.type===3);return N&&N.length!==0?N.every(O=>O.vcsType===2):!1},[l]),H=A.useRef(n);A.useEffect(()=>{H.current=n},[n]);var I=(0,A.useCallback)(N=>{r(N);N?H.current?.():u(\"\")},[]);HF(F?void 0:\"toggleEnvironmentSelector\",()=>{r(N=>!N)});if(F)b=\nA.createElement(cjc,{resourceManagementProps:a});else if(G)b=A.createElement(bjc,{resourceManagementProps:a});else if(f.type===\"cloud\")b=A.createElement(\"div\",{className:\"flex items-center gap-0.5\"},a.renderCloudRowTrailingContent?.());else{var K=G=F=A.createElement,L=A.createElement;a:switch(f.type){case \"sot\":var M=A.createElement(Z,{name:\"computer\",size:14,className:\"shrink-0\"});break a;default:M=A.createElement(Z,{name:\"call_split\",size:14,className:\"shrink-0\"})}b=F.call(A,\"div\",{className:\"flex items-center gap-0.5\"},\nG.call(A,rP,{open:q,onOpenChange:I,placement:b,openOnMouseDown:!0},K.call(A,sP,{asChild:!0},L.call(A,y6,{\"aria-label\":\"Select Environment\",\"data-tooltip-id\":E},M,A.createElement(\"span\",{className:\"select-none truncate max-w-36\"},gjc(f,d,l)),A.createElement(Z,{name:q?\"keyboard_arrow_up\":\"keyboard_arrow_down\",size:14,className:\"ml-auto\"}))),A.createElement(tP,{className:\"w-80\",scrollable:!0},m!==!1&&A.createElement(A.Fragment,null,A.createElement(\"div\",{\"data-tooltip-id\":w.length>=2?z:void 0,className:\"w-full\"},\nA.createElement(djc,{availableResources:l,onSelectSot:k,setIsOpen:r})),w.length>=2&&A.createElement(iA,{id:z,place:\"right\",noFade:!0},A.createElement(fjc,{resources:l,mode:\"sot\"}))),A.createElement(A.Fragment,null,A.createElement(\"div\",{\"data-tooltip-id\":x.length>=2?C:void 0,className:\"w-full\"},A.createElement(ejc,{availableResources:l,rawResources:a.rawResources,onSelectNewCopy:h,setIsOpen:r,disabledSubtitle:c})),x.length>=2&&A.createElement(iA,{id:C,place:\"right\",noFade:!0},A.createElement(fjc,\n{resources:l,mode:\"copy\"}))),d.length>0?A.createElement(A.Fragment,null,A.createElement(\"div\",{className:\"border-t border-border w-full my-1\"}),d.length>5?A.createElement(\"div\",{className:\"p-1\"},A.createElement(\"div\",{className:\"relative flex items-center h-8 w-full rounded-md bg-transparent border border-border transition-colors\"},A.createElement(Z,{name:\"search\",size:16,className:\"absolute left-2 text-muted-foreground\"}),A.createElement(\"input\",{type:\"text\",placeholder:y?\"Search past workspaces...\":\n\"Search past worktrees...\",value:t,onChange:N=>u(N.target.value),className:\"w-full h-full select-none !pl-7 pr-3 placeholder:text-placeholder bg-transparent outline-none text-xs rounded-md\",\"data-arrow-nav\":!0,\"data-autofocus\":\"true\",onKeyDown:N=>{if(N.key===\"Enter\"){let O=v[0];O&&(N.preventDefault(),g(O.envId),r(!1))}}}))):A.createElement(\"div\",{className:\"text-xs px-2 pt-1 pb-1 text-muted-foreground font-medium\"},y?\"Workspaces\":\"Previous Worktrees\"),v.length===0?A.createElement(\"div\",{className:\"text-xs px-2 py-1 text-muted-foreground\"},\n\"No environments found\"):v.map(N=>{var O=ys(N.resources,\"sot\").length>=2;return A.createElement(A.Fragment,{key:N.envId},A.createElement(qP,{selected:f.type===\"environment\"&&f.id===N.envId,onClick:()=>{g(N.envId);r(!1)},className:\"flex-col !items-start\",\"data-tooltip-id\":O?`env-tooltip-${N.envId}`:void 0},N.envLabel),O&&A.createElement(iA,{id:`env-tooltip-${N.envId}`,place:\"right\",noFade:!0},A.createElement(fjc,{resources:N.resources,mode:\"sot\"})))})):null)),(()=>{if(f.type===\"environment\"){let N=\nd.find(O=>O.envId===f.id);if(N?.renderRightContent)return N.renderRightContent()}else if(f.type===\"copy\"){if(a.renderCopyRowTrailingContent)return a.renderCopyRowTrailingContent()}else if(f.type===\"sot\"&&a.renderSotRowTrailingContent)return a.renderSotRowTrailingContent();return null})(),A.createElement(iA,{id:E,place:\"top\"},A.createElement(\"div\",{className:\"text-xs flex flex-col gap-0.5\"},A.createElement(\"span\",{className:\"font-semibold\"},gjc(f,d,l)),A.createElement(\"span\",{className:\"opacity-70\"},\n\"Select Environment\",D?` (${D})`:\"\"))))}return b};");
+  const originalCaller=f.window.hjc,originalHelper=f.evaluate('gjc');
+  assert.equal(Object.prototype.hasOwnProperty.call(f.window,'gjc'),false);
+  const installed=f.install();
+  assert.ok(Array.from(installed.uiKeys).includes('hjc'),'the real selector owns the shared UI hook');
+  assert.equal(installed.hooks.some(hook=>hook.key==='gjc'),false,'the lexical helper is never replaced');
+  const elements=value=>{const out=[];function walk(node){if(Array.isArray(node))node.forEach(walk);else if(node?.props){out.push(node);walk(node.props.children);}}walk(value);return out;};
+  const onSelectEnvironment=id=>f.window.fixtureEnvironmentActions.push(['select',id]);
+  const onSelectSot=()=>f.window.fixtureEnvironmentActions.push(['sot']);
+  const onSelectNewCopy=()=>f.window.fixtureEnvironmentActions.push(['copy']);
+  const render=(selected,availableEnvironments=[],availableResources=[])=>{
+    const resource=Object.freeze({selectedEnvironment:selected,availableEnvironments,availableResources,rawResources:[],onSelectEnvironment,onSelectSot,onSelectNewCopy});
+    const tree=f.window.hjc({resourceManagementProps:resource});
+    const nodes=elements(tree),labels=nodes.filter(node=>node.type==='span'&&['select-none truncate max-w-36','font-semibold'].includes(node.props.className));
+    assert.equal(nodes.find(node=>node.props['aria-label']==='Select Environment').props['aria-label'],'Select Environment');
+    assert.equal(nodes.find(node=>node.type===f.window.djc).props.onSelectSot,onSelectSot);
+    assert.equal(nodes.find(node=>node.type===f.window.ejc).props.onSelectNewCopy,onSelectNewCopy);
+    assert.equal(resource.selectedEnvironment,selected);
+    return {tree,nodes,labels,resource};
+  };
+  for(const [selected,resources,expected] of [
+    [Object.freeze({type:'sot'}),Object.freeze([]),'项目目录'],
+    [Object.freeze({type:'copy'}),Object.freeze([]),'新建工作树'],
+    [Object.freeze({type:'copy'}),Object.freeze([Object.freeze({type:2})]),'新建工作区'],
+    [Object.freeze({type:'environment',id:'missing'}),Object.freeze([]),'未知环境'],
+    [Object.freeze({type:'unknown'}),Object.freeze([]),'未知环境'],
+    [Object.freeze({type:'jj_worktree',worktreeUri:'file:///fixture/My  Folder/$& “raw”'}),Object.freeze([]),'在 file:///fixture/My  Folder/$& “raw” 中工作']
+  ]) {
+    const view=render(selected,Object.freeze([]),resources);
+    assert.equal(view.labels.length,2);assert.deepEqual(view.labels.map(node=>node.props.children),[expected,expected]);
+  }
+  for(const name of ['Local Checkout','New Workspace','Unknown Environment','Cloud','Work in user supplied name']) {
+    const selected=Object.freeze({type:'environment',id:'native'}),record=Object.freeze({envId:'native',envLabel:name,resources:Object.freeze([])});
+    const view=render(selected,Object.freeze([record]),Object.freeze([]));
+    assert.deepEqual(view.labels.map(node=>node.props.children),[name,name]);
+    assert.ok(view.labels.every(node=>node.props['data-ch-keep']===true));
+    const menu=view.nodes.find(node=>node.type===f.window.qP&&node.props.className==='flex-col !items-start');
+    assert.equal(menu.props.children.type,'span');assert.equal(menu.props.children.props.children,name);assert.equal(menu.props.children.props['data-ch-keep'],true);
+    assert.equal(record.envLabel,name);
+  }
+  assert.equal(f.window.fixtureEnvironmentActions.length,0,'rendering executes no environment action');
+  const selected=Object.freeze({type:'environment',id:'native'}),record=Object.freeze({envId:'native',envLabel:'Cloud',resources:[]});
+  const active=render(selected,Object.freeze([record]),Object.freeze([]));
+  active.nodes.find(node=>node.type===f.window.qP&&node.props.className==='flex-col !items-start').props.onClick();
+  assert.deepEqual(Array.from(f.window.fixtureEnvironmentActions,row=>Array.from(row)),[['select','native'],['state',false]]);
+  assert.ok(f.window.fixtureEnvironmentRegistrations.every(item=>item.action==='toggleEnvironmentSelector'));
+  installed.setStrings({'Local Checkout':'原目录','native-environment-unknown':'环境不可用','environment-work-in':'工作位置：{path}'});
+  assert.deepEqual(render(Object.freeze({type:'sot'})).labels.map(node=>node.props.children),['原目录','原目录']);
+  assert.deepEqual(render(Object.freeze({type:'environment',id:'missing'})).labels.map(node=>node.props.children),['环境不可用','环境不可用']);
+  assert.deepEqual(render(Object.freeze({type:'jj_worktree',worktreeUri:'/fixture/Raw  $&'})).labels.map(node=>node.props.children),['工作位置：/fixture/Raw  $&','工作位置：/fixture/Raw  $&']);
+  assert.equal(f.evaluate('gjc'),originalHelper);
+  assert.equal(f.evaluate('gjc({type:"sot"},[],[])'),'Local Checkout','the native const remains raw for other callers');
+  f.uninstall()();assert.equal(f.window.hjc,originalCaller);assert.equal(f.evaluate('gjc'),originalHelper);
+  assert.equal(Object.prototype.hasOwnProperty.call(f.window,'gjc'),false);
+});
+
+
+test('native UI discovery follows const functions and memo slots through their actual parents', () => {
+  const f=nativeFixture();f.window.eval=source=>f.evaluate(source);
+  f.evaluate(`A.memo=type=>({$$typeof:Symbol.for('react.memo'),type});
+    const rejected=({userRejected})=>userRejected?A.createElement("span",null,"Read URL rejected"):null;
+    const countMemo=A.memo(function({currentMatchIndex:a,totalMatches:b,maxMatches:c}) {
+      return A.createElement('span',{'data-testid':'find-bar-match-count'},b===0?'No Results':(a+1)+' of '+(c!==undefined&&b>=c?c+'+':b));
+    });
+    var rejectedParent=props=>A.createElement(rejected,props),countParent=props=>A.createElement(countMemo,props);`);
+  const memo=f.evaluate('countMemo'),originalMemo=memo.type;
+  const adapters=f.install();
+  const row=f.window.rejectedParent({userRejected:true}),cached=row.type;
+  assert.equal(cached(row.props).props.children,'已拒绝读取网址');
+  const props=Object.freeze({currentMatchIndex:0,totalMatches:5,maxMatches:100});
+  assert.equal(f.window.countParent(props).type,memo);
+  assert.equal(memo.type(props).props.children,'1 / 5');
+  const cachedMemo=memo.type;
+  assert.notEqual(cachedMemo,originalMemo);
+  f.uninstall()();
+  assert.equal(cached(row.props).props.children,'Read URL rejected');
+  assert.equal(memo.type,originalMemo);
+  assert.equal(cachedMemo(props).props.children,'1 of 5');
+  assert.equal(adapters.count,0);
+});
+
+
+test('new editor mounts retain the native Lexical class error boundary and unrelated parents', () => {
+  const f=nativeFixture();f.window.eval=source=>f.evaluate(source);
+  f.evaluate(`A.Component=class Component {constructor(props){this.props=props}};
+    A.Component.prototype.isReactComponent={};
+    class h$a extends A.Component {
+      constructor(){super(...arguments);this.state={hasError:false}}
+      componentDidCatch(error,info){this.props.onError(error,info)}
+      render(){return this.state.hasError?this.props.fallback:this.props.children}
+    }
+    function i$a({children,fallback,onError}) {return A.createElement(h$a,{fallback,onError},children)}
+    var editor=props=>A.createElement(i$a,props);`);
+  const originalBoundary=f.evaluate('h$a'),originalParent=f.window.i$a,originalEditor=f.window.editor;
+  const errors=[],onError=(...args)=>errors.push(args),children=Object.freeze({native:'editor content'});
+  const props=Object.freeze({children,fallback:null,onError}),adapters=f.install();
+  const boundary=f.window.i$a(props);
+  assert.doesNotThrow(()=>{
+    const mounted=new boundary.type(boundary.props);
+    assert.equal(mounted.render(),children);
+    const error=new Error('native editor error'),info=Object.freeze({componentStack:'editor'});
+    mounted.componentDidCatch(error,info);
+    assert.deepEqual(errors,[[error,info]],'React retains the native error boundary instance and callback');
+  },'a newly mounted /btw editor must not call its class as a function');
+  assert.equal(boundary.type,originalBoundary);
+  assert.equal(f.window.i$a,originalParent,'a parent without a UI translation rule stays native');
+  assert.equal(f.window.editor,originalEditor);
+  assert.equal(f.window.editor(props).type,originalParent);
+  assert.equal(adapters.hooks.some(hook=>hook.original===originalBoundary||hook.original===originalParent),false);
+  f.uninstall()();
+});
+
+test('known UI labels do not replace class components or memo class types', () => {
+  const f=nativeFixture();f.window.eval=source=>f.evaluate(source);
+  f.evaluate(`A.Component=class Component {constructor(props){this.props=props}};
+    A.Component.prototype.isReactComponent={};
+    A.memo=type=>({$$typeof:Symbol.for('react.memo'),type});
+    var DirectClass=class DirectClass extends A.Component {
+      componentDidMount(){this.props.onMount()}
+      render(){return this.props.userRejected?A.createElement("span",null,"Read URL rejected"):null}
+    };
+    const LexicalClass=class LexicalClass extends DirectClass {
+      render(){return this.props.userRejected?A.createElement("span",null,"Read URL rejected"):null}
+    };
+    const classMemo=A.memo(LexicalClass);
+    var classParent=props=>A.createElement(LexicalClass,props),memoParent=props=>A.createElement(classMemo,props);
+    const localizedChild=({userRejected})=>userRejected?A.createElement("span",null,"Read URL rejected"):null;
+    var localizedParent=props=>A.createElement(localizedChild,props);`);
+  const direct=f.window.DirectClass,lexical=f.evaluate('LexicalClass'),memo=f.evaluate('classMemo');
+  const directMount=direct.prototype.componentDidMount,adapters=f.install();
+  assert.equal(f.window.DirectClass,direct,'a writable class binding stays native even when its render matches a label rule');
+  assert.equal(f.window.classParent({userRejected:true}).type,lexical);
+  assert.equal(f.window.memoParent({userRejected:true}).type,memo);
+  assert.equal(memo.type,lexical,'React.memo keeps its native class type');
+  let mounts=0;
+  const instance=new memo.type({userRejected:true,onMount:()=>mounts++});
+  instance.componentDidMount();
+  assert.equal(mounts,1);
+  assert.equal(instance.componentDidMount,directMount);
+  assert.ok(instance instanceof direct);
+  assert.equal(instance.render().props.children,'Read URL rejected');
+  const translated=f.window.localizedParent({userRejected:true});
+  assert.equal(translated.type(translated.props).props.children,'已拒绝读取网址','eligible function children still use native UI projection');
+  assert.equal(adapters.hooks.some(hook=>hook.original===direct||hook.original===lexical),false);
+  f.uninstall()();
+  assert.equal(f.window.DirectClass,direct);assert.equal(memo.type,lexical);
+});
+
+
+test('runtime provider getters use the shared UI projection and restore cached component proxies', () => {
+  const f=nativeFixture();
+  f.evaluate(`var atb={};
+    var nativeContext=(()=>{
+      const hidden=({code,error})=>A.createElement('div',{'data-testid':'mermaid-lightbox-toolbar'},
+        A.createElement('div',{className:'box-border min-w-0 mb-2 px-3 py-2 bg-muted text-foreground rounded text-sm break-words whitespace-pre-line'},'⚠️ Failed to render Mermaid diagram: ',error),
+        A.createElement('code',null,code));
+      return ()=>({MermaidDiagramComponent:hidden});
+    })();
+    A.useContext=()=>nativeContext();
+    var nativeGetter=()=>{var a=A.useContext(atb);if(!a)throw Error('MermaidDiagramComponent not found');return a.MermaidDiagramComponent;};`);
+  const original=f.window.nativeGetter,adapters=f.install(),cachedGetter=f.window.nativeGetter;
+  const component=f.window.nativeGetter(),props=Object.freeze({code:'Commit\nNo Results',error:'Show more'});
+  assert.equal(f.window.nativeGetter(),component);
+  const children=component(props).props.children;
+  assert.equal(children[0].props.children[0],'⚠️ Mermaid 图表渲染失败：');
+  assert.equal(children[0].props.children[1],props.error);
+  assert.equal(children[0].props['data-ch-keep'],true);
+  assert.equal(children[1].props.children,props.code);
+  f.uninstall()();
+  assert.equal(f.window.nativeGetter,original);
+  assert.equal(cachedGetter(),original());
+  assert.equal(component(props).props.children[0].props.children[0],'⚠️ Failed to render Mermaid diagram: ');
+  assert.equal(adapters.count,0);
+});
+
+
+test('2.29 home and automation copy preserve names and editor values through refresh and uninstall', () => {
+  const f=nativeFixture();
+  f.evaluate(`var currentName='Font $&',S3a=()=>true,R3a=()=>currentName,ot=()=>null;
+    var changeName=()=>null;
+    var sidecarEditor=({value})=>A.createElement('input',{'data-testid':'new-sidecar-name',placeholder:'Untitled',value,onChange:changeName});
+    var EmptyList=()=>null;
+    var sidecarEmpty=({kind})=>A.createElement('div',{'data-testid':'sidecars-view'},A.createElement(EmptyList,{emptyState:A.createElement('div',null,
+      A.createElement('p',null,'No ',{emptyMessagePlural:kind}.emptyMessagePlural,' yet'),
+      A.createElement('p',null,"Run a prompt on a schedule, like a morning summary of yesterday's changes. Runs show up here."))}));`);
+  f.evaluate("function PEc(){var a=S3a(),b=R3a();if(!a)return null;a=(a=b.trim().split(/\\s+/)[0]??\"\")?`Hi ${a}, what can we get done today?`:\"What can we get done today?\";return A.createElement(\"div\",{\"data-testid\":\"home-greeting\",className:\"flex flex-col items-center select-none\"},A.createElement(\"style\",null,\"\\n        .home-greeting-mark {\\n          opacity: 0.12;\\n          -webkit-mask-image: linear-gradient(rgb(0, 0, 0) 8%, transparent 90%);\\n          mask-image: linear-gradient(rgb(0, 0, 0) 8%, transparent 90%);\\n        }\\n        @media (max-height: 560px) {\\n          .home-greeting-mark {\\n            display: none !important;\\n          }\\n        }\\n        @media (max-height: 720px) and (min-height: 561px) {\\n          .home-greeting-mark {\\n            width: 64px !important;\\n            height: 64px !important;\\n          }\\n        }\\n      \"),\nA.createElement(ot,{size:112,\"aria-hidden\":\"true\",className:\"home-greeting-mark text-foreground transition-all\"}),A.createElement(\"h1\",{className:\"text-2xl font-normal tracking-tight text-center text-foreground\",style:{marginTop:24}},a))}");
+  const original=f.window.PEc,editor=f.window.sidecarEditor,adapters=f.install();
+  const heading=()=>f.window.PEc().props.children.find(node=>node?.type==='h1');
+  assert.equal(heading().props.children,'你好，Font，今天我们来做点什么？');
+  assert.equal(heading().props['data-ch-keep'],true);
+  f.window.currentName='';
+  assert.equal(heading().props.children,'今天我们来做点什么？');
+  const input=f.window.sidecarEditor({value:'Untitled'});
+  assert.equal(input.props.placeholder,'未命名');
+  assert.equal(input.props.value,'Untitled');
+  assert.equal(input.props.onChange,f.window.changeName);
+  const empty=kind=>f.window.sidecarEmpty({kind}).props.children.props.emptyState.props.children[0].props.children;
+  assert.equal(empty('automations'),'暂无自动化任务');
+  assert.equal(empty('scheduled tasks'),'暂无定时任务');
+  const unknown=empty('my names');
+  assert.deepEqual(Array.from(unknown),['No ','my names',' yet']);
+  adapters.setStrings({'home-greeting:named':'{name}，你好','automation-title:untitled':'未填写'});
+  f.window.currentName='renxing';
+  assert.equal(heading().props.children,'renxing，你好');
+  assert.equal(f.window.sidecarEditor({value:'Font'}).props.placeholder,'未填写');
+  f.uninstall()();
+  assert.equal(f.window.PEc,original);assert.equal(f.window.sidecarEditor,editor);
+  assert.equal(heading().props.children,'Hi renxing, what can we get done today?');
+});
+
+test('2.29 schedule choices translate in their owner while preserving native selection, callbacks and identities', () => {
+  const dictionary=JSON.parse(fs.readFileSync(new URL('../runtime/translations.json',import.meta.url))).strings;
+  const f=nativeFixture({strings:dictionary});
+  f.evaluate(`A.useState=()=>[undefined,()=>{}];var dj=(...a)=>a.filter(Boolean).join(' '),N0=x=>x;
+    var U5=()=>null,KQ=()=>null;
+    var identitySelector=props=>A.createElement(U5,props);`);
+  f.evaluate("var gKc=[2,3,4,6,8,12],hKc={everyHours:2,days:[1],dayOfMonth:1,hour:9,minute:0};function M5(a,b){var c=a<12?\"AM\":\"PM\";return`${a%12===0?12:a%12}:${String(b).padStart(2,\"0\")} ${c}`}function T5(a,b,c,d){a=a??{...hKc,repeat:b,timeZone:d};return{...a,repeat:b,everyHours:c??a.everyHours,minute:b===\"hourly\"||b===\"hours\"?0:a.minute,timeZone:d??a.timeZone}};const iKc=[{value:\"hourly\",label:\"Every hour\"},{value:\"daily\",label:\"Every day\"},{value:\"weekdays\",label:\"Every weekday\"},{value:\"weekly\",label:\"Every week\"},{value:\"custom\",label:\"Custom\\u2026\"}],jKc=[\"hourly\",\"daily\",\"weekly\"],kKc=[{value:\"hours\",label:\"hours\"},{value:\"week\",label:\"week\"},{value:\"month\",label:\"month\"}],lKc=\"Sun Mon Tue Wed Thu Fri Sat\".split(\" \"),mKc=\"Sunday Monday Tuesday Wednesday Thursday Friday Saturday\".split(\" \"),nKc=[1,2,3,4,5,6,0];\nfunction oKc(a){return a>=11&&a<=13?`${a}th`:`${a}${[\"th\",\"st\",\"nd\",\"rd\"][a%10]??\"th\"}`}function pKc(a){return a.repeat===\"days\"&&a.days.length===1?\"weekly\":a.repeat===\"hours\"||a.repeat===\"days\"||a.repeat===\"monthly\"?\"custom\":a.repeat}\nfunction qKc(a,b){var c=Array.from({length:b?48:24},(f,g)=>{var h=b?Math.floor(g/2):g;g=b&&g%2?30:0;return{value:`${h}:${g}`,label:M5(h,g)}}),d=`${a.hour}:${a.minute}`;c.some(f=>f.value===d)||(c.push({value:d,label:M5(a.hour,a.minute)}),c.sort((f,g)=>{var [h,k]=f.value.split(\":\").map(Number),[l,m]=g.value.split(\":\").map(Number);return h*60+k-(l*60+m)}));return c}\nfunction rKc(a){var b=a.repeat===\"weekdays\"?[1,2,3,4,5]:a.repeat===\"days\"?a.days:void 0;if(b)return`${[...b].sort().join(\",\")}@${a.hour}:${a.minute}`}function sKc({value:a,onChange:b,customLabel:c,timeZone:d,fixedTimeZone:f=!1,allowCustom:g=!0}){var h=w=>{b(f?{...w,timeZone:void 0}:w)},k=f?d:a?.timeZone??d,l=f?void 0:a?a.timeZone:d;d=a&&(g||jKc.includes(pKc(a))&&a.minute===0)?a:void 0;var [m,n]=A.useState(),p=g&&!!d&&(pKc(d)===\"custom\"||m!==void 0&&rKc(d)===m),r=p&&d?.repeat===\"weekdays\"?{...d,repeat:\"days\",days:[1,2,3,4,5]}:d;d=g?iKc:iKc.filter(w=>jKc.includes(w.value));c=r?d:[{value:\"keep\",label:`Keep: ${c}`},...d];var u=r?p?\"custom\":pKc(r):\n\"keep\",t=w=>{n(w.repeat===\"days\"?rKc(w):void 0);h(w)};d=w=>{r&&(w===\"hours\"?t(T5(r,\"hours\",r.everyHours||gKc[0],l)):w===\"month\"?t(T5(r,\"monthly\",void 0,l)):t({...T5(r,\"days\",void 0,l),days:r.days.length?r.days:[1]}))};var v=r?r.repeat===\"hours\"?\"hours\":r.repeat===\"monthly\"?\"month\":\"week\":\"week\";k=!!r&&r.repeat!==\"hourly\"&&r.repeat!==\"hours\"&&A.createElement(A.Fragment,null,A.createElement(\"span\",{className:\"text-muted-foreground select-none\"},\"at\"),A.createElement(U5,{value:`${r.hour}:${r.minute}`,\nlabel:M5(r.hour,r.minute),options:qKc(r,g),onChange:w=>{var [x,y]=w.split(\":\").map(Number);w={...r,hour:x,minute:y};p?t(w):h(w)},testId:\"schedule-time\",ariaLabel:\"Time\"}),k&&A.createElement(\"span\",{className:\"text-xs text-muted-foreground select-none\",title:k,\"data-testid\":\"schedule-timezone\"},N0(k)));return A.createElement(\"div\",{className:\"flex flex-col gap-2.5\",\"data-testid\":\"automation-schedule-editor\"},A.createElement(\"div\",{className:\"flex flex-wrap items-center gap-2 text-sm\"},A.createElement(U5,\n{value:u,label:u===\"custom\"?\"Custom\":c.find(w=>w.value===u)?.label??\"\",options:c,onChange:w=>{if(w!==\"keep\"){var x=a&&!g?{...a,minute:0}:a;w===\"custom\"?t({...T5(x,\"days\",void 0,l),days:x?.repeat===\"days\"?x.days:[1]}):(n(void 0),w===\"weekly\"?h({...T5(x,\"days\",void 0,l),days:[x?.repeat===\"days\"?x.days[0]:1]}):h(T5(x,w,void 0,l)))}},testId:\"schedule-repeat\",ariaLabel:\"How often\"}),!p&&r?.repeat===\"days\"&&A.createElement(A.Fragment,null,A.createElement(\"span\",{className:\"text-muted-foreground select-none\"},\n\"on\"),A.createElement(U5,{value:String(r.days[0]),label:mKc[r.days[0]],options:nKc.map(w=>({value:String(w),label:mKc[w]})),onChange:w=>{h({...r,days:[Number(w)]})},testId:\"schedule-weekday\",ariaLabel:\"Day of the week\"})),!p&&k),p&&r&&A.createElement(\"div\",{className:\"flex flex-col gap-2.5 rounded-lg border border-border p-3\",\"data-testid\":\"schedule-custom\"},A.createElement(\"div\",{className:\"flex flex-wrap items-center gap-2 text-sm\"},A.createElement(\"span\",{className:\"text-muted-foreground select-none\"},\n\"Repeat every\"),v===\"hours\"&&A.createElement(U5,{value:String(r.everyHours),label:String(r.everyHours),options:gKc.map(w=>({value:String(w),label:String(w)})),onChange:w=>{t({...r,everyHours:Number(w)})},testId:\"schedule-every-hours\",ariaLabel:\"Number of hours\"}),A.createElement(U5,{value:v,label:v,options:kKc,onChange:d,testId:\"schedule-custom-unit\",ariaLabel:\"Repeat unit\"}),v===\"month\"&&A.createElement(A.Fragment,null,A.createElement(\"span\",{className:\"text-muted-foreground select-none\"},\"on the\"),\nA.createElement(U5,{value:String(r.dayOfMonth),label:oKc(r.dayOfMonth),options:Array.from({length:28},(w,x)=>({value:String(x+1),label:oKc(x+1)})),onChange:w=>{t({...r,dayOfMonth:Number(w)})},testId:\"schedule-day-of-month\",ariaLabel:\"Day of the month\"})),v!==\"week\"&&k),v===\"week\"&&A.createElement(\"div\",{className:\"flex flex-wrap items-center gap-2 text-sm\"},A.createElement(\"span\",{className:\"text-muted-foreground select-none\"},\"on\"),A.createElement(KQ,{multiple:!0,value:r.days.map(String),onValueChange:w=>\n{w.length&&t({...r,days:w.map(Number)})},options:nKc.map(w=>({value:String(w),label:lKc[w].charAt(0),\"aria-label\":mKc[w]})),\"aria-label\":\"Days\"}),k)))}");
+  const original=f.window.sKc,adapters=f.install();
+  const all=value=>Array.isArray(value)?value.flatMap(all):value?.props?[value,...all(value.props.children)]:[];
+  const state=Object.freeze({repeat:'daily',hour:13,minute:30,days:Object.freeze([1]),everyHours:2,dayOfMonth:21});
+  let changed;
+  const onChange=value=>changed=value;
+  const tree=f.window.sKc({value:state,onChange,timeZone:'Asia/Shanghai'}),nodes=all(tree);
+  const choice=id=>nodes.find(node=>node.props.testId===id);
+  const repeat=choice('schedule-repeat'),time=choice('schedule-time');
+  assert.equal(repeat.props.label,'每天');
+  assert.deepEqual(Array.from(repeat.props.options,o=>o.value),['hourly','daily','weekdays','weekly','custom']);
+  assert.deepEqual(Array.from(repeat.props.options,o=>o.label),['每小时','每天','每个工作日','每周','自定义…']);
+  assert.equal(time.props.label,'下午 1:30');
+  assert.equal(time.props.value,'13:30');assert.equal(time.props.ariaLabel,'Time');
+  assert.equal(time.props.options.find(o=>o.value==='0:0').label,'上午 12:00');
+  time.props.onChange('9:0');
+  assert.equal(changed.hour,9);assert.equal(changed.minute,0);assert.equal(changed.repeat,'daily');
+  assert.equal(state.hour,13);
+  assert.equal(nodes.find(n=>n.type==='span'&&n.props.children==='时间').props.className,'text-muted-foreground select-none');
+  const monthly=all(f.window.sKc({value:{...state,repeat:'monthly'},onChange}));
+  assert.equal(monthly.find(n=>n.props.testId==='schedule-custom-unit').props.label,'月');
+  const day=monthly.find(n=>n.props.testId==='schedule-day-of-month');
+  assert.equal(day.props.label,'21 日');assert.equal(day.props.value,'21');
+  assert.equal(day.props.options[0].label,'1 日');assert.equal(day.props.options[27].value,'28');
+  const weekly=all(f.window.sKc({value:{...state,repeat:'days',days:[1]},onChange}));
+  assert.equal(weekly.find(n=>n.props.testId==='schedule-weekday').props.label,'星期一');
+  const custom=all(f.window.sKc({value:{...state,repeat:'days',days:[0,2]},onChange}));
+  const toggles=custom.find(n=>n.props.multiple===true);
+  assert.deepEqual(Array.from(toggles.props.options,o=>o.label),['一','二','三','四','五','六','日']);
+  assert.equal(toggles.props.options[0]['aria-label'],'Monday');
+  assert.equal(toggles.props.options[0].value,'1');
+  const identity={value:'daily',label:'Every day',options:[{value:'daily',label:'Every day'}],onChange,ariaLabel:'Identity'};
+  assert.equal(f.window.identitySelector(identity).props.label,'Every day');
+  assert.equal(f.window.identitySelector(identity).props.options,identity.options);
+  adapters.setStrings({'Every day':'每日'});
+  assert.equal(all(f.window.sKc({value:state,onChange})).find(n=>n.props.testId==='schedule-repeat').props.label,'每日');
+  f.uninstall()();assert.equal(f.window.sKc,original);
+  assert.equal(all(f.window.sKc({value:state,onChange})).find(n=>n.props.testId==='schedule-time').props.label,'1:30 PM');
+});
+
+test('location descriptions translate their native prefix and preserve the project name and actions', () => {
+  const f=nativeFixture();
+  f.evaluate(`var Location=()=>null,dj=(...values)=>values.filter(Boolean).join(' ');
+    var projectLocation=({project,location,onSelectLocal,onSelectCloud})=>A.createElement(Location,{
+      location,onSelectLocal,onSelectCloud,cloudDescription:'Runs in a cloud environment',
+      localDescription:A.createElement(A.Fragment,null,'Uses your local clone,',' ',
+        A.createElement('span',{className:'whitespace-nowrap'},project.name))});`);
+  f.evaluate(`var branchSelector=({resourceManagementProps:r})=>{
+    const {selectedEnvironment:selected}=r,caption=selected.type==='copy'?'new worktree':r.envName;
+    const footer='Keeps your checkout untouched';
+    return A.createElement('div',null,A.createElement('span',{'data-testid':'branch-pill-label'},r.branchPill.label),
+      A.createElement('span',{className:'select-none truncate max-w-32 text-muted-foreground'},'· ',caption));
+  };`);
+  f.evaluate("function cpc({label:a,status:b}){var c=b===\"online\";return A.createElement(\"span\",{className:\"flex items-center gap-1.5\"},A.createElement(\"span\",null,a),A.createElement(\"span\",{\"aria-hidden\":\"true\"},\"\\u00b7\"),A.createElement(\"span\",{className:dj(\"inline-block w-1.5 h-1.5 rounded-full\",c?\"bg-green-500\":\"bg-muted-foreground\")}),A.createElement(\"span\",null,b===\"starting\"?\"Starting\":c?\"Online\":\"Offline\"))}");
+  const original=f.window.projectLocation,adapters=f.install();
+  const project=Object.freeze({name:'Chat $&  Cloud'}),location=Object.freeze({kind:'cloud',environmentId:'default'});
+  const onSelectLocal=()=>{},onSelectCloud=()=>{};
+  const props={project,location,onSelectLocal,onSelectCloud};
+  const view=f.window.projectLocation(props),description=view.props.localDescription.props.children;
+  assert.equal(description[0],'使用本机克隆的仓库：');
+  assert.equal(description[2].props.children,project.name);
+  assert.equal(description[2].props['data-ch-keep'],true);
+  assert.equal(view.props.location,location);
+  assert.equal(view.props.onSelectLocal,onSelectLocal);
+  assert.equal(view.props.onSelectCloud,onSelectCloud);
+  assert.equal(project.name,'Chat $&  Cloud');
+  const copy=f.window.branchSelector({resourceManagementProps:{selectedEnvironment:{type:'copy'},branchPill:{label:'Chat'}}}).props.children;
+  assert.equal(copy[0].props.children,'Chat');assert.equal(copy[0].props['data-ch-keep'],true);
+  assert.equal(copy[1].props.children[1],'新工作树');
+  const existing=f.window.branchSelector({resourceManagementProps:{selectedEnvironment:{type:'environment'},branchPill:{label:'Cloud'},envName:'new worktree'}}).props.children;
+  assert.equal(existing[1].props.children[1],'new worktree');assert.equal(existing[1].props['data-ch-keep'],true);
+  const defaultBranch=Object.freeze({label:'Repo default'});
+  assert.equal(f.window.branchSelector({resourceManagementProps:{selectedEnvironment:{type:'cloud'},branchPill:defaultBranch}}).props.children[0].props.children,'仓库默认分支');
+  assert.equal(defaultBranch.label,'Repo default');
+  assert.equal(f.window.branchSelector({resourceManagementProps:{selectedEnvironment:{type:'cloud'},branchPill:{value:'Repo default',label:'Repo default'}}}).props.children[0].props.children,'Repo default');
+  const status=f.window.cpc({label:'Starting',status:'starting'}).props.children;
+  assert.equal(status[0].props.children,'Starting');assert.equal(status[3].props.children,'正在启动');
+  adapters.setStrings({'Uses your local clone,':'本机仓库：'});
+  assert.equal(f.window.projectLocation(props).props.localDescription.props.children[0],'本机仓库：');
+  f.uninstall()();assert.equal(f.window.projectLocation,original);
+  assert.equal(f.window.projectLocation(props).props.localDescription.props.children[0],'Uses your local clone,');
+});
+
+
+test('message time projection follows changing native timestamps and preserves content, tooltips and actions', () => {
+  const dictionary=JSON.parse(fs.readFileSync(new URL('../runtime/translations.json',import.meta.url)));
+  const start=renderer.indexOf('  function computerUseAppName('),end=renderer.indexOf('  function translatedMenu(',start);
+  const translator=vm.runInNewContext(`let strings,normalizedStrings;${renderer.slice(start,end)};setStrings(dictionary);({translate,setStrings})`,{dictionary});
+  const f=nativeFixture({strings:dictionary.strings,translate:translator.translate});
+  f.evaluate(`A.useId=()=> 'time-fixture';var ZA=()=>null,MZb=()=>null,OZb=()=>null;
+    var replyToolbar=({steps:steps,showThumbsUpDown,relativeText,tooltip,onCopy})=>A.createElement('div',{'data-testid':'cascade-system-message-toolbar'},
+      A.createElement('span',{'data-screenshot-volatile':true,'data-tooltip-id':'reply-time',className:'text-xs text-muted-foreground select-none px-1 whitespace-nowrap'},relativeText),
+      A.createElement(ZA,{id:'reply-time'},tooltip),A.createElement('button',{'aria-label':'Copy Message',onClick:onCopy},'Copy'),
+      A.createElement('span',{className:'text-xs text-muted-foreground select-none px-1 whitespace-nowrap'},steps[0].text),
+      A.createElement('span',null,steps[1].text));`);
+  f.evaluate("var M_b=({formattedTime:a,timestampTooltip:b,items:c,revertState:d,isBubble:f})=>{var g=`timestamp-${(0,A.useId)()}`;a=a&&A.createElement(A.Fragment,null,A.createElement(\"span\",{\"data-screenshot-volatile\":!0,\"data-tooltip-id\":b?g:void 0,className:\"text-xs text-muted-foreground select-none px-1 mr-1 self-center whitespace-nowrap\"},a),b&&A.createElement(ZA,{id:g,place:\"top-end\"},b));return f?A.createElement(\"div\",{\"data-testid\":\"user-message-actions\",\"data-no-scroll-jump\":!0,className:\"flex flex-row items-center justify-end gap-0.5 px-1 opacity-0 pointer-events-none group-hover/user-input-step:opacity-100 group-hover/user-input-step:pointer-events-auto has-[:focus-visible]:opacity-100 has-[:focus-visible]:pointer-events-auto transition-opacity select-none\"},\na,c.length>0&&A.createElement(MZb,{items:c}),d&&A.createElement(OZb,{revertState:d})):A.createElement(\"div\",{className:\"absolute bottom-0.5 right-0.5 flex flex-row items-center p-1 rounded-full opacity-0 pointer-events-none group-hover/user-input-step:opacity-100 group-hover/user-input-step:pointer-events-auto transition-all bg-card user-input-buttons-shadow user-input-buttons-container select-none\"},a,A.createElement(MZb,{items:c}),d&&A.createElement(OZb,{revertState:d}))};");
+  const original=f.window.M_b,reply=f.window.replyToolbar,adapters=f.install();
+  const all=value=>Array.isArray(value)?value.flatMap(all):value?.props?[value,...all(value.props.children)]:[];
+  const items=Object.freeze([Object.freeze({text:'just now'}),Object.freeze({text:'/compact'})]);
+  let calls=0;const onCopy=()=>calls++,revert=Object.freeze({onClick:onCopy}),tooltip='2026年11月5日 00:56';
+  const input={items,revertState:revert,timestampTooltip:tooltip};
+  for(const [time,expected,isBubble] of [
+    ['just now','刚刚',true],['1m ago','1分钟前',false],['2h ago','2小时前',true],
+    ['3d ago','3天前',true],['4mo ago','4个月前',true],['5y ago','5年前',true]
+  ]) {
+    const nodes=all(f.window.M_b({...input,formattedTime:time,isBubble}));
+    const stamp=nodes.find(n=>n.props['data-screenshot-volatile']===true);
+    assert.equal(stamp.props.children,expected);
+    assert.equal(stamp.props['data-tooltip-id'],'timestamp-time-fixture');
+    assert.equal(nodes.find(n=>n.type===f.window.ZA).props.children,tooltip);
+    assert.equal(nodes.find(n=>n.type===f.window.MZb).props.items,items);
+    assert.equal(nodes.find(n=>n.type===f.window.OZb).props.revertState,revert);
+  }
+  const nodes=all(f.window.replyToolbar({steps:items,relativeText:'just now',tooltip,onCopy,showThumbsUpDown:true}));
+  assert.equal(nodes.find(n=>n.props['data-screenshot-volatile']===true).props.children,'刚刚');
+  assert.ok(nodes.some(n=>n.type==='span'&&n.props.children==='just now'),'same-text message content stays verbatim');
+  assert.ok(nodes.some(n=>n.type==='span'&&n.props.children==='/compact'),'slash command names stay verbatim');
+  const copy=nodes.find(n=>n.type==='button');
+  assert.equal(copy.props['aria-label'],'Copy Message');assert.equal(copy.props.onClick,onCopy);assert.equal(calls,0);
+  translator.setStrings({'just now':'方才'});adapters.setStrings({'just now':'方才'});
+  assert.equal(all(f.window.M_b({...input,formattedTime:'just now'})).find(n=>n.props['data-screenshot-volatile']===true).props.children,'方才');
+  f.uninstall()();assert.equal(f.window.M_b,original);assert.equal(f.window.replyToolbar,reply);
+  assert.equal(all(f.window.M_b({...input,formattedTime:'just now'})).find(n=>n.props['data-screenshot-volatile']===true).props.children,'just now');
+});
+
+
+test('current provider registry translates protocol-owned system notices without changing stored messages or replies', () => {
+  const f=nativeFixture();f.window.eval=code=>f.evaluate(code);
+  f.evaluate(`var L_=()=>null,G_=()=>null,t_=()=>null,SZb=()=>null;
+    var Q6b=step=>step.renderInfo?.title||'System Message',J_=()=>true;
+    var NoticeContext={Provider:()=>null},features={},providerRuns=0;
+    A.useMemo=fn=>fn();`);
+  f.evaluate('var CurrentSteps={generic:{renderer:()=>null},systemMessage:{renderer:'+"({step:a,debugMode:b})=>{var c=a.metadata?.auto_proceed_uri;if(c)return A.createElement(\"div\",{className:\"w-full my-0.5\"},A.createElement(SZb,{isTurboReviewMode:!0,autoProceedUris:[c]}));if(c=a.metadata?.user_markdown)return A.createElement(\"div\",{className:\"w-full my-0.5 px-2\"},A.createElement(L_,{fallbackMarkdown:c}));c=a.renderInfo;var d=a.message,f=Q6b(a);a=J_(c,b)||!!d?.trim();f=A.createElement(t_,{content:f});return a?A.createElement(\"div\",{className:\"w-full my-0.5\"},\nA.createElement(G_,{trigger:f,maxHeight:200,defaultExpanded:b},A.createElement(\"div\",{className:\"text-secondary-foreground pl-2\"},A.createElement(L_,{renderInfo:c,fallbackMarkdown:d,debugMode:b})))):A.createElement(\"div\",{className:\"w-full my-0.5 px-2 min-h-8 py-1 flex items-center select-none text-sm\"},f)}"+'}};');
+  f.evaluate(`var nativeProvider=({children})=>{providerRuns++;var extra=features?.cider?.stepRenderers;
+    const value=A.useMemo(()=>extra?{...CurrentSteps,...extra}:CurrentSteps,[extra]);
+    return A.createElement(NoticeContext.Provider,{value},children)};`);
+  const native=f.evaluate('CurrentSteps.systemMessage.renderer'),adapters=f.install();
+  assert.equal(f.window.providerRuns,0,'registry discovery never executes the provider or its renderers');
+  assert.ok(adapters.uiKeys.includes('CurrentSteps.systemMessage.renderer'));
+  const id='316f337f-6a37-43d4-b42c-6c00a2eb20c7';
+  const prefix=`Subagent ${id} has gone idle. This was the subagent's most recent response:`;
+  const response='  分片 W4 已完成。\njust now /compact System Message $&\n保留最后的空格  ';
+  const content=prefix+response,header='[Message] timestamp=2026-11-04T15:49:15Z sender=system priority=MESSAGE_PRIORITY_HIGH content=';
+  const block=Object.freeze({block:Object.freeze({case:'markdown',value:content})});
+  const other=Object.freeze({block:Object.freeze({case:'markdown',value:'System Message /compact just now'})});
+  const info=Object.freeze({title:'System Message',titlePrefix:'',titleParts:Object.freeze([]),contentBlocks:Object.freeze([block,other])});
+  const step=Object.freeze({message:header+content,eventType:'',metadata:Object.freeze({}),renderInfo:info});
+  const render=value=>{f.window.noticeStep=value;return f.evaluate('CurrentSteps.systemMessage.renderer({step:noticeStep,debugMode:false})')};
+  const title=value=>value.props.children.props.trigger.props.content;
+  const body=value=>value.props.children.props.children.props.children.props;
+  const result=render(step),display=body(result).renderInfo;
+  assert.equal(title(result),'系统消息');
+  assert.equal(display.contentBlocks[0].block.value,`子代理 ${id} 已进入空闲状态。以下是它最近一次的回复：`+response);
+  assert.equal(display.contentBlocks[0].block.value.slice(-response.length),response);
+  assert.equal(display.contentBlocks[1],other);
+  assert.notEqual(display,info);
+  assert.equal(info.contentBlocks[0],block);assert.equal(block.block.value,content);
+  assert.equal(info.title,'System Message');assert.equal(step.message,header+content);
+  assert.equal(body(result).fallbackMarkdown,step.message);
+  for(const unowned of [
+    {...step,message:step.message.replace('sender=system','sender=user')},
+    {...step,message:content},
+    {...step,renderInfo:{...info,contentBlocks:[{block:{case:'markdown',value:content+' other'}}]}}
+  ]) {
+    const raw=render(unowned);
+    assert.equal(title(raw),'System Message');assert.equal(body(raw).renderInfo,unowned.renderInfo);
+  }
+  const supplied=render({...step,metadata:{user_markdown:content}});
+  assert.equal(supplied.props.children.props.fallbackMarkdown,content,'explicit Markdown content remains verbatim');
+  adapters.setStrings({'System Message':'系统通知','subagent-idle-notice:prefix':'子代理 {id} 已空闲：'});
+  const refreshed=render(step);
+  assert.equal(title(refreshed),'系统通知');assert.equal(body(refreshed).renderInfo.contentBlocks[0].block.value,`子代理 ${id} 已空闲：`+response);
+  f.uninstall()();assert.equal(f.evaluate('CurrentSteps.systemMessage.renderer'),native);
+  assert.equal(title(render(step)),'System Message');assert.equal(body(render(step)).renderInfo,info);
 });
