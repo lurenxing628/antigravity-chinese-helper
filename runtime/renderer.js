@@ -2243,6 +2243,29 @@
     const key = original === 'ran' ? 'Ran' : original === 'edited' ? 'Edited' : original;
     return own(prefixLabels, key) ? label(key, prefixLabels[key]) : original;
   }
+  function timerDuration(text) {
+    const seconds = /^(\d+(?:\.\d+)?) seconds?$/.exec(text);
+    const units = {h:'小时',m:'分钟',s:'秒'};
+    if (seconds) return seconds[1]+' '+label('timer-unit:s',units.s);
+    if (!/^(?:\d+(?:\.\d+)?[hms]\s*)+$/.test(text)) return text;
+    return [...text.matchAll(/(\d+(?:\.\d+)?)([hms])/g)]
+      .map(([,value,unit]) => value+' '+label('timer-unit:'+unit,units[unit])).join(' ');
+  }
+  function timerTitle(info) {
+    if (info?.icon !== 'timer' || info?.aggregationKey !== 'timers') return null;
+    const parts = info.titleParts ?? [];
+    const original = parts.length === 1 && parts[0].part?.case === 'text' ? parts[0].part.value
+      : !parts.length && typeof info.title === 'string' ? info.title : null;
+    if (typeof original !== 'string') return null;
+    const translated = timerDuration(original);
+    return translated === original ? null : {original,translated,prefix:info.titlePrefix};
+  }
+  function timerName(name) {
+    const match = /^([\s\S]+) timer$/.exec(name);
+    const duration = match && timerDuration(match[1]);
+    return match && duration !== match[1]
+      ? label('timer-default-name','{duration}计时器').replace('{duration}',() => duration) : name;
+  }
   const swarmManagedTitles = [
     {tool:'swarm',icon:'robot_2',prefix:'Listed',action:'models',pattern:/^swarm models$/,key:'tool-models',text:'协作群模型'},
     {tool:'swarm',icon:'robot_2',prefix:'Titled',action:'title',pattern:/^swarm "(?<name>[\s\S]*)"$/,key:'tool-title',text:'协作群“{name}”'},
@@ -2274,6 +2297,8 @@
   }
   function managedItemTitle(step, metadata) {
     const info = step?.result?.stepRenderInfo;
+    const timer = timerTitle(info);
+    if (timer) return timer;
     if (info?.titleParts?.length !== 1 || info.titleParts[0]?.part?.case !== 'text') return null;
     const original = info.titleParts[0].part.value;
     const tool = metadata?.toolCall?.name;
@@ -3617,9 +3642,8 @@
   }});
   ui('render-info-title', ['titleParts','part.case===','diffContext'], [], {
     resultText(text,info) {
-      const duration = info?.icon === 'timer' && info?.aggregationKey === 'timers'
-        ? /^(\d+(?:\.\d+)?) seconds?$/.exec(text) : null;
-      if (duration) return `${duration[1]} 秒`;
+      const timer = timerTitle(info);
+      if (timer && text === timer.original) return timer.translated;
       // Structured title parts can be agent names, file names or URLs. Only
       // the native plain-title templates own these notification labels.
       if (info?.title !== text || info?.titleParts?.length) return text;
@@ -3653,7 +3677,7 @@
     const title = step.renderInfo?.title;
     if (step.eventType !== 'task_notification' || typeof title !== 'string') return null;
     const expired = ': Timer has expired';
-    if (title.endsWith(expired)) return title.slice(0,-expired.length)+'：'+label('Timer has expired','时间已到');
+    if (title.endsWith(expired)) return timerName(title.slice(0,-expired.length))+'：'+label('Timer has expired','时间已到');
     const finished = ' finished';
     if (!title.endsWith(finished) || typeof step.message !== 'string') return null;
     // Only a task's completion envelope owns this suffix. Its description and

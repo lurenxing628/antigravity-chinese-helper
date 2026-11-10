@@ -506,6 +506,13 @@ test('timer and agent-message titles translate at their native title owner while
   assert.equal(f.window.formatTitle(timer), '30 秒');
   assert.equal(part.part.value, '30 seconds');
   assert.equal(timer.contentBlocks[0], prompt);
+  for (const [raw,expected] of [['1m 30s','1 分钟 30 秒'],['1h2m3s','1 小时 2 分钟 3 秒'],['0.5s','0.5 秒']]) {
+    const durationPart = Object.freeze({part:Object.freeze({case:'text',value:raw})});
+    const durationInfo = Object.freeze({...timer,titleParts:Object.freeze([durationPart])});
+    assert.equal(f.window.formatTitle(durationInfo),expected);
+    assert.equal(durationPart.part.value,raw);
+    assert.equal(f.window.formatTitle({...durationInfo,icon:'file',aggregationKey:'actions'}),raw);
+  }
   assert.equal(f.window.formatTitle({title:'0.5s timer: Timer has expired'}), '0.5s timer: Timer has expired', 'a plain title has no task-notification provenance');
   assert.equal(f.window.formatTitle({titleParts:[part],icon:'file',aggregationKey:'actions'}), '30 seconds');
   const header = f.window.summary({prefix:'Timed',content:f.window.formatTitle(timer),progressMessage:'Timer has expired',customTitle:'30 seconds'});
@@ -1079,6 +1086,11 @@ test('agent and task list counts share native card and running-summary ownership
     assert.equal(record.step.value.result.stepRenderInfo.titleParts[0].part.value,text);
     assert.equal(render(record,2).props.supplementaryView.props.children,'11 subagents\n1 task');
   }
+  const timerRecord=list('timer','1m 30s',{icon:'timer',titlePrefix:'Timed',aggregationKey:'timers'},{});
+  assert.equal(render(timerRecord,2).props.title.props.content,'1 分钟 30 秒');
+  assert.equal(f.window.running(timerRecord),'已计时 1 分钟 30 秒');
+  assert.equal(timerRecord.step.value.result.stepRenderInfo.titleParts[0].part.value,'1m 30s');
+  assert.equal(render(timerRecord,2).props.supplementaryView.props.children,'11 subagents\n1 task');
   const resumedText='wait — new board messages (#6–#7)';
   const resumedBody='Board messages #6–#7 arrived before waiting completed; reading the board before waiting again.';
   const resumedBlock=Object.freeze({block:Object.freeze({case:'markdown',value:resumedBody})});
@@ -1171,11 +1183,12 @@ test('system notifications localize native event titles and prefixes while retai
   assert.equal(title(render({renderInfo:{titlePrefix:'Timed',title:'30 seconds'}})), '已计时 30 seconds');
   assert.equal(title(render({renderInfo:{titlePrefix:'Custom prefix',title:'30 seconds'}})), 'Custom prefix 30 seconds');
 
-  for (const name of ['5m timer','0.5s timer','Tea: $& 1h30m']) {
+  for (const [name,displayName] of [['5m timer','5 分钟计时器'],['0.5s timer','0.5 秒计时器'],
+    ['1m 30s timer','1 分钟 30 秒计时器'],['Tea: $& 1h30m','Tea: $& 1h30m'],['Review $& timer','Review $& timer']]) {
     const info = Object.freeze({title:name+': Timer has expired',icon:'',aggregationKey:'',titleParts:Object.freeze([])});
     const step = Object.freeze({eventType:'task_notification',renderInfo:info,message:'Timer has expired'});
     const result = render(step);
-    assert.equal(title(result),name+'：时间已到');
+    assert.equal(title(result),displayName+'：时间已到');
     assert.equal(info.title,name+': Timer has expired','the original timer name and title remain intact');
     const body = result.props.children.props.children.props.children.props;
     assert.equal(body.renderInfo,info);
@@ -1183,7 +1196,7 @@ test('system notifications localize native event titles and prefixes while retai
     assert.equal(title(render({renderInfo:info})),info.title,'a matching ordinary title stays raw');
     assert.equal(title(render({eventType:'goal_stop',renderInfo:info})),info.title,'another system event stays raw');
   }
-  assert.equal(title(render({eventType:'task_notification',renderInfo:{titlePrefix:'Timed',title:'5m timer: Timer has expired'}})), '已计时 5m timer：时间已到');
+  assert.equal(title(render({eventType:'task_notification',renderInfo:{titlePrefix:'Timed',title:'5m timer: Timer has expired'}})), '已计时 5 分钟计时器：时间已到');
   assert.equal(title(render({eventType:'task_notification',renderInfo:{titleParts:[{part:{case:'text',value:'5m timer: Timer has expired'}}]}})), '5m timer: Timer has expired');
 
   const taskId = 'd2aea7c9-338d-4454-9688-8116ef1443d1/task-457';
