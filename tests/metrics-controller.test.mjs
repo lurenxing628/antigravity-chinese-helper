@@ -40,7 +40,7 @@ function state(id, generation, {stepUsage, costSummary} = {}) {
   }};
 }
 
-function fixture(initial, {metadata = () => ({generatorMetadata:[]}), catalog, config, stored = {}, save, load,
+function fixture(initial, {metadata = () => ({generatorMetadata:[]}), catalog, config, stored = {}, save, load, windowGlobals = {},
   childStates = {}, byParent = {}, summaries = {}} = {}) {
   let current = initial;
   let viewId = initial?.conversationId;
@@ -48,7 +48,7 @@ function fixture(initial, {metadata = () => ({generatorMetadata:[]}), catalog, c
   const storageListeners = new Set();
   const storeListeners = new Set();
   const childListeners = new Map(), childProviders = new Map(), registryActive = new Map();
-  const calls = {metadata:[], catalog:0, config:0, resolved:[], sent:[], saved:[], subscribed:[], unsubscribed:[]};
+  const calls = {metadata:[], catalog:0, catalogRequests:[], config:0, resolved:[], sent:[], saved:[], subscribed:[], unsubscribed:[]};
   const selected = {value:model, label:'Gemini Fixture'};
   let actions;
   const provider = {
@@ -83,9 +83,10 @@ function fixture(initial, {metadata = () => ({generatorMetadata:[]}), catalog, c
     }
   };
   const client = {
-    getAvailableModels() {
+    getAvailableModels(request) {
       calls.catalog++;
-      return catalog ? catalog() : Promise.resolve({models:{
+      calls.catalogRequests.push({...request});
+      return catalog ? catalog(request) : Promise.resolve({models:{
         fixture:{model, maxTokens:1048576, maxOutputTokens:65536, displayName:'Gemini Fixture'},
         claude:{model:1402, maxTokens:1000000, maxOutputTokens:128000, displayName:'Claude Fixture'}
       }});
@@ -152,7 +153,7 @@ function fixture(initial, {metadata = () => ({generatorMetadata:[]}), catalog, c
     message.$typeName = schema.typeName;
     return message;
   }
-  const document = {defaultView:{nativeStorage, sendSchema, createNativeMessage}};
+  const document = {defaultView:{...windowGlobals, nativeStorage, sendSchema, createNativeMessage}};
   const create = vm.runInNewContext(controllerSource, {queueMicrotask});
   const controller = create(document, (_document, _anchor, callbacks) => {
     actions = callbacks;
@@ -373,7 +374,7 @@ test('child provider events and new descendants refresh the aggregate without re
   assert.equal(f.snapshot().metrics.outputTokens, 3);
 });
 
-test('completed descendants release native state after final metadata and reuse numeric snapshots without subscribing again', async t => {
+test('idle descendants release native state before slow final metadata and reuse confirmed numeric snapshots', async t => {
   const final = deferred();
   const summary = {trajectoryId:'child-trajectory',stepCount:1,notFullyIdle:false,lastModifiedTime:{seconds:1n,nanos:0}};
   const f = fixture(state('A',1), {
@@ -383,8 +384,11 @@ test('completed descendants release native state after final metadata and reuse 
   });
   t.after(() => f.controller.dispose());
   f.mount(); await settle();
-  assert.equal(f.registryActive.get('child'),1,'an idle state cannot release an unfinished final metadata request');
-  assert.equal(f.childListeners.get('child').size,1);
+  assert.equal(f.registryActive.get('child'),0,'the numeric metadata request must not retain an idle trajectory');
+  assert.equal(f.childListeners.get('child').size,0);
+  assert.equal(f.snapshot().subagentMetrics.inputTokens,null);
+  f.emit(); f.emit(); await settle();
+  assert.deepEqual(f.calls.subscribed,['child'],'a pending final read must not reacquire the same idle trajectory');
   final.resolve({generatorMetadata:[record(0,{usage:usage(20,30,80)})]}); await settle();
   assert.equal(f.registryActive.get('child'),0);
   assert.equal(f.childListeners.get('child').size,0);
@@ -444,28 +448,89 @@ test('resumed descendants and changed completed summaries reacquire native state
   assert.deepEqual(f.calls.metadata.filter(call => call.cascadeId === 'child').map(call => call.generatorMetadataOffset),[0,0,1,1,1]);
 });
 
-test('an idle descendant keeps its subscription when the final metadata refresh fails', async t => {
-  const final = deferred();
-  let childReads = 0;
+test('failed final metadata releases idle state and is retried on re-entry or a changed summary', async t => {
+  for (const recovery of ['re-entry','summary']) {
+    const final = deferred();
+    let childReads = 0;
+    const summary = modified => ({trajectoryId:'child-trajectory',stepCount:1,notFullyIdle:false,lastModifiedTime:{seconds:BigInt(modified),nanos:0}});
+    const f = fixture(state('A',1), {
+      childStates:{child:state('child',1)}, byParent:{A:{child:true}},
+      summaries:{child:{...summary(1),notFullyIdle:true}},
+      metadata:request => request.cascadeId !== 'child' ? {generatorMetadata:[record(0)]}
+        : childReads++ === 1 ? final.promise
+        : {generatorMetadata:[record(0,{usage:usage(20,childReads > 2 ? 30 : 3,80)})]}
+    });
+    t.after(() => f.controller.dispose());
+    f.mount(); await settle();
+    assert.equal(f.snapshot().subagentMetrics.outputTokens,3);
+    assert.equal(f.registryActive.get('child'),1);
+    f.emitChild('child',{...state('child',1),fullyIdle:true});
+    f.setSummary('child',summary(2)); await settle();
+    assert.equal(f.registryActive.get('child'),0);
+    final.reject(new Error('final metadata unavailable')); await settle();
+    assert.equal(f.registryActive.get('child'),0);
+    assert.equal(f.childListeners.get('child').size,0);
+    assert.deepEqual(f.calls.unsubscribed,['child']);
+    assert.equal(f.snapshot().subagentMetrics.outputTokens,3,'a failed final read preserves the last complete display');
+    f.emit(); f.emit(); await settle();
+    assert.equal(childReads,2,'a failed read must not add a retry loop');
+    assert.deepEqual(f.calls.subscribed,['child']);
+    if (recovery === 're-entry') {
+      f.emit(state('B',1)); await settle();
+      f.emit(state('A',1)); await settle();
+    } else { f.setSummary('child',summary(3)); await settle(); }
+    assert.equal(childReads,3,`${recovery} must not mistake the start snapshot for confirmed final metadata`);
+    assert.equal(f.snapshot().subagentMetrics.outputTokens,30);
+    assert.equal(f.registryActive.get('child'),0);
+    f.remount(); await settle();
+    assert.equal(childReads,3,'confirmed recovery can reuse the final numeric snapshot');
+  }
+});
+
+test('incomplete final metadata releases idle state while preserving complete totals until re-entry', async t => {
+  let finish = false;
+  const records = [record(0),record(1)];
   const f = fixture(state('A',1), {
     childStates:{child:state('child',1)}, byParent:{A:{child:true}},
-    summaries:{child:{trajectoryId:'child-trajectory',stepCount:1,notFullyIdle:true,lastModifiedTime:{seconds:1n,nanos:0}}},
-    metadata:request => request.cascadeId === 'child' && childReads++ > 0 ? final.promise : {generatorMetadata:[record(0)]}
+    summaries:{child:{stepCount:1,notFullyIdle:true}},
+    metadata:request => ({generatorMetadata:request.cascadeId === 'child'
+      ? records.slice(request.generatorMetadataOffset,finish ? 2 : 1) : [record(0)]})
   });
   t.after(() => f.controller.dispose());
   f.mount(); await settle();
   assert.equal(f.snapshot().subagentMetrics.outputTokens,3);
-  assert.equal(f.registryActive.get('child'),1);
-  f.emitChild('child',{...state('child',1),fullyIdle:true});
-  f.setSummary('child',{trajectoryId:'child-trajectory',stepCount:1,notFullyIdle:false,lastModifiedTime:{seconds:2n,nanos:0}});
-  await settle();
-  assert.equal(f.registryActive.get('child'),1);
-  final.reject(new Error('final metadata unavailable')); await settle();
-  assert.equal(f.registryActive.get('child'),1,'a previously complete start snapshot must not be mistaken for confirmed final metadata');
-  assert.equal(f.childListeners.get('child').size,1);
-  assert.deepEqual(f.calls.unsubscribed,[]);
+  f.emitChild('child',{...state('child',2),fullyIdle:true});
+  f.setSummary('child',{stepCount:2,notFullyIdle:false}); await settle();
+  assert.equal(f.registryActive.get('child'),0);
+  assert.equal(f.snapshot().subagentMetrics.outputTokens,3);
   f.emit(); await settle();
-  assert.equal(f.calls.metadata.filter(call => call.cascadeId === 'child').length,2,'this change must not add a retry loop');
+  assert.deepEqual(f.calls.metadata.filter(call => call.cascadeId === 'child').map(call => call.generatorMetadataOffset),[0,0,1]);
+  finish = true;
+  f.emit(state('B',1)); await settle();
+  f.emit(state('A',1)); await settle();
+  assert.equal(f.snapshot().subagentMetrics.outputTokens,13);
+  assert.equal(f.registryActive.get('child'),0);
+});
+
+test('late metadata from a detached idle descendant cannot overwrite a new attachment', async t => {
+  const old = deferred(), current = deferred();
+  let reads = 0;
+  const f = fixture(state('A',1), {
+    childStates:{child:{...state('child',1),fullyIdle:true}}, byParent:{A:{child:true}},
+    summaries:{child:{stepCount:1,notFullyIdle:false}},
+    metadata:request => request.cascadeId === 'child' ? [old,current][reads++].promise : {generatorMetadata:[record(0)]}
+  });
+  t.after(() => f.controller.dispose());
+  f.mount(); await settle();
+  assert.equal(f.registryActive.get('child'),0);
+  f.emit(state('B',1)); await settle();
+  f.emit(state('A',1)); await settle();
+  assert.equal(reads,2);
+  old.resolve({generatorMetadata:[record(0,{usage:usage(99999,99999,99999)})]}); await settle();
+  assert.equal(f.snapshot().subagentMetrics.outputTokens,null);
+  current.resolve({generatorMetadata:[record(0)]}); await settle();
+  assert.equal(f.snapshot().subagentMetrics.outputTokens,3);
+  assert.deepEqual(f.calls.unsubscribed,['child','child']);
 });
 
 test('native subagent totals are separated once and do not double count descendant costs', async t => {
@@ -713,6 +778,57 @@ test('a late response from the previous attachment cannot overwrite a returned c
   assert.equal(f.snapshot().metrics.outputTokens,7);
 });
 
+test('selecting a newly available model refreshes the shared catalog and enables persisted limits', async t => {
+  const carbon = 1427;
+  const oldModel = {model, maxTokens:1048576, maxOutputTokens:65536, displayName:'Gemini Fixture'};
+  const carbonModel = {model:carbon, maxTokens:1048576, maxOutputTokens:262144, displayName:'Gemini 4 Carbon (High)',
+    modelExperiments:{experiments:{CASCADE_USE_EXPERIMENT_CHECKPOINTER:{value:{case:'stringValue',
+      value:JSON.stringify({enabled:true, max_token_limit:'256000', use_model_reported_token_count:true})}}}}};
+  const pending = deferred();
+  const f = fixture(state('A', 0), {catalog:request => request.forceRefresh ? pending.promise : {models:{fixture:oldModel}}});
+  delete f.client.getResolvedCascadeConfig;
+  t.after(() => f.controller.dispose());
+  f.mount(); await settle();
+  f.select(carbon, 'Gemini 4 Carbon (High)'); await settle();
+  f.mount(); f.emit(); await settle();
+  assert.deepEqual(f.calls.catalogRequests, [{forceRefresh:false}, {forceRefresh:true}]);
+  pending.resolve({response:{models:{fixture:oldModel, 'gemini-4-carbon-high':carbonModel}}});
+  await settle();
+  assert.equal(f.snapshot().contextSetting.modelKey, String(carbon));
+  assert.equal(f.snapshot().contextSetting.defaultLimit, 256000);
+  assert.equal(f.snapshot().modelCapacity, 1048576);
+  assert.equal(await f.setLimit(500000), true);
+  assert.equal(f.storage['antigravityChineseHelper.contextLimit.1427'], '500000');
+  for (const method of ['sendUserCascadeMessage', 'sendAllQueuedMessages']) {
+    await f.client[method]({cascadeId:'A', cascadeConfig:{plannerConfig:{planModel:carbon}}});
+    assert.equal(f.calls.sent.at(-1).request.cascadeConfig.checkpointConfig.maxTokenLimit, 500000);
+  }
+  f.select(model); await settle();
+  assert.equal(f.snapshot().contextSetting.customLimit, null, 'the new model preference must not affect the previous model');
+  f.select(carbon); await settle();
+  assert.equal(f.snapshot().contextSetting.customLimit, 500000);
+  assert.equal(f.calls.catalog, 2, 'known models and provider events reuse the refreshed catalog');
+});
+
+test('a missing model refreshes once per selection and can be discovered on a later selection', async t => {
+  let available = false;
+  const f = fixture(state('A', 0), {catalog:() => ({models:{
+    fixture:{model, maxTokens:1048576, maxOutputTokens:65536},
+    ...(available ? {carbon:{model:1427, maxTokens:1048576, maxOutputTokens:262144}} : {})
+  }})});
+  t.after(() => f.controller.dispose());
+  f.mount(); await settle();
+  f.select(1427); await settle();
+  f.mount(); f.emit(); await settle();
+  assert.equal(f.calls.catalog, 2, 'an unavailable model must not cause a refresh loop');
+  assert.equal(f.snapshot().contextSetting, null);
+  available = true;
+  f.select(model); await settle();
+  f.select(1427); await settle();
+  assert.equal(f.calls.catalog, 3);
+  assert.equal(f.snapshot().contextSetting.modelKey, '1427');
+});
+
 test('context limit changes both send paths while preserving requests and actual history', async t => {
   let actualBudget = 256000;
   const f = fixture(state('A', 1), {metadata:request => ({generatorMetadata:[record(request.generatorMetadataOffset, {
@@ -769,7 +885,14 @@ test('context preferences survive reload, stay model-specific, and restore clean
   await f.client.sendUserCascadeMessage(other);
   assert.equal(f.calls.sent.at(-1).request, other, 'a Gemini preference must not lower a different model');
 
-  const loaded = fixture(state('B', 0), {stored:f.storage});
+  const iframeWindow = new Proxy({}, {
+    get(_target,key,receiver) {
+      if (key === 'window') return receiver;
+      throw new DOMException('Blocked a cross-origin frame','SecurityError');
+    },
+    getOwnPropertyDescriptor() { throw new DOMException('Blocked a cross-origin frame','SecurityError'); }
+  });
+  const loaded = fixture(state('B', 0), {stored:f.storage,windowGlobals:{iframeWindow}});
   t.after(() => loaded.controller.dispose());
   loaded.mount(); await settle();
   assert.equal(loaded.snapshot().contextSetting.customLimit, 500000);

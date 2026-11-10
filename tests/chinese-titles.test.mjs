@@ -237,6 +237,138 @@ test('a first send completed before start confirmation is retained without dupli
   assert.equal(f.calls.saved.length, 1);
 });
 
+test('a native-only first input generates once after both creation confirmation and native steps arrive', async t => {
+  for (const inputBeforeConfirmation of [true, false]) {
+    const started = deferred(), source = '语音首条请求修复设备排产页面';
+    const f = fixture({ startCascade: () => started.promise, read: () => ({
+      steps: [{ step: { case: 'userInput', value: { items: message('new', source).items } } }],
+    }) });
+    t.after(() => { started.resolve({ cascadeId: 'new' }); f.controller.dispose(); });
+    await f.bind();
+    await f.controller.ready;
+    const starting = f.client.startCascade({ cascadeId: 'new' });
+    if (inputBeforeConfirmation) {
+      f.setSummary('new', { ...f.summary('new'), summary: 'A Native Voice Summary',
+        stepCount: 1, trajectoryId: 'native-trajectory' });
+      await settle();
+      assert.equal(f.calls.read.length, 0, 'native steps cannot bypass creation confirmation');
+    }
+    started.resolve({ cascadeId: 'new' });
+    await starting;
+    if (!inputBeforeConfirmation) {
+      await settle();
+      assert.equal(f.calls.read.length, 0, 'a confirmed empty conversation still waits for native steps');
+      f.setSummary('new', { ...f.summary('new'), summary: 'A Native Voice Summary',
+        stepCount: 1, trajectoryId: 'native-trajectory' });
+    }
+    await settle();
+    assert.equal(f.calls.sent.length, 0, 'the voice/native input never calls the ordinary send API');
+    assert.equal(f.calls.read.length, 1);
+    assert.deepEqual(structuredClone(f.calls.read[0].request), {
+      cascadeId: 'new', stepOffset: 0, trajectoryVerbosity: 2,
+    });
+    assert.equal(f.calls.read[0].receiver, f.client);
+    assert.ok(f.calls.read[0].options.signal instanceof AbortSignal);
+    assert.equal(f.calls.generated.length, 1);
+    assert.ok(f.calls.generated[0].request.prompt.includes(source));
+    assert.equal(f.calls.generated[0].request.prompt.includes('A Native Voice Summary'), false);
+    assert.equal(f.calls.saved.length, 1);
+    assert.equal(f.summary('new').annotations.title, '修复登录界面');
+    f.emit(); f.emit();
+    f.setSummary('new', { ...f.summary('new'), stepCount: 2 });
+    await settle();
+    assert.equal(f.calls.read.length, 1);
+    assert.equal(f.calls.generated.length, 1);
+    assert.equal(f.calls.saved.length, 1);
+  }
+});
+
+test('an empty native-only first page preserves the automatic title baseline for restart without repeated reads', async t => {
+  const storage = memoryStorage(), firstInput = deferred();
+  const source = '原生首条输入恢复后继续生成中文标题', nativeTitle = 'Repair Production Schedule';
+  const f = fixture({ storage, read: () => firstInput.promise });
+  let resumed;
+  t.after(() => { firstInput.resolve({ steps: [] }); f.controller.dispose(); resumed?.controller.dispose(); });
+  await f.bind();
+  await f.controller.ready;
+  await f.client.startCascade({ cascadeId: 'new' });
+  f.setSummary('new', { ...f.summary('new'), summary: 'Waiting For Native Input',
+    stepCount: 1, trajectoryId: 'native-trajectory' });
+  await settle();
+  assert.equal(f.calls.read.length, 1);
+  f.setSummary('new', { ...f.summary('new'), summary: nativeTitle, annotations: { title: nativeTitle } });
+  firstInput.resolve({ steps: [] });
+  await settle();
+  const record = JSON.parse(storage.snapshot()['antigravityChineseHelper.title.auto.new']);
+  assert.equal(record.started, true);
+  assert.equal(record.sent, false, 'an empty native page is not confirmation of a user input');
+  assert.equal(record.baseline, nativeTitle, 'the observed native automatic annotation survives restart');
+  f.emit(); f.emit();
+  f.setSummary('new', { ...f.summary('new'), summary: 'A Later Summary With The Same Step Version' });
+  await settle();
+  assert.equal(f.calls.read.length, 1, 'the same trajectory and step count do not repeatedly fetch an empty page');
+  assert.equal(f.calls.generated.length, 0);
+  assert.equal(f.calls.saved.length, 0);
+  assert.equal(f.calls.sent.length, 0);
+  f.controller.dispose();
+
+  resumed = fixture({ storage, summaries: { new: f.summary('new') }, read: () => ({
+    steps: [{ step: { case: 'userInput', value: { items: message('new', source).items } } }],
+  }) });
+  await resumed.bind();
+  await resumed.controller.ready;
+  await settle();
+  assert.equal(resumed.calls.read.length, 1);
+  assert.equal(resumed.calls.sent.length, 0);
+  assert.equal(resumed.calls.generated.length, 1);
+  assert.ok(resumed.calls.generated[0].request.prompt.includes(source));
+  assert.equal(resumed.calls.saved.length, 1);
+  assert.equal(resumed.summary('new').annotations.title, '修复登录界面');
+  assert.equal(resumed.controller.status().manualTitles, 0);
+  assert.equal(Object.keys(storage.snapshot()).some(key => key.startsWith('antigravityChineseHelper.title.manual.')), false,
+    'a native automatic annotation must not become a durable manual marker on restart');
+});
+
+test('shared native-only tasks keep baseline updates inside the task lock while a peer summary lags', async t => {
+  const storage = memoryStorage(), locks = lockManager(), BroadcastChannel = broadcastChannels(), firstInput = deferred();
+  const source = 'Best of N 首条请求修复设备排产页面';
+  const input = { steps: [{ step: { case: 'userInput', value: { items: message('new', source).items } } }] };
+  const f = fixture({ storage, locks, BroadcastChannel, read: () => firstInput.promise });
+  const other = fixture({ storage, locks, BroadcastChannel, read: () => firstInput.promise });
+  t.after(() => { firstInput.resolve(input); f.controller.dispose(); other.controller.dispose(); });
+  await f.bind();
+  await other.bind();
+  await Promise.all([f.controller.ready, other.controller.ready]);
+  await f.client.startCascade({ cascadeId: 'new' });
+  const nativeTitle = 'Repair Production Schedule';
+  f.setSummary('new', { ...f.summary('new'), summary: nativeTitle,
+    annotations: { title: nativeTitle }, stepCount: 2, trajectoryId: 'native-trajectory' });
+  await settle();
+  assert.equal(f.calls.read.length, 1, 'the leading window holds the task lock during the native read');
+  other.setSummary('new', { ...other.summary('new'), summary: 'Earlier Native Summary',
+    annotations: { title: 'Earlier Native Title' }, stepCount: 1, trajectoryId: 'native-trajectory' });
+  f.emit(); other.emit(); other.emit();
+  await settle();
+  assert.equal(other.calls.read.length, 0, 'the lagging window waits for the shared task lock');
+  assert.equal(JSON.parse(storage.snapshot()['antigravityChineseHelper.title.auto.new']).baseline, nativeTitle,
+    'a queued peer cannot overwrite the active task baseline from its stale summary');
+  assert.equal(f.calls.generated.length + other.calls.generated.length, 0);
+  firstInput.resolve(input);
+  await settle();
+  other.emit(); other.emit();
+  await settle();
+  assert.equal(f.calls.sent.length + other.calls.sent.length, 0);
+  assert.equal(f.calls.read.length + other.calls.read.length, 1);
+  assert.equal(f.calls.generated.length + other.calls.generated.length, 1);
+  assert.ok(f.calls.generated[0].request.prompt.includes(source));
+  assert.equal(f.calls.saved.length + other.calls.saved.length, 1);
+  assert.equal(f.summary('new').annotations.title, '修复登录界面');
+  assert.equal(other.summary('new').annotations.title, 'Earlier Native Title');
+  assert.equal(f.controller.status().manualTitles + other.controller.status().manualTitles, 0);
+  assert.equal(Object.keys(storage.snapshot()).some(key => key.startsWith('antigravityChineseHelper.title.manual.')), false,
+    'the stale peer annotation cannot mark the shared task as manually renamed');
+});
+
 test('a native manual rename aborts pending generation and keeps the manual title', async t => {
   const generated = deferred();
   const f = fixture({ generate: () => generated.promise });
@@ -395,7 +527,42 @@ test('an unavailable title model leaves normal conversation sending intact', asy
   assert.equal(f.calls.saved.length, 0);
 });
 
-test('an English model response preserves the native title without repeatedly calling the model', async t => {
+test('a transient title RPC failure retries once with the same model and prompt', async t => {
+  let attempts = 0;
+  const f = fixture({ generate: () => {
+    if (++attempts === 1) throw Object.assign(new Error('temporary transport failure'), { code: 14 });
+    return { response: '修复登录界面' };
+  } });
+  t.after(() => f.controller.dispose());
+  await f.bind();
+  await f.client.startCascade({ cascadeId: 'new' });
+  await f.client.sendUserCascadeMessage(message());
+  await settle();
+  f.emit(); f.emit();
+  await settle();
+  assert.equal(f.calls.generated.length, 2);
+  assert.equal(f.calls.model.length, 1);
+  assert.deepEqual(f.calls.generated[1].request, f.calls.generated[0].request);
+  assert.equal(f.calls.saved.length, 1);
+  assert.equal(f.summary('new').annotations.title, '修复登录界面');
+  assert.equal(f.controller.status().failed, 0);
+});
+
+test('an invalid English title retries once and saves a subsequent Chinese result', async t => {
+  let attempts = 0;
+  const f = fixture({ generate: () => ({ response: ++attempts === 1 ? 'Fix Login Button' : '修复登录界面' }) });
+  t.after(() => f.controller.dispose());
+  await f.bind();
+  await f.client.startCascade({ cascadeId: 'new' });
+  await f.client.sendUserCascadeMessage(message());
+  await settle();
+  assert.equal(f.calls.generated.length, 2);
+  assert.equal(f.calls.saved.length, 1);
+  assert.equal(f.summary('new').annotations.title, '修复登录界面');
+  assert.equal(f.controller.status().failed, 0);
+});
+
+test('two English model responses preserve the native title without further calls', async t => {
   const f = fixture({ generate: () => ({ response: 'Fix Login Button' }) });
   t.after(() => f.controller.dispose());
   await f.bind();
@@ -405,11 +572,106 @@ test('an English model response preserves the native title without repeatedly ca
   await f.client.sendUserCascadeMessage(message('new', '继续第二轮'));
   f.emit();
   await settle();
-  assert.equal(f.calls.generated.length, 1);
+  assert.equal(f.calls.generated.length, 2);
   assert.equal(f.calls.saved.length, 0);
   assert.equal(f.summary('new').summary, 'Fix Login Button');
   assert.equal(f.summary('new').annotations?.title, undefined);
   assert.equal(f.controller.status().failed, 1);
+  assert.deepEqual(structuredClone(f.controller.status().lastFailure), { stage: 'generation', code: 'invalid-title', model });
+});
+
+test('a failed task records a compact diagnostic and a late native title stays recoverable after restart', async t => {
+  const storage = memoryStorage(), diagnostic = { stage: 'generation', code: 14, model };
+  const f = fixture({ storage, generate: () => {
+    throw Object.assign(new Error('private provider details must not be persisted'), { code: 14 });
+  } });
+  let resumed;
+  t.after(() => { f.controller.dispose(); resumed?.controller.dispose(); });
+  await f.bind();
+  await f.controller.ready;
+  await f.client.startCascade({ cascadeId: 'new' });
+  await f.client.sendUserCascadeMessage(message());
+  await settle();
+  assert.equal(f.calls.generated.length, 2);
+  assert.equal(f.calls.saved.length, 0);
+  let record = JSON.parse(storage.snapshot()['antigravityChineseHelper.title.auto.new']);
+  assert.equal(record.phase, 'failed');
+  assert.deepEqual(record.failure, diagnostic);
+  assert.deepEqual(structuredClone(f.controller.status().lastFailure), diagnostic);
+  assert.equal(JSON.stringify(storage.snapshot()).includes('private provider details'), false);
+
+  const nativeTitle = 'Repair Login Controls';
+  f.setSummary('new', { ...f.summary('new'), summary: nativeTitle, stepCount: 1,
+    annotations: { title: nativeTitle } });
+  await settle();
+  f.emit(); f.emit();
+  await settle();
+  assert.equal(f.calls.generated.length, 2, 'native updates cannot restart an exhausted generation task');
+  record = JSON.parse(storage.snapshot()['antigravityChineseHelper.title.auto.new']);
+  assert.equal(record.phase, 'failed');
+  assert.equal(record.baseline, nativeTitle, 'the observed native annotation must remain the recovery baseline');
+  assert.deepEqual(record.failure, diagnostic);
+  f.controller.dispose();
+
+  resumed = fixture({ storage, summaries: { new: f.summary('new') } });
+  await resumed.bind();
+  await resumed.controller.ready;
+  await settle();
+  assert.equal(resumed.calls.generated.length, 1);
+  assert.equal(resumed.calls.saved.length, 1);
+  assert.equal(resumed.summary('new').annotations.title, '修复登录界面');
+  assert.equal(resumed.controller.status().manualTitles, 0);
+  assert.equal(Object.keys(storage.snapshot()).some(key => key.startsWith('antigravityChineseHelper.title.manual.')), false);
+});
+
+test('shared windows exhaust one generation budget for fresh and recovered tasks', async t => {
+  for (const recovering of [false, true]) {
+    const storage = memoryStorage(), locks = lockManager(), BroadcastChannel = broadcastChannels();
+    const first = deferred();
+    const error = Object.assign(new Error('temporary transport failure'), { code: 14 });
+    if (recovering) await storage.updateItems({ 'antigravityChineseHelper.title.auto.new': JSON.stringify({
+      v: 1, id: 'new', phase: 'pending', started: true, sent: true, baseline: '', title: '', owner: 'previous-helper', revision: 1,
+    }) });
+    let attempts = 0;
+    const generate = () => {
+      if (++attempts === 1) return first.promise;
+      throw error;
+    };
+    const f = fixture({ storage, locks, BroadcastChannel, generate });
+    const other = fixture({ storage, locks, BroadcastChannel, generate });
+    t.after(() => { first.reject(error); f.controller.dispose(); other.controller.dispose(); });
+    await f.bind();
+    await other.bind();
+    await Promise.all([f.controller.ready, other.controller.ready]);
+    if (!recovering) {
+      await f.client.startCascade({ cascadeId: 'new' });
+      await f.client.sendUserCascadeMessage(message());
+    }
+    await settle();
+    assert.equal(f.calls.generated.length + other.calls.generated.length, 1, 'the first window holds the shared task lock');
+    other.emit(); f.emit();
+    first.reject(error);
+    await settle();
+    other.emit(); f.emit(); other.emit();
+    await settle();
+    assert.equal(f.calls.generated.length + other.calls.generated.length, 2,
+      `${recovering ? 'recovered' : 'fresh'} task failure cannot start another window generation budget`);
+    assert.equal(f.calls.saved.length + other.calls.saved.length, 0);
+    let record = JSON.parse(storage.snapshot()['antigravityChineseHelper.title.auto.new']);
+    assert.equal(record.phase, 'failed');
+    assert.deepEqual(record.failure, { stage: 'generation', code: 14, model });
+    const leading = f.calls.generated.length ? f : other;
+    const lagging = leading === f ? other : f;
+    const nativeTitle = 'A Native Title After Failure';
+    leading.setSummary('new', { ...leading.summary('new'), summary: nativeTitle, annotations: { title: nativeTitle } });
+    await settle();
+    lagging.emit(); lagging.emit();
+    await settle();
+    record = JSON.parse(storage.snapshot()['antigravityChineseHelper.title.auto.new']);
+    assert.equal(record.baseline, nativeTitle, 'a lagging peer cannot overwrite the failed task owner baseline');
+    assert.equal(f.calls.generated.length + other.calls.generated.length, 2);
+    f.controller.dispose(); other.controller.dispose();
+  }
 });
 
 test('a later native summary cannot replace the saved Chinese explicit title', async t => {
