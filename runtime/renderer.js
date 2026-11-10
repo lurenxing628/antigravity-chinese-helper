@@ -7,7 +7,7 @@
   if (!document.documentElement || !document.body) return null;
   window.__antigravityChineseHelper?.uninstall?.();
 
-  const VERSION = '0.3.31';
+  const VERSION = '0.3.34';
   let strings, normalizedStrings;
   setStrings(dictionary);
   let stopped = false;
@@ -306,6 +306,7 @@
   settingControls.append(settingInputRow, settingButtons);
   const settingStatus = document.createElement('p'); settingStatus.className = 'setting-status'; settingStatus.setAttribute('role', 'status');
   settingForm.append(settingTitle, settingControls, settingHint, settingStatus);
+  context.panel.prepend(createSubagentContextForm());
   context.panel.prepend(settingForm);
   function clearApplyFeedback() {
     window.clearTimeout(applyFeedbackTimer); applyFeedbackTimer = null;
@@ -353,6 +354,104 @@
     writeText(settingStatus, setting?.error ?? '');
     settingStatus.hidden = !setting?.error;
     writeAttribute(settingStatus, 'data-error', String(Boolean(setting?.error)));
+  }
+  function createSubagentContextForm() {
+    const form = document.createElement('form'); form.className = 'context-settings';
+    form.setAttribute('data-testid', 'subagent-context-form');
+    const title = document.createElement('strong'); title.className = 'title'; title.textContent = '子代理上下文';
+    const controls = document.createElement('div'); controls.className = 'setting-controls';
+    const inputRow = document.createElement('label'); inputRow.className = 'setting-input';
+    const input = document.createElement('input');
+    input.type = 'number'; input.min = '0.001'; input.step = 'any'; input.inputMode = 'decimal'; input.placeholder = '默认';
+    input.setAttribute('aria-label', '子代理上下文长度，单位 K'); input.setAttribute('data-testid', 'subagent-context-input');
+    const unit = document.createElement('span'); unit.textContent = 'K'; inputRow.append(input, unit);
+    const buttons = document.createElement('div'); buttons.className = 'setting-actions';
+    const apply = document.createElement('button'); apply.type = 'submit'; apply.textContent = '应用';
+    apply.setAttribute('data-testid', 'subagent-context-apply');
+    const reset = document.createElement('button'); reset.type = 'button'; reset.textContent = '恢复默认';
+    reset.setAttribute('data-testid', 'subagent-context-reset');
+    buttons.append(apply, reset); controls.append(inputRow, buttons);
+    const status = document.createElement('p'); status.className = 'setting-status'; status.setAttribute('role', 'status');
+    status.setAttribute('data-testid', 'subagent-context-status');
+    form.append(title, controls, status);
+
+    const bridge = window.__antigravitySubagentContext;
+    const connected = ['getStatus', 'setLimit', 'subscribe'].every(method => typeof bridge?.[method] === 'function');
+    let state = null, loading = connected, saving = false, dirty = false, error = null, revision = 0;
+    function renderStatus() {
+      if (disposed) return;
+      const disabled = !connected || loading || saving || !state;
+      input.disabled = apply.disabled = disabled;
+      reset.disabled = disabled || state.targetTokens === null;
+      writeText(apply, saving ? '保存中' : '应用');
+      const failure = error || state?.error;
+      const message = !connected ? '子代理上下文服务未连接' : failure || (saving ? '正在保存…' : state?.message ?? (loading ? '正在读取子代理设置…' : ''));
+      writeText(status, message); status.hidden = !message;
+      writeAttribute(status, 'data-error', String(Boolean(failure)));
+      if (context.open) positionTooltip(context);
+    }
+    function acceptStatus(next) {
+      const changed = state?.targetTokens !== next.targetTokens;
+      state = next; error = null;
+      if (changed || !dirty) {
+        input.value = state.targetTokens === null ? '' : String(state.targetTokens / 1000);
+        input.setCustomValidity(''); dirty = false;
+      }
+      renderStatus();
+    }
+    async function save(tokens) {
+      if (apply.disabled || disposed) return;
+      const startedAtRevision = revision;
+      saving = true; error = null; renderStatus();
+      try {
+        const next = await bridge.setLimit(tokens);
+        if (disposed) return;
+        // A later broadcast is authoritative, including a change from another window.
+        if (revision === startedAtRevision) acceptStatus(next);
+      } catch (failure) {
+        if (disposed) return;
+        error = `保存失败，原设置已保留：${failure?.message ?? String(failure)}`;
+        input.value = state.targetTokens === null ? '' : String(state.targetTokens / 1000);
+        dirty = false;
+      } finally {
+        if (!disposed) {
+          if (state?.error) {
+            input.value = state.targetTokens === null ? '' : String(state.targetTokens / 1000);
+            dirty = false;
+          }
+          saving = false; renderStatus();
+        }
+      }
+    }
+    listen(input, 'input', () => { dirty = true; input.setCustomValidity(''); });
+    listen(form, 'submit', event => {
+      event.preventDefault(); event.stopPropagation();
+      if (apply.disabled) return;
+      const tokens = Math.round(Number(input.value) * 1000);
+      if (!Number.isSafeInteger(tokens) || tokens <= 0 || tokens > 4294967295) {
+        input.setCustomValidity('请输入大于 0 且不超过 4294967.295 K 的上下文上限'); input.reportValidity(); return;
+      }
+      void save(tokens);
+    });
+    listen(reset, 'click', event => { event.preventDefault(); event.stopPropagation(); if (!reset.disabled) void save(null); });
+    renderStatus();
+    if (connected) {
+      const initialRevision = revision;
+      const unsubscribe = bridge.subscribe(next => {
+        if (disposed) return;
+        revision++; acceptStatus(next);
+      });
+      permanentListeners.push(unsubscribe);
+      Promise.resolve().then(() => bridge.getStatus()).then(next => {
+        if (disposed) return;
+        if (revision === initialRevision) acceptStatus(next);
+      }).catch(failure => {
+        if (!disposed && revision === initialRevision) error = `无法读取子代理设置：${failure?.message ?? String(failure)}`;
+      }).finally(() => {
+        if (!disposed) { loading = false; renderStatus(); }
+      });
+    }
+    return form;
   }
   const quotaRows = [['remaining', '剩余比例'], ['resetAt', '恢复时间']];
   const fiveHour = createRing('five-hour', '5 小时额度', quotaRows);
@@ -2144,11 +2243,42 @@
     const key = original === 'ran' ? 'Ran' : original === 'edited' ? 'Edited' : original;
     return own(prefixLabels, key) ? label(key, prefixLabels[key]) : original;
   }
+  const swarmManagedTitles = [
+    {tool:'swarm',icon:'robot_2',prefix:'Listed',action:'models',pattern:/^swarm models$/,key:'tool-models',text:'协作群模型'},
+    {tool:'swarm',icon:'robot_2',prefix:'Titled',action:'title',pattern:/^swarm "(?<name>[\s\S]*)"$/,key:'tool-title',text:'协作群“{name}”'},
+    {tool:'swarm',icon:'robot_2',prefix:'Spawned',action:'add',pattern:/^(?<count>\d+) workers? \((?<members>[\s\S]+)\)$/,key:'tool-workers',text:'{count} 个执行成员（{members}）'},
+    {tool:'swarm',icon:'robot_2',prefix:'Killed',action:'kill',pattern:/^(?<count>\d+) workers? \((?<members>[\s\S]+)\)$/,key:'tool-workers',text:'{count} 个执行成员（{members}）'},
+    {tool:'swarm',icon:'robot_2',prefix:'Checked',action:'status',pattern:/^swarm status \((?<name>[\s\S]+)\)$/,key:'tool-status',text:'协作群状态（{name}）'},
+    {tool:'read_board',icon:'forum',prefix:'Read',pattern:/^(?<count>\d+) messages? from board \((?<seq>#[\s\S]+)\)$/,key:'tool-read-board',text:'{count} 条留言板消息（{seq}）'},
+    {tool:'read_board',icon:'forum',prefix:'Read',pattern:/^board \((?<count>\d+) messages?\)$/,key:'tool-empty-board',text:'留言板（{count} 条消息）'},
+    {tool:'post_message',icon:'send',prefix:'Posted',pattern:/^(?<seq>#\d+) to board$/,key:'tool-post-board',text:'留言板消息 {seq}'},
+    {tool:'swarm_wait',icon:'timer',prefix:'Waiting',pattern:/^for board messages after (?<seq>#\d+)$/,key:'tool-wait-board',text:'{seq} 之后的留言板消息'},
+    {tool:'swarm_wait',icon:'timer',prefix:'Waiting',pattern:/^for @mentions after (?<seq>#\d+)$/,key:'tool-wait-mentions',text:'{seq} 之后的 @提及'},
+    {tool:'systemMessage',icon:'forum',prefix:'Resumed',pattern:/^wait — new board messages \((?<seq>#[\s\S]+)\)$/,key:'tool-resumed-board',text:'新留言板消息（{seq}）'}
+  ];
+  const swarmManagedPrefixes = {Titled:'已命名',Spawned:'已启动',Checked:'已检查',Posted:'已发布',Waiting:'正在等待',Resumed:'已结束等待'};
+  function swarmManagedTitle(info,tool,args) {
+    if (info?.aggregationKey !== 'actions' || info.titleParts?.length !== 1 || info.titleParts[0]?.part?.case !== 'text') return null;
+    const original = info.titleParts[0].part.value;
+    for (const rule of swarmManagedTitles) {
+      if (tool !== rule.tool || info.icon !== rule.icon || info.titlePrefix !== rule.prefix) continue;
+      const match = rule.pattern.exec(original);
+      if (!match) continue;
+      if (rule.action && [args?.Action,args?.action].some(action => typeof action === 'string' && action.trim() && action !== rule.action)) return null;
+      const translated = label(`swarm-ui:${rule.key}`,rule.text).replace(/\{(\w+)\}/g,(placeholder,key) => match.groups?.[key] ?? placeholder);
+      const translatedPrefix = own(swarmManagedPrefixes,rule.prefix)
+        ? label(`swarm-ui:tool-prefix:${rule.prefix}`,swarmManagedPrefixes[rule.prefix]) : fixed(rule.prefix);
+      return {original,translated,prefix:rule.prefix,translatedPrefix,values:match.groups};
+    }
+    return null;
+  }
   function managedItemTitle(step, metadata) {
     const info = step?.result?.stepRenderInfo;
     if (info?.titleParts?.length !== 1 || info.titleParts[0]?.part?.case !== 'text') return null;
     const original = info.titleParts[0].part.value;
     const tool = metadata?.toolCall?.name;
+    const swarm = swarmManagedTitle(info,tool,step?.args);
+    if (swarm) return swarm;
     const subagent = tool === 'manage_subagents' && info.icon === 'robot_2' && info.aggregationKey === 'actions' &&
       ['Found','Killed'].includes(info.titlePrefix);
     // The bare kind label is separate from the actual AgentRef block. New
@@ -2286,7 +2416,7 @@
             const step = args[0], metadata = step.metadata;
             const supplied = [metadata?.toolAction,metadata?.toolSummary].some(text => typeof text === 'string' && text.trim());
             const title = !supplied && managedItemTitle(step.step.value,metadata);
-            if (title && value === `${fixed(title.prefix)} ${title.original}`) return `${fixed(title.prefix)} ${title.translated}`;
+            if (title && value === `${fixed(title.prefix)} ${title.original}`) return `${title.translatedPrefix ?? fixed(title.prefix)} ${title.translated}`;
           }
           return value;
         } catch {
@@ -3469,7 +3599,8 @@
   uiStep('generic',[],{element(node,props,React) {
     if (!isStatusTitle(node)) return node;
     const title = !props.toolNameOverride && managedItemTitle(props.step,props.metadata);
-    if (title && node.props.content === title.original) return React.cloneElement(node,{content:title.translated});
+    if (title && node.props.content === title.original) return React.cloneElement(node,{content:title.translated,
+      ...(title.translatedPrefix && node.props.prefix === title.prefix ? {prefix:title.translatedPrefix} : {})});
     if (node.props.content !== 'Generic Tool' || props.toolNameOverride || props.metadata?.toolCall?.name ||
       [props.step?.args?.toolAction || props.metadata?.toolAction,props.metadata?.toolSummary].some(value => typeof value === 'string' && value.trim()) ||
       props.requestedInteraction?.interaction?.value?.actionDescription ||
@@ -3497,7 +3628,8 @@
       if (!message) return text;
       const template = message[1] === 'from'
         ? label('Message from {agent}','来自 {agent} 的消息') : label('Message to {agent}','发给 {agent} 的消息');
-      return template.replace('{agent}',() => message[2]);
+      const agent = message[2] === '@coordinator' ? '@'+label('swarm-ui:Coordinator','协调员') : message[2];
+      return template.replace('{agent}',() => agent);
     }
   });
   ui('timer-render-info-status', ['contentBlocks.map','fallbackMarkdown','disableMath:!0'], [], {
@@ -3541,6 +3673,17 @@
       .replace('{id}',() => prefix[1])+content.slice(prefix[0].length);
     return {content,translated};
   }
+  function resumedSwarmNotice(step) {
+    if (step.eventType) return null;
+    const title = swarmManagedTitle(step.renderInfo,'systemMessage');
+    if (!title) return null;
+    const content = `Board messages ${title.values.seq} arrived before waiting completed; reading the board before waiting again.`;
+    const blocks = step.renderInfo.contentBlocks;
+    if (blocks?.length !== 1 || blocks[0].block?.case !== 'markdown' || blocks[0].block.value !== content) return null;
+    const translated = label('swarm-ui:tool-resumed-description','留言板消息 {seq} 在等待完成前已到达；请先读取留言板，再继续等待。')
+      .replace('{seq}',() => title.values.seq);
+    return {title,content,translated};
+  }
   ui('system-message-title', ['auto_proceed_uri','renderInfo','fallbackMarkdown'], [], {
     elementProperties:['trigger'],
     element(node,props,React) {
@@ -3552,6 +3695,11 @@
       const hasTitle = parts.length ? !parts.every(part => part.part?.case === 'text') || Boolean(parts.map(part => part.part.value).join(' ')) : Boolean(info?.title);
       if (!step || step.metadata?.auto_proceed_uri) return node;
       const bodySlot = typeof node.type !== 'string' && node.props.renderInfo === info && node.props.fallbackMarkdown === step.message;
+      const resumed = (bodySlot || typeof node.props.content === 'string') && resumedSwarmNotice(step);
+      if (resumed && bodySlot) return React.cloneElement(node,{renderInfo:{...info,contentBlocks:info.contentBlocks.map(item =>
+        ({...item,block:{...item.block,value:resumed.translated}}))}});
+      if (resumed && node.props.content === `${resumed.title.prefix} ${resumed.title.original}`)
+        return React.cloneElement(node,{content:`${resumed.title.translatedPrefix}：${resumed.title.translated}`});
       const noticeTitle = !parts.length && !info?.titlePrefix && info?.title === 'System Message' && node.props.content === info.title;
       const notice = (bodySlot || noticeTitle) && subagentIdleNotice(step);
       if (notice && bodySlot) return React.cloneElement(node,{renderInfo:{...info,contentBlocks:info.contentBlocks.map(item =>
@@ -3822,8 +3970,6 @@
   const messageRelativeTimeDisplay = {
     element(node,props,React) {
       if (node.type !== 'span' || node.props['data-screenshot-volatile'] !== true ||
-        !['text-xs text-muted-foreground select-none px-1 mr-1 self-center whitespace-nowrap',
-          'text-xs text-muted-foreground select-none px-1 whitespace-nowrap'].includes(node.props.className) ||
         typeof node.props.children !== 'string') return node;
       const text = options.translate?.(node.props.children);
       return text ? React.cloneElement(node,{children:text}) : node;
@@ -4097,6 +4243,190 @@
       Array.isArray(children) && children.length === 2 && children[0] === label('Could not load the app view: ','无法加载应用视图：')
       ? React.cloneElement(node,{'data-ch-keep':true}) : node;
   }});
+  const swarmSidecarId = 'swarm/swarm_board';
+  const swarmDescriptions = {
+    skill:["(Preview & Quota Heavy) Run a swarm: several agents working in parallel on one task, each in its own conversation, collaborating through a shared message board. Use when the work splits into pieces that can be done at the same time, or when a second pair of eyes should check the first pair's work.",
+      '（预览功能，额度消耗较高）启动协作群：多个智能体在各自的对话中并行处理同一任务，通过共享留言板协作。适合可同时开展的分工任务，或需要相互检查工作结果的场景。'],
+    plugin:['Unlock the power of agent swarms.','让多个智能体组成协作群，共同完成任务。'],
+    sidecar:["Live view of the native swarm board, roster and @mention graph for the current conversation's swarm.",'实时查看当前对话协作群的留言板、成员名单和 @提及关系图。']
+  };
+  const builtinSwarmPath = (path,kind) => typeof path === 'string' && (kind === 'skill'
+    ? /\/builtin\/skills\/native_swarm(?:\/SKILL\.md)?\/?$/.test(path)
+    : /\/builtin\/plugins\/swarm\/?$/.test(path));
+  const builtinSwarmPlugin = plugin => plugin?.name === 'swarm' && builtinSwarmPath(plugin.path,'plugin');
+  function swarmName(text,kind) {
+    if (text !== 'Swarm' && text !== 'swarm') return text;
+    return kind === 'skill' ? label('swarm-ui:slash-label','swarm（协作群）') : label('swarm-ui:Swarm','协作群');
+  }
+  function swarmDescription(text,kind) {
+    const [original,translated] = swarmDescriptions[kind];
+    return text === original ? label(`swarm-ui:${kind}-description:${original}`,translated) : text;
+  }
+  function swarmCard(node,kind,React) {
+    if (!React.isValidElement(node)) return node;
+    const next = {};
+    for (const property of ['name','title']) {
+      const text = node.props[property],display = swarmName(text,kind);
+      if (display !== text) next[property] = display;
+    }
+    const description = swarmDescription(node.props.description,kind);
+    if (description !== node.props.description) next.description = description;
+    return Object.keys(next).length ? React.cloneElement(node,next) : node;
+  }
+  ui('builtin-swarm-command-menu', ['menu-option-label','menu-option-description','getRenderInfo'], [], {
+    element(node,props,React) {
+      const item = props.item,scope = item?.item?.scopeItem,info = scope?.value?.info;
+      if (scope?.case !== 'slashCommand' || info?.name !== 'swarm' || !builtinSwarmPath(info.definitionPath,'skill')) return node;
+      const slot = node.props['data-testid'];
+      if (slot === 'menu-option-label') {
+        const child = node.props.children,text = typeof child === 'string' ? child : child?.props?.text;
+        const display = swarmName(text,'skill');
+        return display !== text ? React.cloneElement(node,{children:display}) : node;
+      }
+      if (slot !== 'menu-option-description') return node;
+      const text = item.customDescription,display = swarmDescription(text,'skill');
+      // The native row may shorten its description around a query match. Use
+      // the full display copy here; the option and its selection stay native.
+      return display !== text ? React.cloneElement(node,{children:display}) : node;
+    }
+  });
+  ui('builtin-swarm-skill-tooltip', ['description:','openUri:',' skill`'], [], {
+    element(node,props,React) {
+      if (!builtinSwarmPath(props.path,'skill') || props.name !== 'swarm') return node;
+      if (node.type === 'span' && node.props.children === props.name)
+        return React.cloneElement(node,{children:swarmName(props.name,'skill')});
+      const description = swarmDescription(props.description,'skill');
+      return typeof node.type !== 'string' && node.props.children === props.description && description !== props.description
+        ? React.cloneElement(node,{children:description}) : node;
+    }
+  });
+  ui('builtin-swarm-plugin-row', ['plugin:','onTogglePlugin:','deleteTitle:"Delete plugin"'], [], {
+    result(value,props,React) { return builtinSwarmPlugin(props.plugin) ? swarmCard(value,'plugin',React) : value; }
+  });
+  ui('builtin-swarm-skill-row', ['onCopyPath:','showBadge:','pluginName'], [], {
+    result(value,props,React) { return builtinSwarmPath(props.item?.path,'skill') ? swarmCard(value,'skill',React) : value; }
+  });
+  ui('builtin-swarm-skill-customization-row', ['`skill-${','description:','content:','actions:'], [], {
+    result(value,props) {
+      if (!builtinSwarmPath(props.path,'skill') || !value || typeof value !== 'object') return value;
+      return {...value,name:swarmName(value.name,'skill'),description:swarmDescription(value.description,'skill')};
+    }
+  });
+  ui('builtin-swarm-skill-cards', ['skills:','showPaths:','copyPath:','MarkdownRenderer:'], [], {
+    result(value,props,React) {
+      if (!Array.isArray(value?.props?.children)) return value;
+      const children = value.props.children.map((node,index) => builtinSwarmPath(props.skills?.[index]?.path,'skill')
+        ? swarmCard(node,'skill',React) : node);
+      return children.some((node,index) => node !== value.props.children[index]) ? React.cloneElement(value,{children}) : value;
+    }
+  });
+  ui('builtin-swarm-extension-menu', ['plugins-submenu-item','data-sidecar-id'], [], {
+    result(value,props,React) {
+      // A menu item can already be a lexical display wrapper when the shared
+      // visitor returns. Project its existing label after that traversal.
+      return detailTree(value,React,node => {
+        if (node.props['data-testid'] !== 'plugins-submenu-item' || node.props['data-sidecar-id'] !== swarmSidecarId) return node;
+        return detailTree(node,React,child => child.type === 'span' && child.props.className === 'truncate' && child.props.children === 'Swarm'
+          ? React.cloneElement(child,{children:swarmName(child.props.children)}) : child);
+      });
+    }
+  });
+  ui('builtin-swarm-sidecar-link', ['onSidecarLinkClick:','resolveSidecarLink:','.scheme==="sidecar"'], [], {
+    result(value,props,React) {
+      if (typeof props.href !== 'string' || !/^sidecar:\/\/swarm\/swarm_board\/(?:[?#]|$)/.test(props.href) || !React.isValidElement(value)) return value;
+      const next = {};
+      if (value.props.children === 'Open the Swarm UI') next.children = label('swarm-ui:Open the Swarm UI','打开协作群界面');
+      const title = swarmName(value.props.title);
+      if (title !== value.props.title) next.title = title;
+      return Object.keys(next).length ? React.cloneElement(value,next) : value;
+    }
+  });
+  ui('builtin-swarm-sidecar-row', ['sidecar-row','sidecar-enable-toggle','onToggleEnabled:'], [], {
+    element(node,props,React) {
+      const sidecar = props.sidecar;
+      if (sidecar?.sidecarId !== swarmSidecarId) return node;
+      const name = sidecar.config?.displayName || sidecar.sidecarId;
+      if (node.type === 'span' && node.props.className === 'text-foreground truncate' && node.props.children === name)
+        return React.cloneElement(node,{children:swarmName(name)});
+      return node;
+    }
+  });
+  ui('builtin-swarm-sidecar-description', ['config?.mode?.case!=="builtin"','Command execution'], [], {
+    result(value,props,React) {
+      return props.sidecarId === swarmSidecarId && React.isValidElement(value) && value.props.children === props.config?.description
+        ? React.cloneElement(value,{children:swarmDescription(value.props.children,'sidecar')}) : value;
+    }
+  });
+  ui('builtin-swarm-sidecar-modal', ['"plugin-sidecar-modal"','sidecar:','pluginName:'], [], {
+    element(node,props,React) {
+      if (props.sidecar?.sidecarId !== swarmSidecarId) return node;
+      const name = props.sidecar.config?.displayName || props.sidecar.sidecarId,children = node.props.children;
+      if ((typeof node.type !== 'string' || node.type === 'h2') && children === name)
+        return React.cloneElement(node,{children:swarmName(name)});
+      if (node.type === 'strong' && props.pluginName === 'swarm' && children === props.pluginName)
+        return React.cloneElement(node,{children:swarmName(children)});
+      if (node.type === 'div' && node.props.className === 'text-[11px] text-muted-foreground truncate' && Array.isArray(children) &&
+        children.length === 3 && children[1] === name && children[0] === '直接在侧边窗格中查看和控制 ')
+        return React.cloneElement(node,{children:[children[0],swarmName(name),children[2]]});
+      return node;
+    }
+  });
+  const swarmPaneView = view => view?.type === 'sidecarView' && view.sidecarView?.sidecarId === swarmSidecarId && view.sidecarView.path === '/';
+  // Both side-pane layouts keep their title functions in writable registry
+  // slots. Adapt that display result while retaining the original tab state.
+  const swarmTabOwners = new WeakSet();
+  for (const key of Object.getOwnPropertyNames(window)) {
+    const value = Object.getOwnPropertyDescriptor(window,key)?.value;
+    if (!value || typeof value !== 'object' || value.window === value) continue;
+    const owner = Object.getOwnPropertyDescriptor(value,'sidecarView')?.value;
+    if (!owner || typeof owner !== 'object' || swarmTabOwners.has(owner)) continue;
+    const descriptor = Object.getOwnPropertyDescriptor(owner,'getTabTitle'),original = descriptor?.value;
+    if (!descriptor?.writable || typeof original !== 'function') continue;
+    const source = sourceOf(original);
+    if (!source.includes('sidecarView.title') || !source.includes('"Sidecar View"')) continue;
+    swarmTabOwners.add(owner);
+    install('getTabTitle',original,function nativeSwarmTabTitle(view,...args) {
+      const text = Reflect.apply(original,this,[view,...args]);
+      return swarmPaneView(view) ? swarmName(text) : text;
+    },'native-swarm-tab-title',owner);
+  }
+  const swarmPaneTitleEntry = nativeFunctions.find(entry => entry.source.includes('.sidecarView;') &&
+    entry.source.includes('.sidecarId===') && entry.source.includes('.path===') && entry.source.includes('?.title'));
+  if (swarmPaneTitleEntry) install(swarmPaneTitleEntry.key,swarmPaneTitleEntry.original,function nativeSwarmPaneTitle(view,...args) {
+    const text = Reflect.apply(swarmPaneTitleEntry.original,this,[view,...args]);
+    return swarmPaneView(view) ? swarmName(text) : text;
+  },'native-swarm-pane-title',swarmPaneTitleEntry.owner ?? window);
+  function swarmIframeProps(props) {
+    if (typeof props?.url !== 'string' || !/^plugin:\/\/swarm--swarm_board-\d+\/(?:[?#]|$)/.test(props.url)) return props;
+    const title = swarmName(props.title);
+    return title === props.title ? props : {...props,title};
+  }
+  const swarmFrameRenderers = new WeakMap();
+  ui('builtin-swarm-iframe-parent', ['sidecar-iframe-slot','renderFrame:','slotAttributes:'], [], {
+    result(value,props,React) {
+      const renderFrame = value?.props?.renderFrame;
+      if (!React.isValidElement(value) || typeof renderFrame !== 'function') return value;
+      let display = swarmFrameRenderers.get(renderFrame);
+      if (!display) {
+        display = function nativeSwarmFrameDisplay(...args) {
+          const frame = Reflect.apply(renderFrame,this,args);
+          if (!React.isValidElement(frame)) return frame;
+          const next = swarmIframeProps(frame.props);
+          return next === frame.props ? frame : React.cloneElement(frame,{title:next.title});
+        };
+        swarmFrameRenderers.set(renderFrame,display);
+      }
+      return React.cloneElement(value,{renderFrame:display});
+    }
+  });
+  const swarmIframeEntry = [...nativeFunctions,...nativeComponentFunctions].find(entry =>
+    entry.source.includes('reloadTrigger:') && entry.source.includes('dataset.testid="sidecar-iframe"') &&
+    entry.source.includes('.createElement("iframe")'));
+  if (swarmIframeEntry) install(swarmIframeEntry.key,swarmIframeEntry.original,function nativeSwarmIframe(props,...args) {
+    // The memo owner retains its identity and runs its native Hooks/effect
+    // sequence once, with the original URL and lifecycle inputs.
+    return Reflect.apply(swarmIframeEntry.original,this,[swarmIframeProps(props),...args]);
+  },'native-swarm-iframe-title',swarmIframeEntry.owner ?? window);
   const builtinBrowserDescription = {"prefix":"\nTroubleshooting: If the agent repeatedly fails to connect, manually configure the following MCP entry in the user's mcp_config.json file, then restart the browser agent:\n  \"chrome_devtools\": ","suffix":"Browser agent that can perform actions in user's Google Chrome browser with the given task description. The agent has access to tools for interacting with web page content (clicking, typing, navigating, etc) and controlling the browser window itself (resizing window and emulating). Please make sure to define a clear condition to return on. Note: All browser interactions are automatically recorded and saved as WebM videos to the artifacts directory. The recording video generation is asynchronous, and you'll be notified by a separate message once it's available.\n\nThe chrome_devtools MCP server is started automatically when this agent is invoked — no manual setup is required."};
   const builtinAgentIntroductions = {
     self:"Subagent that inherits the parent agent's full configuration including tools, system prompt, and model.",
@@ -4715,6 +5045,15 @@
         return node;
       });
       const id = catalog?.id,installed = scope.installed[0];
+      if (builtinSwarmPlugin(installed)) return detailTree(value,React,node => {
+        if (nativeComponent(node,detailHeaderEntry)) node = swarmCard(node,'plugin',React);
+        else if (node.type === 'h1' && node.props.children === (installed.displayName || installed.name))
+          node = React.cloneElement(node,{children:swarmName(node.props.children)});
+        else if (node.type === 'p' && node.props.children === installed.description)
+          node = React.cloneElement(node,{children:swarmDescription(node.props.children,'plugin')});
+        return detailOwners.some(owner => nativeComponent(node,owner.entry))
+          ? React.cloneElement(node,{chBuiltinSwarm:true}) : node;
+      });
       if (catalog?.marketplace !== 'antigravity-plugins-official' || !officialPluginIds.has(id) ||
         (installed && (installed.installedFrom?.id !== id || installed.installedFrom?.marketplace !== catalog.marketplace))) return value;
       return detailTree(value,React,node => {
@@ -4737,6 +5076,20 @@
     },'native-plugin-detail',detailEntry.owner ?? window);
     for (const {kind,markers,entry} of detailOwners) {
       if (!entry) continue;
+      if (kind === 'sidecars') ui('builtin-swarm-plugin-sidecars',markers,[],{
+        result(value,props,React) {
+          if (!props.chBuiltinSwarm) return value;
+          return detailTree(value,React,node => {
+            if (nativeComponent(node,sidecarModalEntry)) return node;
+            const text = node.props.children;
+            if (typeof text !== 'string') return node;
+            const display = swarmDescription(swarmName(text),'sidecar');
+            const title = swarmDescription(node.props.title,'sidecar');
+            return display !== text || title !== node.props.title
+              ? React.cloneElement(node,{children:display,title}) : node;
+          });
+        }
+      });
       // A section can also own another native UI adapter (e.g. built-in agent
       // cards). Keep both projections in the same wrapper and original render.
       ui(`official-plugin-detail:${kind}`,markers,[],{result(value,props,OwnerReact) {
@@ -4830,10 +5183,11 @@
       installed = Reflect.apply(breadcrumbLookupEntry.original,undefined,[scope.breadcrumb.path,scope.breadcrumb.provider.getState().installedPlugins]);
       if (installed?.installedFrom?.marketplace === 'antigravity-plugins-official') id = installed.installedFrom.id;
     }
-    if (!officialPluginIds.has(id) || !Array.isArray(value) || value[0]?.name !== 'Customizations' ||
+    const builtin = builtinSwarmPlugin(installed);
+    if ((!builtin && !officialPluginIds.has(id)) || !Array.isArray(value) || value[0]?.name !== 'Customizations' ||
       typeof value[1]?.name !== 'string' || value[0].onRename || value[1].onRename) return value;
-    let name = detailLabel(id,'name',value[1].name);
-    if (installed && (value[1].name === installed.name || value[1].name === installed.displayName)) {
+    let name = builtin ? swarmName(value[1].name) : detailLabel(id,'name',value[1].name);
+    if (!builtin && installed && (value[1].name === installed.name || value[1].name === installed.displayName)) {
       const source = installed.displayName || value[1].name,key = `marketplace:${id}:name:${source}`,values = strings?.strings || strings;
       if (values && own(values,key)) name = detailLabel(id,'name',source);
     }

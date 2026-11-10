@@ -2,16 +2,18 @@ import AppKit
 import Darwin
 import Foundation
 
-final class HelperDelegate: NSObject, NSApplicationDelegate {
+final class HelperDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem!
     private let statusLine = NSMenuItem(title: "正在启动汉化…", action: nil, keyEquivalent: "")
     private let toggleItem = NSMenuItem(title: "暂停汉化并恢复英文", action: #selector(toggleTranslation), keyEquivalent: "")
+    private let launchItem = NSMenuItem(title: "通过助手启动 Antigravity", action: #selector(launchAntigravity), keyEquivalent: "")
     private var runner: Process?
     private var runnerLog: FileHandle?
     private var timer: Timer?
     private var wantsTranslation = true
     private var isQuitting = false
     private var stopping = false
+    private var launching = false
     private var lastError: String?
     private let shutdownGracePeriod: TimeInterval = 10
 
@@ -32,6 +34,8 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         statusLine.isEnabled = false
         menu.addItem(statusLine)
         menu.addItem(NSMenuItem.separator())
+        launchItem.target = self
+        menu.addItem(launchItem)
         menu.addItem(item("重新加载词库", action: #selector(reloadTranslations)))
         toggleItem.target = self
         menu.addItem(toggleItem)
@@ -65,12 +69,22 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         return result
     }
 
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem === launchItem {
+            return wantsTranslation && !stopping && !isQuitting && !launching
+        }
+        return menuItem.isEnabled
+    }
+
     private func nodeExecutable() -> URL? {
         NodeRuntime.executable(workingDirectory: runtimeFolder)
     }
 
     private func startRunner() {
-        guard runner == nil, !stopping, !isQuitting else { return }
+        guard runner?.isRunning != true, !stopping, !isQuitting else { return }
+        runner = nil
+        try? runnerLog?.close()
+        runnerLog = nil
         let script = runtimeFolder.appendingPathComponent("runner.mjs")
         guard FileManager.default.fileExists(atPath: script.path) else {
             lastError = "请先运行“安装汉化助手.command”安装运行文件"
@@ -152,10 +166,16 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     private func refreshStatus() {
         defer { statusItem.button?.toolTip = "Antigravity 汉化助手：\(statusLine.title)" }
         toggleItem.title = wantsTranslation ? "暂停汉化并恢复英文" : "恢复汉化"
-        toggleItem.isEnabled = !stopping
+        toggleItem.isEnabled = !stopping && !launching
+        launchItem.title = launching ? "正在启动 Antigravity…" : "通过助手启动 Antigravity"
+        launchItem.isEnabled = wantsTranslation && !stopping && !isQuitting && !launching
         if stopping { return }
         if !wantsTranslation {
             statusLine.title = "已暂停 · 英文界面"
+            return
+        }
+        if launching {
+            statusLine.title = "正在通过助手启动 Antigravity…"
             return
         }
         if let error = lastError {
@@ -173,6 +193,92 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
             return
         }
         statusLine.title = value.menuTitle
+    }
+
+    private struct LaunchReply: Decodable {
+        let launched: Bool
+        let message: String
+    }
+
+    @objc private func launchAntigravity() {
+        guard wantsTranslation, !stopping, !isQuitting, !launching else { return }
+        launching = true
+        if runner?.isRunning != true { startRunner() }
+        refreshStatus()
+        waitForLaunchRunner(until: Date().addingTimeInterval(5))
+    }
+
+    private func waitForLaunchRunner(until deadline: Date) {
+        guard !isQuitting, wantsTranslation, !stopping else {
+            launching = false
+            refreshStatus()
+            return
+        }
+        guard runner?.isRunning == true else {
+            finishLaunch(message: lastError ?? "汉化助手未能启动，请先恢复汉化后重试。", failed: true)
+            return
+        }
+        if FileManager.default.fileExists(atPath: supportFolder.appendingPathComponent("helper.sock").path) {
+            runLaunchCommand()
+            return
+        }
+        guard Date() < deadline else {
+            finishLaunch(message: "等待汉化助手启动超时，请重新加载助手后重试。", failed: true)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.waitForLaunchRunner(until: deadline)
+        }
+    }
+
+    private func runLaunchCommand() {
+        guard let node = nodeExecutable() else {
+            finishLaunch(message: "未找到 Node.js 22 或更新版本，打开说明查看运行要求。", failed: true)
+            return
+        }
+        let process = Process()
+        let output = Pipe(), errors = Pipe()
+        process.executableURL = node
+        process.arguments = [runtimeFolder.appendingPathComponent("runner.mjs").path, "--launch"]
+        process.currentDirectoryURL = runtimeFolder
+        process.standardOutput = output
+        process.standardError = errors
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try process.run()
+                // The CLI returns one JSON reply, or a short error on stderr.
+                let data = output.fileHandleForReading.readDataToEndOfFile()
+                let errorData = errors.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                let errorText = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                DispatchQueue.main.async {
+                    if process.terminationStatus != 0 {
+                        self.finishLaunch(message: errorText.isEmpty ? "启动 Antigravity 失败。" : errorText, failed: true)
+                    } else if let reply = try? JSONDecoder().decode(LaunchReply.self, from: data) {
+                        self.finishLaunch(message: reply.launched ? nil : reply.message, failed: false)
+                    } else {
+                        self.finishLaunch(message: "无法读取 Antigravity 启动结果。", failed: true)
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.finishLaunch(message: "启动失败：\(error.localizedDescription)", failed: true)
+                }
+            }
+        }
+    }
+
+    private func finishLaunch(message: String?, failed: Bool) {
+        launching = false
+        refreshStatus()
+        guard !isQuitting, let message = message, !message.isEmpty else { return }
+        let alert = NSAlert()
+        alert.messageText = failed ? "无法启动 Antigravity" : "Antigravity 启动提示"
+        alert.informativeText = message
+        alert.alertStyle = failed ? .warning : .informational
+        alert.addButton(withTitle: "好")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     @objc private func reloadTranslations() {

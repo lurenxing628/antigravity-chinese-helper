@@ -926,7 +926,7 @@ test('render-info summary reuses plain titles while preserving structured data a
 test('agent and task list counts share native card and running-summary ownership without translating data',()=>{
   const f=nativeFixture();
   f.evaluate(`
-    var part=()=>null,card=()=>null;
+    var part=()=>null,card=()=>null,body=()=>null;
     var transition=props=>A.createElement(A.Fragment,null,props.text);
     function title({prefix:p,content:c,progressMessage:g,customTitle:t,tooltipText:h}) {
       return A.createElement('div',{progressMessage:g,customTitle:t,tooltipText:h},typeof p==='string'?A.createElement(transition,{text:p}):p,c);
@@ -951,7 +951,11 @@ test('agent and task list counts share native card and running-summary ownership
       return A.createElement(card,{status:props.status,title:A.createElement(title,{prefix:info.titlePrefix,content:formatTitle(info)}),
         supplementaryView:A.createElement('pre',null,props.step.result.output)});
     }
-    var registry={generic:{renderer:generic},systemMessage:{renderer:()=>A.createElement(A.Fragment,null)}};
+    var registry={generic:{renderer:generic},systemMessage:{renderer:({step:a})=>{
+      if(a.metadata?.auto_proceed_uri)return null;
+      const info=a.renderInfo,text=formatTitle(info),content=info.titlePrefix?info.titlePrefix+' '+text:text;
+      return A.createElement(card,{trigger:A.createElement(title,{content})},A.createElement(body,{renderInfo:info,fallbackMarkdown:a.message}));
+    }}};
     function lookup(a){var b=a.step.case;return(b?registry[b]:void 0)?.isRendered(a,!1)??!1}
     function running(step) {
       const selected={toolSummary:step.metadata?.toolSummary};
@@ -1040,6 +1044,56 @@ test('agent and task list counts share native card and running-summary ownership
   assert.equal(f.window.running(named),'已找到 11 subagents');
   const supplied={...good,metadata:{...good.metadata,toolAction:'Found 11 subagents'}};
   assert.equal(f.window.running(supplied),'Found 11 subagents');
+  const swarm=list('swarm','swarm models',{titlePrefix:'Listed',icon:'robot_2',aggregationKey:'actions'},{});
+  const modelOutput='swarm models\nGemini 4 Carbon\ncustom model: swarm models';
+  const swarmValue=Object.freeze({...swarm.step.value,result:Object.freeze({...swarm.step.value.result,output:modelOutput})});
+  const swarmRecord=Object.freeze({...swarm,step:Object.freeze({case:'generic',value:swarmValue})});
+  assert.equal(render(swarmRecord,2).props.title.props.content,'协作群模型');
+  assert.equal(f.window.running(swarmRecord),'已列出 协作群模型');
+  assert.equal(render(swarmRecord,2).props.supplementaryView.props.children,modelOutput,'the model list remains supplied tool output');
+  assert.equal(swarmValue.result.stepRenderInfo.titleParts[0].part.value,'swarm models');
+  assert.deepEqual(swarmValue.args,{});
+  const otherSwarmTool={...swarmRecord,metadata:{toolCall:{name:'custom_reader'}}};
+  assert.equal(render(otherSwarmTool,2).props.title.props.content,'swarm models');
+  for(const args of [{Action:'status'},{action:'status'}]) {
+    const conflict={...swarmRecord,step:{case:'generic',value:{...swarmValue,args:Object.freeze(args)}}};
+    assert.equal(render(conflict,2).props.title.props.content,'swarm models');
+    assert.equal(f.window.running(conflict),'已列出 swarm models');
+  }
+  for(const [tool,icon,prefix,text,expected,translatedPrefix] of [
+    ['swarm','robot_2','Titled','swarm "A5 Stage 5.4b Round-2 Fixes $&"','协作群“A5 Stage 5.4b Round-2 Fixes $&”','已命名'],
+    ['swarm','robot_2','Spawned','3 workers (@fix-b1-r2-1–@fix-b1-r2-3)','3 个执行成员（@fix-b1-r2-1–@fix-b1-r2-3）','已启动'],
+    ['swarm','robot_2','Killed','3 workers (@fix-b1-r2-1–@fix-b1-r2-3)','3 个执行成员（@fix-b1-r2-1–@fix-b1-r2-3）','已终止'],
+    ['swarm','robot_2','Checked','swarm status (A5 Stage 5.4b Round-2 Fixes)','协作群状态（A5 Stage 5.4b Round-2 Fixes）','已检查'],
+    ['read_board','forum','Read','1 message from board (#2)','1 条留言板消息（#2）','已读取'],
+    ['read_board','forum','Read','board (0 messages)','留言板（0 条消息）','已读取'],
+    ['post_message','send','Posted','#3 to board','留言板消息 #3','已发布'],
+    ['swarm_wait','timer','Waiting','for board messages after #3','#3 之后的留言板消息','正在等待'],
+    ['swarm_wait','timer','Waiting','for @mentions after #2','#2 之后的 @提及','正在等待']
+  ]) {
+    const record=list(tool,text,{icon,titlePrefix:prefix,aggregationKey:'actions'},{}),title=render(record,2).props.title;
+    assert.equal(title.props.content,expected);
+    assert.equal(f.window.title(title.props).props.children[0].props.text,translatedPrefix,'the owned operation prefix shares its native card slot');
+    assert.equal(f.window.running(record),translatedPrefix+' '+expected);
+    assert.equal(record.step.value.result.stepRenderInfo.titlePrefix,prefix);
+    assert.equal(record.step.value.result.stepRenderInfo.titleParts[0].part.value,text);
+    assert.equal(render(record,2).props.supplementaryView.props.children,'11 subagents\n1 task');
+  }
+  const resumedText='wait — new board messages (#6–#7)';
+  const resumedBody='Board messages #6–#7 arrived before waiting completed; reading the board before waiting again.';
+  const resumedBlock=Object.freeze({block:Object.freeze({case:'markdown',value:resumedBody})});
+  const resumedInfo=Object.freeze({title:'',titlePrefix:'Resumed',icon:'forum',aggregationKey:'actions',
+    titleParts:Object.freeze([Object.freeze({part:Object.freeze({case:'text',value:resumedText})})]),contentBlocks:Object.freeze([resumedBlock])});
+  const resumedStep=Object.freeze({eventType:'',metadata:Object.freeze({}),message:'original system message @coordinator',renderInfo:resumedInfo});
+  const resumed=f.window.registry.systemMessage.renderer({step:resumedStep});
+  assert.equal(resumed.props.trigger.props.content,'已结束等待：新留言板消息（#6–#7）');
+  assert.equal(resumed.props.children.props.renderInfo.contentBlocks[0].block.value,'留言板消息 #6–#7 在等待完成前已到达；请先读取留言板，再继续等待。');
+  assert.equal(resumed.props.children.props.fallbackMarkdown,resumedStep.message);
+  assert.equal(resumedInfo.titleParts[0].part.value,resumedText);assert.equal(resumedBlock.block.value,resumedBody);
+  const unrelated=f.window.registry.systemMessage.renderer({step:{...resumedStep,eventType:'another_event'}});
+  assert.equal(unrelated.props.trigger.props.content,'Resumed '+resumedText);assert.equal(unrelated.props.children.props.renderInfo,resumedInfo);
+  const mismatchedInfo={...resumedInfo,contentBlocks:[{block:{case:'markdown',value:resumedBody.replace('#6–#7','#8')}}]};
+  assert.equal(f.window.registry.systemMessage.renderer({step:{...resumedStep,renderInfo:mismatchedInfo}}).props.trigger.props.content,'Resumed '+resumedText);
   for(const [prefix,expected] of [['Checked task','已检查任务'],['Killed task','已终止任务']]) {
     const name='Task  $&  "self"';
     const result=f.window.title({prefix,content:name});
@@ -5098,11 +5152,11 @@ test('message time projection follows changing native timestamps and preserves c
   const f=nativeFixture({strings:dictionary.strings,translate:translator.translate});
   f.evaluate(`A.useId=()=> 'time-fixture';var ZA=()=>null,MZb=()=>null,OZb=()=>null;
     var replyToolbar=({steps:steps,showThumbsUpDown,relativeText,tooltip,onCopy})=>A.createElement('div',{'data-testid':'cascade-system-message-toolbar'},
-      A.createElement('span',{'data-screenshot-volatile':true,'data-tooltip-id':'reply-time',className:'text-xs text-muted-foreground select-none px-1 whitespace-nowrap'},relativeText),
+      A.createElement('span',{'data-screenshot-volatile':true,'data-tooltip-id':'reply-time',className:'text-sm text-muted-foreground select-none px-1 whitespace-nowrap'},relativeText),
       A.createElement(ZA,{id:'reply-time'},tooltip),A.createElement('button',{'aria-label':'Copy Message',onClick:onCopy},'Copy'),
       A.createElement('span',{className:'text-xs text-muted-foreground select-none px-1 whitespace-nowrap'},steps[0].text),
       A.createElement('span',null,steps[1].text));`);
-  f.evaluate("var M_b=({formattedTime:a,timestampTooltip:b,items:c,revertState:d,isBubble:f})=>{var g=`timestamp-${(0,A.useId)()}`;a=a&&A.createElement(A.Fragment,null,A.createElement(\"span\",{\"data-screenshot-volatile\":!0,\"data-tooltip-id\":b?g:void 0,className:\"text-xs text-muted-foreground select-none px-1 mr-1 self-center whitespace-nowrap\"},a),b&&A.createElement(ZA,{id:g,place:\"top-end\"},b));return f?A.createElement(\"div\",{\"data-testid\":\"user-message-actions\",\"data-no-scroll-jump\":!0,className:\"flex flex-row items-center justify-end gap-0.5 px-1 opacity-0 pointer-events-none group-hover/user-input-step:opacity-100 group-hover/user-input-step:pointer-events-auto has-[:focus-visible]:opacity-100 has-[:focus-visible]:pointer-events-auto transition-opacity select-none\"},\na,c.length>0&&A.createElement(MZb,{items:c}),d&&A.createElement(OZb,{revertState:d})):A.createElement(\"div\",{className:\"absolute bottom-0.5 right-0.5 flex flex-row items-center p-1 rounded-full opacity-0 pointer-events-none group-hover/user-input-step:opacity-100 group-hover/user-input-step:pointer-events-auto transition-all bg-card user-input-buttons-shadow user-input-buttons-container select-none\"},a,A.createElement(MZb,{items:c}),d&&A.createElement(OZb,{revertState:d}))};");
+  f.evaluate("var M_b=({formattedTime:a,timestampTooltip:b,items:c,revertState:d,isBubble:f})=>{var g=`timestamp-${(0,A.useId)()}`;a=a&&A.createElement(A.Fragment,null,A.createElement(\"span\",{\"data-screenshot-volatile\":!0,\"data-tooltip-id\":b?g:void 0,className:\"text-sm text-muted-foreground select-none px-1 mr-1 self-center whitespace-nowrap\"},a),b&&A.createElement(ZA,{id:g,place:\"top-end\"},b));return f?A.createElement(\"div\",{\"data-testid\":\"user-message-actions\",\"data-no-scroll-jump\":!0,className:\"flex flex-row items-center justify-end gap-0.5 px-1 opacity-0 pointer-events-none group-hover/user-input-step:opacity-100 group-hover/user-input-step:pointer-events-auto has-[:focus-visible]:opacity-100 has-[:focus-visible]:pointer-events-auto transition-opacity select-none\"},\na,c.length>0&&A.createElement(MZb,{items:c}),d&&A.createElement(OZb,{revertState:d})):A.createElement(\"div\",{className:\"absolute bottom-0.5 right-0.5 flex flex-row items-center p-1 rounded-full opacity-0 pointer-events-none group-hover/user-input-step:opacity-100 group-hover/user-input-step:pointer-events-auto transition-all bg-card user-input-buttons-shadow user-input-buttons-container select-none\"},a,A.createElement(MZb,{items:c}),d&&A.createElement(OZb,{revertState:d}))};");
   const original=f.window.M_b,reply=f.window.replyToolbar,adapters=f.install();
   const all=value=>Array.isArray(value)?value.flatMap(all):value?.props?[value,...all(value.props.children)]:[];
   const items=Object.freeze([Object.freeze({text:'just now'}),Object.freeze({text:'/compact'})]);
@@ -5295,4 +5349,214 @@ test('voice controls translate display copy while preserving shortcuts, speed va
   assert.equal(tip(f.window.Ouc(),'voice-call-speed-tooltip'),'播放速度，1.25x');
   f.uninstall()();assert.equal(f.window.Huc,nativeMic);assert.equal(f.window.Kuc,nativeSpeed);assert.equal(f.window.Quc,nativeControls);
   assert.equal(tip(f.window.Ouc(),'voice-call-speed-tooltip'),'Voice speed, 1.25x');
+});
+
+
+test('built-in Swarm display owners localize menus, metadata and tab titles without changing selections or stored values', () => {
+  const f = nativeFixture();
+  f.window.eval = source => f.evaluate(source);
+  f.evaluate(`
+    var SwarmText=()=>null,SwarmCard=()=>null,SwarmHeader=()=>null;
+    var swarmNativeMenus=[];
+    var swarmMenu=({item:a,selectAndClose:b})=>{
+      var c=a.getRenderInfo();
+      var d=A.createElement('div',{onClickCapture:event=>{event.preventDefault();b();}},
+        A.createElement('span',{'data-testid':'menu-option-label'},A.createElement(SwarmText,{text:c.label,matches:a.queryMatches?.label})),
+        A.createElement('span',{'data-testid':'menu-option-description'},A.createElement(SwarmText,{text:c.description.text.slice(0,60)})));
+      swarmNativeMenus.push(d);return d;
+    };
+    var swarmPluginRow=({plugin:a,onTogglePlugin:b})=>A.createElement(SwarmCard,{name:a.displayName||a.name,
+      description:a.description,path:a.path,deleteTitle:"Delete plugin",onToggle:value=>b(a,value)});
+    const swarmMenuItem=({children,...props})=>A.createElement("button",{"data-testid":"home-greeting",...props},children);
+    var swarmExtensionMenu=({views:a,onOpen:b})=>A.createElement(A.Fragment,null,a.map(c=>A.createElement(swarmMenuItem,{
+      'data-testid':'plugins-submenu-item','data-sidecar-id':c.sidecarId,onClick:()=>b(c)},
+      A.createElement('span',{className:'truncate'},c.title))));
+    var swarmSkillCards=({skills:a,showPaths:b,MarkdownRenderer:c})=>A.createElement('div',null,a.map(d=>A.createElement(SwarmCard,{
+      title:d.name,description:d.description,copyPath:b?d.path:undefined,content:d.content,MarkdownRenderer:c})));
+    var swarmSidecarModal=({sidecar:a,pluginName:b,onClose:c})=>A.createElement('div',{'data-testid':"plugin-sidecar-modal"},
+      A.createElement(SwarmHeader,{className:'text-base font-semibold text-foreground'},a.config.displayName),
+      A.createElement('div',{className:'text-[11px] text-muted-foreground truncate'},'Stream and control ',a.config.displayName,' directly in the side pane.'),
+      A.createElement('strong',null,b),A.createElement('button',{'aria-label':'Close',onClick:c},'Close'));
+    var SwarmLinkPill=()=>null,swarmNativeLinks=[];
+    function swarmSidecarLink({href:a,children:u,onSidecarLinkClick:f,resolveSidecarLink:g,onSidecarLinkRendered:h}) {
+      var w={scheme:a.split(':')[0]};
+      if(w?.scheme==="sidecar") {
+        let D=a.slice('sidecar://'.length).split('#')[0],z=f?g?.(D):undefined;
+        const node=z&&f?A.createElement(SwarmLinkPill,{title:z.title,variant:z.variant,icon:z.icon,onClick:C=>{C.preventDefault();f(D)}},u)
+          :A.createElement(SwarmLinkPill,{variant:'aux-pane',icon:'extension',disabled:true},u);
+        swarmNativeLinks.push(node);return node;
+      }
+      return A.createElement('a',{href:a},u);
+    }
+    function swarmMessageTitle(a,b) {
+      var c=a?.titleParts??[];
+      return c.length===0?a?.title||undefined:c.every(e=>e.part.case==="text")?c.map(e=>e.part.value).join(' ')||undefined
+        :A.createElement('span',null,c.map((e,f)=>A.createElement(SwarmText,{key:f,part:e,diffContext:b})));
+    }
+    var swarmOldTabs={sidecarView:{getTabTitle:a=>a.type!=="sidecarView"?"Sidecar View":a.sidecarView.title||"Sidecar View"}};
+    var swarmNewTabs={sidecarView:{getTabTitle:a=>a.type!=="sidecarView"?"Sidecar View":a.sidecarView.title||"Sidecar View"}};
+    function swarmPaneTitle(a,b){if(a.type==="sidecarView"&&a.sidecarView){a=a.sidecarView;var c=a.sidecarId,d=a.path;return b.find(f=>f.sidecarId===c&&f.path===d)?.title}}
+    A.memo=type=>({$$typeof:Symbol.for('react.memo'),type});
+    var swarmIframeCalls=[],document={createElement:type=>({nodeName:type,dataset:{}})};
+    var swarmIframe=A.memo(function({title:a,url:b,reloadTrigger:c,visible:d=true}){
+      var m=document.createElement("iframe");m.title=a;m.dataset.testid="sidecar-iframe";
+      swarmIframeCalls.push(arguments[0]);return {frame:m,props:arguments[0]};
+    });
+    var SwarmFrameSlots=()=>null,swarmNativeFrameHosts=[];
+    var swarmFrameHost=({placeholders:a,renderFrame:n})=>{
+      var k=(p,q)=>({"data-testid":"sidecar-iframe-slot","data-sidecar-url":p,"data-visible":String(q)});
+      var value=A.createElement(SwarmFrameSlots,{placeholders:a,renderFrame:n,slotAttributes:k});
+      swarmNativeFrameHosts.push(value);return value;
+    };
+  `);
+  const originals = {menu:f.window.swarmMenu,plugin:f.window.swarmPluginRow,extensions:f.window.swarmExtensionMenu,
+    skills:f.window.swarmSkillCards,modal:f.window.swarmSidecarModal,
+    oldTab:f.window.swarmOldTabs.sidecarView.getTabTitle,newTab:f.window.swarmNewTabs.sidecarView.getTabTitle,
+    menuItem:f.evaluate('swarmMenuItem'),paneTitle:f.window.swarmPaneTitle,iframe:f.window.swarmIframe,
+    iframeType:f.window.swarmIframe.type,frames:f.window.swarmFrameHost,
+    messageTitle:f.window.swarmMessageTitle,sidecarLink:f.window.swarmSidecarLink};
+  const adapters = f.install();
+  const nodes = value => Array.isArray(value) ? value.flatMap(nodes) : value?.props ? [value,...nodes(value.props.children)] : [];
+  const slot = (view,id) => nodes(view).find(node=>node.props['data-testid']===id);
+  const description = "(Preview & Quota Heavy) Run a swarm: several agents working in parallel on one task, each in its own conversation, collaborating through a shared message board. Use when the work splits into pieces that can be done at the same time, or when a second pair of eyes should check the first pair's work.";
+  const expectedDescription = '（预览功能，额度消耗较高）启动协作群：多个智能体在各自的对话中并行处理同一任务，通过共享留言板协作。适合可同时开展的分工任务，或需要相互检查工作结果的场景。';
+  let renders = 0;
+  const info = Object.freeze({name:'swarm',type:2,definitionPath:'/fixture/builtin/skills/native_swarm/SKILL.md'});
+  const scopeItem = Object.freeze({case:'slashCommand',value:Object.freeze({info})});
+  const nativeItem = Object.freeze({scopeItem});
+  const item = Object.freeze({item:nativeItem,customDescription:description,queryMatches:Object.freeze({label:Object.freeze([])}),
+    getRenderInfo(){renders++;return {label:info.name,description:{text:description}};}});
+  let selections = 0;
+  const onSelect = () => { selections++;assert.equal(item.item,nativeItem);assert.equal(item.item.scopeItem.value.info,info); };
+  const menu = f.window.swarmMenu({item,selectAndClose:onSelect});
+  assert.equal(renders,1,'the native option renderer runs once');
+  assert.equal(slot(menu,'menu-option-label').props.children,'swarm（协作群）');
+  assert.equal(slot(menu,'menu-option-description').props.children,expectedDescription,'full localized copy replaces the native truncated display');
+  assert.equal(item.customDescription,description);assert.equal(info.name,'swarm');assert.equal(scopeItem.case,'slashCommand');
+  assert.equal(menu.props.onClickCapture,f.window.swarmNativeMenus.at(-1).props.onClickCapture);
+  menu.props.onClickCapture({preventDefault(){}});assert.equal(selections,1);
+  const customInfo = Object.freeze({...info,definitionPath:'/fixture/config/skills/swarm/SKILL.md'});
+  const customItem = Object.freeze({...item,item:{scopeItem:{...scopeItem,value:{info:customInfo}}}});
+  const customMenu = f.window.swarmMenu({item:customItem,selectAndClose:onSelect});
+  assert.equal(slot(customMenu,'menu-option-label').props.children.props.text,'swarm','a same-name custom skill stays native');
+  const coordinatorBlock=Object.freeze({block:Object.freeze({case:'markdown',value:'@coordinator original message'})});
+  const coordinatorInfo=Object.freeze({title:'Message from @coordinator',titleParts:Object.freeze([]),contentBlocks:Object.freeze([coordinatorBlock])});
+  assert.equal(f.window.swarmMessageTitle(coordinatorInfo),'来自 @协调员 的消息');
+  assert.equal(f.window.swarmMessageTitle({title:'Message to @coordinator'}),'发给 @协调员 的消息');
+  assert.equal(coordinatorInfo.title,'Message from @coordinator');assert.equal(coordinatorInfo.contentBlocks[0],coordinatorBlock);
+  assert.equal(coordinatorBlock.block.value,'@coordinator original message');
+  assert.equal(f.window.swarmMessageTitle({title:'Message from @coordinator-helper'}),'来自 @coordinator-helper 的消息');
+  const coordinatorPart=Object.freeze({part:Object.freeze({case:'text',value:'Message from @coordinator'})});
+  assert.equal(f.window.swarmMessageTitle({titleParts:[coordinatorPart]}),'Message from @coordinator','structured member data retains its internal handle');
+  let resolves=0,prevented=0;const linkTargets=[],linkNode=Object.freeze({raw:'Open the Swarm UI'});
+  const linkProps=Object.freeze({href:'sidecar://swarm/swarm_board/?tab=members',children:'Open the Swarm UI',node:linkNode,
+    resolveSidecarLink:()=>{resolves++;return {title:'Swarm',variant:'aux-pane',icon:'hub'}},onSidecarLinkClick:target=>linkTargets.push(target)});
+  const link=f.window.swarmSidecarLink(linkProps),nativeLink=f.window.swarmNativeLinks.at(-1);
+  assert.equal(link.props.children,'打开协作群界面');assert.equal(link.props.title,'协作群');assert.equal(link.props.icon,'hub');
+  assert.equal(link.props.onClick,nativeLink.props.onClick);assert.equal(resolves,1);
+  link.props.onClick({preventDefault(){prevented++}});assert.equal(prevented,1);
+  assert.deepEqual(linkTargets,['swarm/swarm_board/?tab=members']);
+  assert.equal(linkProps.children,'Open the Swarm UI');assert.equal(linkProps.node,linkNode);
+  assert.equal(f.window.swarmSidecarLink({...linkProps,href:'sidecar://other/swarm_board/'}).props.children,'Open the Swarm UI');
+  assert.equal(f.window.swarmSidecarLink({...linkProps,children:'My custom swarm page'}).props.children,'My custom swarm page');
+
+  const plugin = Object.freeze({name:'swarm',displayName:'Swarm',path:'/fixture/builtin/plugins/swarm',description:'Unlock the power of agent swarms.'});
+  const toggles = [];
+  const card = f.window.swarmPluginRow({plugin,onTogglePlugin:(value,enabled)=>toggles.push([value,enabled])});
+  assert.equal(card.props.name,'协作群');assert.equal(card.props.description,'让多个智能体组成协作群，共同完成任务。');
+  assert.equal(card.props.path,plugin.path);assert.equal(plugin.displayName,'Swarm');
+  card.props.onToggle(true);assert.equal(toggles[0][0],plugin);assert.equal(toggles[0][1],true);
+  assert.equal(f.window.swarmPluginRow({plugin:{...plugin,path:'/fixture/config/plugins/swarm'}}).props.name,'Swarm');
+  const detailFixture = currentPluginHeaderFixture({}),action=()=>{},raw=Object.freeze({raw:'Swarm supplied content'}),MarkdownRenderer=()=>null;
+  const builtin = Object.freeze({...plugin,skills:[],agents:[],mcpServers:[],rules:[],themes:[],hooksJson:'[]',
+    readme:'# Swarm 原始文档',actions:action,dynamicContent:raw});
+  detailFixture.window.pluginState.installed=builtin;
+  detailFixture.install();
+  const detail = detailFixture.window.detailPage({installDir:builtin.path,MarkdownRenderer}).props.children;
+  assert.equal(detail[0].props.name,'协作群');assert.equal(detail[0].props.description,'让多个智能体组成协作群，共同完成任务。');
+  assert.equal(detail[0].props.actions,action);assert.equal(detail[2],raw);
+  const overviewOwner = detail[1].props.children[0];
+  assert.equal(overviewOwner.props.plugin,builtin);assert.equal(overviewOwner.props.chBuiltinSwarm,true);
+  assert.equal(detailFixture.window.O1b(overviewOwner.props).props.children[0].props.children.props.markdown,builtin.readme);
+  assert.equal(builtin.displayName,'Swarm');assert.equal(builtin.description,'Unlock the power of agent swarms.');
+  const customBuiltin = {...builtin,path:'/fixture/config/plugins/swarm'};
+  detailFixture.window.pluginState.installed=customBuiltin;
+  const customDetail = detailFixture.window.detailPage({installDir:customBuiltin.path,MarkdownRenderer}).props.children;
+  assert.equal(customDetail[0].props.name,'Swarm');assert.equal(customDetail[0].props.description,builtin.description);
+  assert.equal(customDetail[1].props.children[0].props.chBuiltinSwarm,undefined);
+  detailFixture.uninstall()();
+  const skill = Object.freeze({name:'swarm',path:info.definitionPath,description,content:'Run a swarm: raw skill instructions /swarm $&'});
+  const skillCard = f.window.swarmSkillCards({skills:[skill],showPaths:true}).props.children[0];
+  assert.equal(skillCard.props.title,'swarm（协作群）');assert.equal(skillCard.props.description,expectedDescription);
+  assert.equal(skillCard.props.content,skill.content);assert.equal(skillCard.props.copyPath,skill.path);
+
+  const view = Object.freeze({sidecarId:'swarm/swarm_board',path:'/',title:'Swarm'});
+  const foreignView = Object.freeze({...view,sidecarId:'other/swarm_board'}),opened = [];
+  const extensions = nodes(f.window.swarmExtensionMenu({views:[view,foreignView],onOpen:value=>opened.push(value)}))
+    .filter(node=>node.props['data-testid']==='plugins-submenu-item');
+  assert.notEqual(extensions[0].type,originals.menuItem,'the native menu child is reached through its lexical display wrapper');
+  assert.equal(extensions[0].props.children.props.children,'协作群');assert.equal(extensions[1].props.children.props.children,'Swarm');
+  extensions[0].props.onClick();assert.equal(opened[0],view);assert.equal(view.title,'Swarm');
+  const state = Object.freeze({type:'sidecarView',sidecarView:view});
+  for (const registry of [f.window.swarmOldTabs,f.window.swarmNewTabs]) {
+    assert.equal(registry.sidecarView.getTabTitle(state),'协作群');
+    assert.equal(registry.sidecarView.getTabTitle({type:'sidecarView',sidecarView:foreignView}),'Swarm');
+  }
+  assert.equal(state.sidecarView,view);assert.equal(view.title,'Swarm');
+  const views = Object.freeze([view,foreignView]);
+  assert.equal(f.window.swarmPaneTitle(state,views),'协作群','the live view resolver projects its title before the registry fallback');
+  assert.equal(f.window.swarmPaneTitle({type:'sidecarView',sidecarView:foreignView},views),'Swarm');
+  assert.equal(views[0],view);assert.equal(view.title,'Swarm');
+  const frameProps = Object.freeze({title:'Swarm',url:'plugin://swarm--swarm_board-49968/?token=unchanged&conversationId=fixture',
+    reloadTrigger:Object.freeze({generation:1}),visible:false});
+  const frame = f.window.swarmIframe.type(frameProps);
+  assert.equal(f.window.swarmIframe,originals.iframe,'the memo owner keeps its identity');
+  assert.equal(f.window.swarmIframeCalls.length,1,'the native iframe renderer executes once');
+  assert.equal(frame.frame.title,'协作群');assert.equal(frame.frame.dataset.testid,'sidecar-iframe');
+  assert.equal(frame.props.url,frameProps.url);assert.equal(frame.props.reloadTrigger,frameProps.reloadTrigger);
+  assert.equal(frame.props.visible,false);assert.equal(frameProps.title,'Swarm');
+  const foreignFrameProps = Object.freeze({...frameProps,url:'plugin://other--swarm_board-49968/'});
+  assert.equal(f.window.swarmIframe.type(foreignFrameProps).props,foreignFrameProps,'another plugin keeps its original props object');
+  const frameReceiver = Object.freeze({caller:'native frame slots'}),frameArg=Object.freeze({nativeArgument:true}),frameCalls=[];
+  let callbackProps=frameProps,nativeFrame;
+  const renderFrame=function(...args){frameCalls.push({receiver:this,args});return nativeFrame=f.window.A.createElement(originals.iframe,callbackProps);};
+  const placeholders=Object.freeze([{url:frameProps.url}]);
+  const frameHost=f.window.swarmFrameHost({placeholders,renderFrame}),nativeHost=f.window.swarmNativeFrameHosts.at(-1);
+  assert.equal(frameHost.props.placeholders,placeholders);assert.equal(frameHost.props.slotAttributes,nativeHost.props.slotAttributes);
+  assert.equal(frameCalls.length,0,'projecting the host does not execute its renderFrame callback');
+  const projectedFrame=frameHost.props.renderFrame.call(frameReceiver,frameProps.url,false,frameArg);
+  assert.equal(frameCalls.length,1);assert.equal(frameCalls[0].receiver,frameReceiver);
+  assert.deepEqual(frameCalls[0].args,[frameProps.url,false,frameArg]);
+  assert.equal(projectedFrame.type,originals.iframe);assert.equal(nativeFrame.props.title,'Swarm');
+  assert.equal(projectedFrame.props.url,frameProps.url);assert.equal(projectedFrame.props.reloadTrigger,frameProps.reloadTrigger);
+  assert.equal(projectedFrame.props.visible,false);assert.equal(frameProps.title,'Swarm');
+  assert.equal(originals.iframeType(projectedFrame.props).frame.title,'协作群','React can retain its cached original SimpleMemo renderer and still receive a translated title');
+  callbackProps=foreignFrameProps;
+  assert.equal(frameHost.props.renderFrame.call(frameReceiver,foreignFrameProps.url,false,frameArg),nativeFrame,'a foreign frame keeps the original returned element');
+  assert.equal(frameCalls.length,2,'each projected call invokes the native callback exactly once');
+  const sidecar = Object.freeze({sidecarId:view.sidecarId,config:Object.freeze({displayName:'Swarm'})});
+  const onClose = () => {};
+  const modalNodes = nodes(f.window.swarmSidecarModal({sidecar,pluginName:'swarm',onClose}));
+  assert.equal(modalNodes.find(node=>node.type===f.window.SwarmHeader).props.children,'协作群');
+  assert.deepEqual(Array.from(modalNodes.find(node=>node.props.className==='text-[11px] text-muted-foreground truncate').props.children),['直接在侧边窗格中查看和控制 ','协作群','。']);
+  assert.equal(modalNodes.find(node=>node.props['aria-label']==='Close').props.onClick,onClose);
+  assert.equal(sidecar.config.displayName,'Swarm');
+
+  adapters.setStrings({'swarm-ui:Swarm':'协作团队','swarm-ui:slash-label':'swarm（协作团队）',
+    'swarm-ui:Coordinator':'负责人','swarm-ui:Open the Swarm UI':'进入协作群界面'});
+  assert.equal(slot(f.window.swarmMenu({item,selectAndClose:onSelect}),'menu-option-label').props.children,'swarm（协作团队）');
+  assert.equal(f.window.swarmNewTabs.sidecarView.getTabTitle(state),'协作团队');
+  assert.equal(f.window.swarmPaneTitle(state,views),'协作团队');
+  assert.equal(f.window.swarmIframe.type(frameProps).frame.title,'协作团队');
+  assert.equal(f.window.swarmMessageTitle(coordinatorInfo),'来自 @负责人 的消息');
+  assert.equal(f.window.swarmSidecarLink(linkProps).props.children,'进入协作群界面');
+  f.uninstall()();
+  assert.equal(f.window.swarmMenu,originals.menu);assert.equal(f.window.swarmPluginRow,originals.plugin);
+  assert.equal(f.window.swarmExtensionMenu,originals.extensions);assert.equal(f.window.swarmSkillCards,originals.skills);
+  assert.equal(f.window.swarmSidecarModal,originals.modal);
+  assert.equal(f.window.swarmOldTabs.sidecarView.getTabTitle,originals.oldTab);assert.equal(f.window.swarmNewTabs.sidecarView.getTabTitle,originals.newTab);
+  assert.equal(f.window.swarmPaneTitle,originals.paneTitle);assert.equal(f.window.swarmIframe.type,originals.iframeType);
+  assert.equal(f.window.swarmFrameHost,originals.frames);
+  assert.equal(f.window.swarmMessageTitle,originals.messageTitle);assert.equal(f.window.swarmSidecarLink,originals.sidecarLink);
+  assert.equal(f.window.swarmNewTabs.sidecarView.getTabTitle(state),'Swarm');
 });

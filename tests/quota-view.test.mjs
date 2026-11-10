@@ -28,21 +28,30 @@ class Element {
   createTBody() { return this.appendChild(new Element('tbody')); }
   insertRow() { return this.appendChild(new Element('tr')); }
   insertCell() { return this.appendChild(new Element('td')); }
-  setCustomValidity() {}
+  setCustomValidity(message) { this.validationMessage = message; }
+  reportValidity() { return !this.validationMessage; }
   getBoundingClientRect() { return {left:10, top:10, right:110, bottom:30, width:100, height:20}; }
   addEventListener(type, callback) {
     if (!this.listeners.has(type)) this.listeners.set(type, new Set());
     this.listeners.get(type).add(callback);
   }
   removeEventListener(type, callback) { this.listeners.get(type)?.delete(callback); }
-  emit(type) {
-    const event = {preventDefault() {}, stopPropagation() {}};
-    for (const callback of this.listeners.get(type) ?? []) callback(event);
+  emit(type, properties = {}) {
+    const event = {target:this, defaultPrevented:false, propagationStopped:false,
+      preventDefault() { this.defaultPrevented = true; },
+      stopPropagation() { this.propagationStopped = true; }, ...properties};
+    let element = this;
+    do {
+      event.currentTarget = element;
+      for (const callback of element.listeners.get(type) ?? []) callback(event);
+      element = event.bubbles && !event.propagationStopped ? element.parentElement : null;
+    } while (element);
+    return event;
   }
   remove() { this.isConnected = false; }
 }
 
-function fixture(initialTime = new Date(2026, 9, 22, 12).getTime()) {
+function fixture(initialTime = new Date(2026, 9, 22, 12).getTime(), {windowGlobals = {}, actions = {}} = {}) {
   let now = initialTime, sequence = 0;
   const timers = new Map(), elements = [];
   const window = new Element('window');
@@ -51,6 +60,7 @@ function fixture(initialTime = new Date(2026, 9, 22, 12).getTime()) {
     const id = ++sequence; timers.set(id, {callback, at:now + delay}); return id;
   };
   window.clearTimeout = id => timers.delete(id);
+  Object.assign(window, windowGlobals);
   const document = new Element('document');
   document.defaultView = window; document.documentElement = {clientWidth:1200, clientHeight:800};
   document.createElement = tag => { const element = new Element(tag); elements.push(element); return element; };
@@ -58,7 +68,7 @@ function fixture(initialTime = new Date(2026, 9, 22, 12).getTime()) {
     constructor(...args) { super(...(args.length ? args : [now])); }
     static now() { return now; }
   }
-  const view = vm.runInNewContext(viewSource, {Date:ClockDate})(document, {});
+  const view = vm.runInNewContext(viewSource, {Date:ClockDate})(document, {}, actions);
   const button = key => elements.find(element => element.dataset.ring === key);
   const row = (key, label) => {
     const tooltip = elements.find(element => element.id === `context-${key}-tooltip`);
@@ -67,6 +77,11 @@ function fixture(initialTime = new Date(2026, 9, 22, 12).getTime()) {
   };
   return {
     view, timers, row, now:() => now,
+    element:testId => {
+      const element = elements.find(element => element.getAttribute('data-testid') === testId);
+      assert.ok(element, `view contains ${testId}`);
+      return element;
+    },
     settingReference:label => elements.find(element => element.className === 'setting-reference' && element.children[0]?.textContent === label)?.children[1].textContent,
     open:key => button(key).parentElement.emit('pointerenter'),
     close:key => button(key).parentElement.emit('pointerleave'),
@@ -82,6 +97,132 @@ function fixture(initialTime = new Date(2026, 9, 22, 12).getTime()) {
     }
   };
 }
+
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return {promise, resolve, reject};
+}
+const settle = () => new Promise(resolve => setImmediate(resolve));
+const subagentStatus = (targetTokens, extra = {}) => ({targetTokens, active:true, error:null, message:'已就绪', ...extra});
+function subagentBridge(initialRead) {
+  const listeners = new Set(), requests = [];
+  return {
+    api: {
+      getStatus:() => initialRead,
+      setLimit:tokens => {
+        const request = {tokens, ...deferred()}; requests.push(request); return request.promise;
+      },
+      subscribe:listener => { listeners.add(listener); return () => listeners.delete(listener); }
+    },
+    listeners, requests,
+    broadcast:status => { for (const listener of listeners) listener(status); }
+  };
+}
+
+test('subagent context is unavailable without its bridge and its keyboard events stay in the settings card', t => {
+  const f = fixture(); t.after(() => f.view.dispose());
+  for (const name of ['input', 'apply', 'reset']) {
+    assert.equal(f.element(`subagent-context-${name}`).disabled, true);
+  }
+  assert.equal(f.element('subagent-context-status').textContent, '子代理上下文服务未连接');
+  for (const type of ['keydown', 'keyup', 'keypress']) {
+    const event = f.element('subagent-context-input').emit(type, {key:'Enter', bubbles:true});
+    assert.equal(event.propagationStopped, true, `${type} does not reach the chat composer`);
+    assert.equal(event.defaultPrevented, false, `${type} retains normal input behavior`);
+  }
+});
+
+test('subagent context loads, saves independently of the main model, reports failures and restores defaults', async t => {
+  const read = deferred(), bridge = subagentBridge(read.promise), mainWrites = [];
+  const f = fixture(undefined, {windowGlobals:{__antigravitySubagentContext:bridge.api},
+    actions:{setContextLimit:tokens => mainWrites.push(tokens)}});
+  t.after(() => f.view.dispose());
+  const input = f.element('subagent-context-input'), form = f.element('subagent-context-form');
+  const apply = f.element('subagent-context-apply'), reset = f.element('subagent-context-reset');
+  const status = f.element('subagent-context-status');
+  assert.equal(input.disabled, true);
+  assert.equal(apply.disabled, true);
+  assert.equal(reset.disabled, true);
+  read.resolve(subagentStatus(256000)); await settle();
+  assert.equal(input.value, '256');
+  assert.equal(input.disabled, false);
+  assert.equal(apply.disabled, false);
+
+  f.view.update({contextSetting:{modelKey:'small-model', modelLabel:'Small Fixture', customLimit:null,
+    effectiveLimit:80000, defaultLimit:80000, maxLimit:98304, pending:false, supported:true, error:null}});
+  input.value = '500'; input.emit('input');
+  assert.equal(form.emit('submit').defaultPrevented, true);
+  await settle();
+  assert.equal(bridge.requests[0]?.tokens, 500000, 'subagents are not clamped to the main model capacity');
+  assert.deepEqual(mainWrites, [], 'subagent edits do not write the main model setting');
+  bridge.requests[0].resolve(subagentStatus(500000, {message:'子代理设置已应用'})); await settle();
+  assert.equal(input.value, '500');
+  assert.match(status.textContent, /子代理设置已应用/);
+
+  input.value = '600'; input.emit('input'); form.emit('submit'); await settle();
+  bridge.requests[1].resolve(subagentStatus(500000, {error:'配置保存失败', message:'配置保存失败'})); await settle();
+  assert.equal(input.value, '500', 'a rejected change retains the previously saved limit');
+  assert.match(status.textContent, /配置保存失败/);
+  assert.equal(apply.disabled, false, 'a failed save can be retried');
+
+  input.value = '700'; input.emit('input'); form.emit('submit'); await settle();
+  bridge.requests[2].reject(new Error('连接中断')); await settle();
+  assert.match(status.textContent, /连接中断/);
+  assert.equal(reset.disabled, false, 'transport failure does not leave the form locked');
+  reset.emit('click'); await settle();
+  assert.equal(bridge.requests[3]?.tokens, null);
+  bridge.requests[3].resolve(subagentStatus(null, {message:'已恢复默认'})); await settle();
+  assert.equal(input.value, '');
+  assert.match(status.textContent, /已恢复默认/);
+});
+
+test('subagent context rejects limits outside the positive uint32 range before calling the bridge', async t => {
+  const bridge = subagentBridge(Promise.resolve(subagentStatus(null)));
+  const f = fixture(undefined, {windowGlobals:{__antigravitySubagentContext:bridge.api}});
+  t.after(() => f.view.dispose());
+  await settle();
+  const input = f.element('subagent-context-input'), form = f.element('subagent-context-form');
+  for (const value of ['', '0', '4294967.296']) {
+    input.value = value; input.emit('input'); form.emit('submit'); await settle();
+    assert.ok(input.validationMessage, `invalid limit ${JSON.stringify(value)} is explained`);
+  }
+  assert.equal(bridge.requests.length, 0);
+});
+
+test('subagent broadcasts supersede stale reads and disposing unsubscribes and ignores late responses', async () => {
+  const read = deferred(), bridge = subagentBridge(read.promise);
+  const f = fixture(undefined, {windowGlobals:{__antigravitySubagentContext:bridge.api}});
+  const input = f.element('subagent-context-input'), status = f.element('subagent-context-status');
+  assert.equal(bridge.listeners.size, 1);
+  bridge.broadcast(subagentStatus(500000, {active:false, message:'等待子代理服务启动'})); await settle();
+  assert.equal(input.value, '500');
+  assert.match(status.textContent, /等待子代理服务启动/);
+  read.resolve(subagentStatus(256000)); await settle();
+  assert.equal(input.value, '500', 'an older initial read does not overwrite a broadcast');
+  assert.match(status.textContent, /等待子代理服务启动/);
+  bridge.broadcast(subagentStatus(600000, {message:'子代理服务已生效'})); await settle();
+  assert.equal(input.value, '600');
+  assert.match(status.textContent, /子代理服务已生效/);
+
+  input.value = '700'; input.emit('input'); f.element('subagent-context-form').emit('submit'); await settle();
+  assert.equal(bridge.requests[0]?.tokens, 700000);
+  f.view.dispose();
+  assert.equal(bridge.listeners.size, 0);
+  const disposedState = {input:input.value, status:status.textContent, disabled:input.disabled};
+  bridge.requests[0].resolve(subagentStatus(700000, {message:'迟到保存结果'}));
+  bridge.broadcast(subagentStatus(800000, {message:'卸载后的广播'})); await settle();
+  assert.deepEqual({input:input.value, status:status.textContent, disabled:input.disabled}, disposedState);
+
+  const lateRead = deferred(), lateBridge = subagentBridge(lateRead.promise);
+  const pending = fixture(undefined, {windowGlobals:{__antigravitySubagentContext:lateBridge.api}});
+  const pendingInput = pending.element('subagent-context-input'), pendingStatus = pending.element('subagent-context-status');
+  pending.view.dispose();
+  const beforeRead = {input:pendingInput.value, status:pendingStatus.textContent};
+  lateRead.resolve(subagentStatus(900000, {message:'卸载后的读取结果'})); await settle();
+  assert.equal(lateBridge.listeners.size, 0);
+  assert.deepEqual({input:pendingInput.value, status:pendingStatus.textContent}, beforeRead);
+});
 
 test('context settings name an unknown backend default and replace it when a catalog budget is available', t => {
   const f = fixture(); t.after(() => f.view.dispose());

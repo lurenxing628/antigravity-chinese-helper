@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { CdpClient } from './cdp.mjs';
+import { createBackendManager } from './backend-manager.mjs';
 
 const runtimeDir = dirname(fileURLToPath(import.meta.url));
 const stateDir = join(homedir(), 'Library/Application Support/AntigravityChineseHelper');
@@ -12,13 +13,18 @@ const socketPath = join(stateDir, 'helper.sock');
 const pidPath = join(stateDir, 'runner.pid');
 const statusPath = join(stateDir, 'status.json');
 const sourcePath = join(runtimeDir, 'renderer.js');
+const swarmSourcePath = join(runtimeDir, 'swarm-renderer.js');
 const dictionaryPath = join(runtimeDir, 'translations.json');
 const helperKey = '__antigravityChineseHelper';
+const backendBinding = '__aghBackendRequest';
+const backendBridgeKey = '__antigravitySubagentContext';
 const requestedShutdownTimeoutMs = Number(process.env.ANTIGRAVITY_HELPER_SHUTDOWN_TIMEOUT_MS ?? 8000);
 const shutdownTimeoutMs = Number.isFinite(requestedShutdownTimeoutMs) && requestedShutdownTimeoutMs > 0 ? requestedShutdownTimeoutMs : 8000;
 // Keep the returned script ID so shutdown can remove a registration in flight.
 const shutdownPreservedMethods = ['Page.addScriptToEvaluateOnNewDocument'];
 const knownApp = `location.protocol === 'https:' && location.hostname === '127.0.0.1' && globalThis.top === globalThis && typeof globalThis.electronNative?.getZoomLevel === 'function' && typeof globalThis.nativeStorage?.getItems === 'function'`;
+const swarmLocation = `location.protocol === 'plugin:' && /^swarm--swarm_board-\\d+$/.test(location.hostname) && location.pathname === '/'`;
+const knownSwarm = `(${swarmLocation}) && typeof globalThis.sidecar === 'object' && globalThis.sidecar !== null && Boolean(document.querySelector('[data-testid="swarm-loading"],[data-testid="swarm-board"],[data-testid="swarm-empty-state"]'))`;
 const sessions = new Map();
 const rejectedTargets = new Map();
 let bundle;
@@ -38,10 +44,74 @@ let appReachable = false;
 let lastHealth = 0;
 let interval;
 let server;
+let backend;
 const startedAt = new Date().toISOString();
+
+// Only numeric preferences and runtime status cross this bridge. Launching the
+// App is a separate, explicit menu action on the local helper socket.
+function installBackendBridge() {
+  if (globalThis.__antigravitySubagentContext) return;
+  const pending = new Map(), listeners = new Set();
+  let nextId = 0;
+  function request(method, tokens) {
+    return new Promise((resolve, reject) => {
+      const id = ++nextId;
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error('子代理上下文服务未响应，请重新加载助手后重试')); }, 15000);
+      pending.set(id, {resolve, reject, timer});
+      try { globalThis.__aghBackendRequest(JSON.stringify({id, method, tokens})); }
+      catch { clearTimeout(timer); pending.delete(id); reject(new Error('子代理上下文服务未连接')); }
+    });
+  }
+  const bridge = {
+    getStatus:() => request('status'),
+    setLimit:tokens => request('set-limit', tokens),
+    subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+    update(status) { for (const listener of listeners) { try { listener(status); } catch {} } },
+    settle({id, result, error}) {
+      const item = pending.get(id); if (!item) return;
+      pending.delete(id); clearTimeout(item.timer);
+      error ? item.reject(new Error(error)) : item.resolve(result);
+    },
+    dispose() {
+      for (const item of pending.values()) { clearTimeout(item.timer); item.reject(new Error('子代理上下文服务已断开')); }
+      pending.clear(); listeners.clear();
+      if (globalThis.__antigravitySubagentContext === bridge) delete globalThis.__antigravitySubagentContext;
+    },
+  };
+  globalThis.__antigravitySubagentContext = bridge;
+}
+
+async function publishBackendStatus() {
+  const status = backend?.getStatus();
+  if (!status || stopping) return;
+  await Promise.allSettled([...sessions.values()].filter(session => session.kind !== 'swarm').map(session => evaluate(session.client,
+    `(() => { if (${knownApp}) globalThis.${backendBridgeKey}?.update(${JSON.stringify(status)}); })()`)));
+  await saveStatus().catch(() => {});
+}
+
+async function handleBackendRequest(session, event) {
+  if (event.name !== backendBinding || stopping) return;
+  let request;
+  try { request = JSON.parse(event.payload); } catch { return; }
+  if (!Number.isSafeInteger(request?.id) || request.id < 1 || !['status','set-limit'].includes(request.method)) return;
+  const inContext = expression => session.client.call('Runtime.evaluate', {
+    contextId:event.executionContextId, expression, returnByValue:true, awaitPromise:true,
+  });
+  // A binding may also exist in embedded frames. Only the native top-level App
+  // document is allowed to change the helper's preference.
+  const identity = await inContext(`Boolean(${knownApp})`);
+  if (identity.result?.value !== true) return;
+  let result, error;
+  try {
+    await backend.ready;
+    result = request.method === 'status' ? backend.getStatus() : await backend.setLimit(request.tokens);
+  } catch (failure) { error = failure.message || '无法保存子代理上下文设置'; }
+  await inContext(`globalThis.${backendBridgeKey}?.settle(${JSON.stringify({id:request.id, result, error})})`);
+}
 
 function snapshot() {
   const connected = [...sessions.values()].filter((session) => session.client.connected);
+  const windows = connected.filter(session => session.kind !== 'swarm');
   const error = bundleError ?? lastError;
   return {
     running: !stopping,
@@ -49,11 +119,13 @@ function snapshot() {
     startedAt,
     status: stopping ? 'stopped' : error ? 'error' : connected.length ? 'running' : 'waiting',
     state: stopping ? 'stopped' : connected.length ? 'connected' : appReachable ? 'waiting-for-window' : 'waiting-for-app',
-    translatedWindows: connected.length,
-    connectedWindows: connected.length,
-    rendererVersion: connected.map((session) => session.version).find(Boolean) ?? null,
+    translatedWindows: windows.length,
+    connectedWindows: windows.length,
+    translatedSidecars: connected.filter(session => session.kind === 'swarm' && session.version).length,
+    rendererVersion: windows.map((session) => session.version).find(Boolean) ?? connected.map(session => session.version).find(Boolean) ?? null,
     dictionaryLoadedAt: bundle?.loadedAt ?? null,
     lastError: error,
+    subagentContext: backend?.getStatus() ?? null,
   };
 }
 
@@ -89,8 +161,9 @@ async function evaluate(client, expression, timeoutMs) {
 }
 
 async function loadBundle() {
-  const [source, dictionaryText, sourceStat, dictionaryStat] = await Promise.all([
-    readFile(sourcePath, 'utf8'), readFile(dictionaryPath, 'utf8'), stat(sourcePath), stat(dictionaryPath),
+  const [source, swarmSource, dictionaryText, sourceStat, swarmSourceStat, dictionaryStat] = await Promise.all([
+    readFile(sourcePath, 'utf8'), readFile(swarmSourcePath, 'utf8'), readFile(dictionaryPath, 'utf8'),
+    stat(sourcePath), stat(swarmSourcePath), stat(dictionaryPath),
   ]);
   // Parse before replacing a working bundle so a half-written dictionary leaves it active.
   const dictionary = JSON.parse(dictionaryText);
@@ -98,6 +171,7 @@ async function loadBundle() {
   const expression = `(() => {
     const install = () => {
       if (!(${knownApp})) return;
+      (${installBackendBridge.toString()})();
       if (globalThis.${helperKey}) return;
       globalThis.${helperKey} = (${source.trim().replace(/;\s*$/, '')})(${JSON.stringify(dictionary)});
     };
@@ -106,36 +180,54 @@ async function loadBundle() {
     // Page.domContentEventFired retries after the native preload bridge is ready.
     // Keeping the retry in the runner lets --stop cancel it completely.
   })()`;
+  const swarmExpression = `(() => {
+    if (!(${knownSwarm}) || globalThis.${helperKey}) return;
+    globalThis.${helperKey} = (${swarmSource.trim().replace(/;\s*$/, '')})(${JSON.stringify(dictionary)});
+  })()`;
   // Syntax validation never executes the renderer in Node.
   new Function(expression);
-  return { expression, dictionary, sourceMtime: sourceStat.mtimeMs, dictionaryMtime: dictionaryStat.mtimeMs, loadedAt: new Date().toISOString() };
+  new Function(swarmExpression);
+  return {
+    expression, dictionary, sourceMtime: sourceStat.mtimeMs, dictionaryMtime: dictionaryStat.mtimeMs,
+    swarm: {expression:swarmExpression, sourceMtime:swarmSourceStat.mtimeMs}, loadedAt:new Date().toISOString(),
+  };
+}
+
+function sessionRenderer(session, activeBundle = bundle) {
+  return session.kind === 'swarm' ? activeBundle.swarm : activeBundle;
+}
+
+function sessionIdentity(session) {
+  return session.kind === 'swarm' ? swarmLocation : knownApp;
 }
 
 async function installNow(session, mode) {
   if (session.closing || stopping) return false;
   const { client } = session;
   const activeBundle = bundle;
-  if (!(await evaluate(client, `Boolean(${knownApp})`))) return false;
+  const renderer = sessionRenderer(session, activeBundle);
+  const identity = sessionIdentity(session);
+  if (!(await evaluate(client, `Boolean(${identity})`))) return false;
   if (mode !== 'ensure') {
     if (session.scriptId) await client.call('Page.removeScriptToEvaluateOnNewDocument', { identifier: session.scriptId });
     session.scriptId = null;
   }
   if (mode === 'replace') {
-    await evaluate(client, `(() => { if (${knownApp}) { globalThis.${helperKey}?.uninstall?.(); delete globalThis.${helperKey}; } })()`);
+    await evaluate(client, `(() => { if (${identity}) { globalThis.${helperKey}?.uninstall?.(); delete globalThis.${helperKey}; } })()`);
   }
   if (!session.scriptId) {
-    const result = await client.call('Page.addScriptToEvaluateOnNewDocument', { source: activeBundle.expression });
+    const result = await client.call('Page.addScriptToEvaluateOnNewDocument', { source: renderer.expression });
     session.scriptId = result.identifier;
   }
   if (session.closing || stopping) return false;
   if (mode === 'refresh') {
-    await evaluate(client, `(() => { if (${knownApp}) globalThis.${helperKey}?.refresh(${JSON.stringify(activeBundle.dictionary)}); })()`);
+    await evaluate(client, `(() => { if (${identity}) globalThis.${helperKey}?.refresh(${JSON.stringify(activeBundle.dictionary)}); })()`);
   }
   // Also installs into a document that navigated while the script was replaced.
-  await evaluate(client, activeBundle.expression);
+  await evaluate(client, renderer.expression);
   const info = await evaluate(client, `(() => { const helper = globalThis.${helperKey}; return { active: Boolean(helper), version: typeof helper?.version === 'string' ? helper.version : null }; })()`);
   session.version = info?.version ?? null;
-  if (info?.active) session.sourceMtime = activeBundle.sourceMtime;
+  if (info?.active) session.sourceMtime = renderer.sourceMtime;
   return Boolean(info?.active);
 }
 
@@ -157,7 +249,7 @@ function disconnect(session, restoreEnglish) {
         const timeoutMs = stopping ? Math.max(0, shutdownDeadline - Date.now()) : undefined;
         if (timeoutMs !== 0) {
           // Send both removals together: a slow request must not hold up uninstall.
-          const cleanup = [evaluate(session.client, `(() => { if (${knownApp}) { globalThis.${helperKey}?.uninstall?.(); delete globalThis.${helperKey}; } })()`, timeoutMs)];
+          const cleanup = [evaluate(session.client, `(() => { if (${sessionIdentity(session)}) { globalThis.${helperKey}?.uninstall?.(); delete globalThis.${helperKey}; } if (${knownApp}) globalThis.${backendBridgeKey}?.dispose(); })()`, timeoutMs)];
           if (session.scriptId) cleanup.push(session.client.call('Page.removeScriptToEvaluateOnNewDocument', { identifier: session.scriptId }, timeoutMs));
           await Promise.allSettled(cleanup);
         }
@@ -186,11 +278,18 @@ async function portFromApp() {
   return null;
 }
 
-function eligibleTarget(target, port) {
-  if (target.type !== 'page') return false;
+function targetKind(target) {
   try {
     const page = new URL(target.url);
-    if (page.protocol !== 'https:' || page.hostname !== '127.0.0.1') return false;
+    if (target.type === 'page' && page.protocol === 'https:' && page.hostname === '127.0.0.1') return 'app';
+    if (target.type === 'iframe' && page.protocol === 'plugin:' && /^swarm--swarm_board-\d+$/.test(page.hostname) && page.pathname === '/') return 'swarm';
+  } catch { /* Ignore unrelated or invalid targets. */ }
+  return null;
+}
+
+function eligibleTarget(target, port) {
+  if (!targetKind(target)) return false;
+  try {
     const socket = new URL(target.webSocketDebuggerUrl);
     return socket.protocol === 'ws:' && ['127.0.0.1', 'localhost'].includes(socket.hostname) && Number(socket.port) === port;
   } catch { return false; }
@@ -231,21 +330,29 @@ async function discover() {
         client = await CdpClient.connect(target.webSocketDebuggerUrl);
         discoveryClient = client;
         if (stopping) { client.close(); break; }
-        // Native bridge identity excludes embedded localhost websites with the same origin.
-        if (!(await evaluate(client, `Boolean(${knownApp})`))) {
+        const kind = targetKind(target);
+        // The native bridge identifies the main App. Swarm's exact plugin
+        // address also admits a loading document so its DOM-ready event can install.
+        const identity = kind === 'swarm' ? swarmLocation : knownApp;
+        if (!(await evaluate(client, `Boolean(${identity})`))) {
           rejectedTargets.set(target.id, Date.now() + 10000);
           client.close();
           continue;
         }
-        session = { client, scriptId: null, version: null, navigationTimer: null, closing: false, operation: Promise.resolve() };
+        session = { client, kind, scriptId: null, version: null, navigationTimer: null, closing: false, operation: Promise.resolve() };
+        if (kind === 'app') {
+          await client.call('Runtime.addBinding', {name:backendBinding});
+          client.on('Runtime.bindingCalled', event => { void handleBackendRequest(session, event).catch(() => {}); });
+        }
         await client.call('Page.enable');
         client.on('Page.domContentEventFired', () => scheduleInstall(session));
-        client.on('Page.frameNavigated', (params) => { if (!params.frame?.parentId) scheduleInstall(session); });
+        client.on('Page.frameNavigated', (params) => { if (kind === 'swarm' || !params.frame?.parentId) scheduleInstall(session); });
         client.on('close', () => {
           clearTimeout(session.navigationTimer);
           if (sessions.get(target.id) === session) sessions.delete(target.id);
         });
-        if (!(await install(session))) throw new Error('Renderer did not initialize');
+        if (!(await install(session)) && !(kind === 'swarm' && await evaluate(client, `Boolean((${swarmLocation}) && document.readyState === 'loading')`)))
+          throw new Error('Renderer did not initialize');
         if (stopping) { await disconnect(session, true); break; }
         sessions.set(target.id, session);
         lastError = null;
@@ -260,9 +367,10 @@ async function discover() {
     if (stopping) return;
     if (Date.now() - lastHealth >= 10000) {
       lastHealth = Date.now();
+      await backend?.refresh();
       for (const [id, session] of sessions) {
         try {
-          const active = await evaluate(session.client, `Boolean((${knownApp}) && globalThis.${helperKey})`);
+          const active = await evaluate(session.client, `Boolean((${sessionIdentity(session)}) && globalThis.${helperKey})`);
           if (!active) await install(session);
         } catch {
           await disconnect(session, false);
@@ -297,7 +405,7 @@ function reload() {
     bundle = nextBundle;
     bundleError = null;
     await Promise.all([...sessions.values()].map(async (session) => {
-      try { await install(session, session.sourceMtime === bundle.sourceMtime ? 'refresh' : 'replace'); }
+      try { await install(session, session.sourceMtime === sessionRenderer(session).sourceMtime ? 'refresh' : 'replace'); }
       catch { lastError = 'renderer-reload-failed'; }
     }));
     await saveStatus();
@@ -314,8 +422,8 @@ function tick() {
   if (stopping) return Promise.resolve();
   tickPromise = (async () => {
     try {
-      const [sourceStat, dictionaryStat] = await Promise.all([stat(sourcePath), stat(dictionaryPath)]);
-      if (sourceStat.mtimeMs !== bundle.sourceMtime || dictionaryStat.mtimeMs !== bundle.dictionaryMtime) await reload();
+      const [sourceStat, swarmSourceStat, dictionaryStat] = await Promise.all([stat(sourcePath), stat(swarmSourcePath), stat(dictionaryPath)]);
+      if (sourceStat.mtimeMs !== bundle.sourceMtime || swarmSourceStat.mtimeMs !== bundle.swarm.sourceMtime || dictionaryStat.mtimeMs !== bundle.dictionaryMtime) await reload();
     } catch { bundleError = 'dictionary-reload-failed'; }
     await discover();
   })().finally(() => { tickPromise = null; });
@@ -333,6 +441,7 @@ function stop() {
     await Promise.all([
       discoverySettled,
       ...[...sessions.values()].map((session) => disconnect(session, true)),
+      backend?.dispose(),
     ]);
     sessions.clear();
     await saveStatus().catch(() => {});
@@ -347,6 +456,7 @@ function stop() {
 async function collect() {
   const windows = [];
   for (const session of sessions.values()) {
+    if (session.kind === 'swarm') continue;
     try {
       const unknown = await evaluate(session.client, `(() => { if (!(${knownApp})) return []; return globalThis.${helperKey}?.collectUnknown?.() ?? []; })()`);
       // Renderer owns the UI-only selection: no DOM scan or conversation capture here.
@@ -364,6 +474,7 @@ async function startServer() {
       if (req.method === 'GET' && req.url === '/status') result = snapshot();
       else if (req.method === 'POST' && req.url === '/reload') result = await reload();
       else if (req.method === 'POST' && req.url === '/collect') result = await collect();
+      else if (req.method === 'POST' && req.url === '/launch') { await backend.ready; result = await backend.launch(); }
       else if (req.method === 'POST' && req.url === '/stop') {
         await stop();
         res.end(JSON.stringify(snapshot()));
@@ -373,9 +484,9 @@ async function startServer() {
         result = { error: 'unknown-command' };
       }
       res.end(JSON.stringify(result));
-    } catch {
+    } catch (error) {
       res.statusCode = 500;
-      res.end(JSON.stringify({ error: 'command-failed' }));
+      res.end(JSON.stringify({ error: req.url === '/launch' ? error.message : 'command-failed' }));
     }
   });
   const listen = () => new Promise((resolve, reject) => {
@@ -402,15 +513,16 @@ async function startServer() {
 async function main() {
   const command = process.argv[2];
   if (command) {
-    const commands = { '--status': 'status', '--stop': 'stop', '--collect': 'collect', '--reload': 'reload' };
+    const commands = { '--status': 'status', '--stop': 'stop', '--collect': 'collect', '--reload': 'reload', '--launch':'launch' };
     if (!commands[command]) {
-      process.stderr.write('用法：node runner.mjs [--status | --stop | --collect | --reload]\n');
+      process.stderr.write('用法：node runner.mjs [--status | --stop | --collect | --reload | --launch]\n');
       process.exitCode = 2;
       return;
     }
-    try { process.stdout.write(`${JSON.stringify(await ipc(commands[command]), null, 2)}\n`); }
+    try { process.stdout.write(`${JSON.stringify(await ipc(commands[command], command === '--launch' ? 90000 : 15000), null, 2)}\n`); }
     catch (error) {
-      if (['ENOENT', 'ECONNREFUSED'].includes(error.code)) process.stdout.write(`${JSON.stringify({ running: false, status: 'stopped', state: 'stopped', translatedWindows: 0, connectedWindows: 0 }, null, 2)}\n`);
+      if (command === '--launch') { process.stderr.write(`${error.message || '无法启动 Antigravity'}\n`); process.exitCode = 1; }
+      else if (['ENOENT', 'ECONNREFUSED'].includes(error.code)) process.stdout.write(`${JSON.stringify({ running: false, status: 'stopped', state: 'stopped', translatedWindows: 0, connectedWindows: 0 }, null, 2)}\n`);
       else { process.stderr.write('汉化助手命令执行失败。\n'); process.exitCode = 1; }
     }
     return;
@@ -418,6 +530,8 @@ async function main() {
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
   bundle = await loadBundle();
   if (!(await startServer())) return;
+  backend = createBackendManager({stateDir, runtimeDir, onChange:() => { void publishBackendStatus(); }});
+  await backend.ready;
   await writeFile(pidPath, `${process.pid}\n`, { mode: 0o600 });
   process.once('SIGTERM', () => stop().catch(() => { process.exitCode = 1; }));
   process.once('SIGINT', () => stop().catch(() => { process.exitCode = 1; }));

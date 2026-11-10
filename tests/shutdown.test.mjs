@@ -35,7 +35,7 @@ class FakeSocket extends EventTarget {
   }
 }
 
-function runner(connect = () => { throw new Error('Unexpected connection'); }) {
+function runner(connect = () => { throw new Error('Unexpected connection'); }, overrides = {}) {
   const context = vm.createContext({
     CdpClient: { connect }, dirname, join, fileURLToPath,
     homedir: () => '/mock-home',
@@ -47,9 +47,10 @@ function runner(connect = () => { throw new Error('Unexpected connection'); }) {
       webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/new-window',
     }] }),
     URL, AbortSignal, setTimeout, clearTimeout, clearInterval,
+    ...overrides,
   });
   vm.runInContext(runnerSource + `\n globalThis.runnerTest = {
-    sessions, stop, discover, disconnect,
+    sessions, stop, discover, disconnect, install, reload, loadBundle, snapshot, eligibleTarget,
     setDiscoverySettled(value) { discoverySettled = value; },
     setBundle(value) { bundle = value; },
   };`, context, { filename: 'runtime/runner.mjs' });
@@ -101,6 +102,81 @@ test('stop cancels ordinary work and sends cleanup before discovery or script re
   }
 });
 
+test('Swarm frames use their own renderer lifecycle without receiving the main App settings bridge', async () => {
+  const source = `(function installSwarm(dictionary) {
+    globalThis.starts = (globalThis.starts ?? 0) + 1;
+    globalThis.display = dictionary.strings.Board;
+    return {version:'sidecar-v1',refresh(next) { globalThis.display = next.strings.Board; },
+      uninstall() { globalThis.restores = (globalThis.restores ?? 0) + 1; globalThis.display = 'Board'; }};
+  })`;
+  const files = { 'renderer.js':'(function() { throw new Error("Main App renderer must not run in Swarm"); })',
+    'swarm-renderer.js':source, 'translations.json':JSON.stringify({strings:{Board:'看板'}}) };
+  const mtimes = {'renderer.js':1,'swarm-renderer.js':2,'translations.json':3};
+  const target = { id:'swarm', type:'iframe', url:'plugin://swarm--swarm_board-5000/?token=fixture',
+    webSocketDebuggerUrl:'ws://127.0.0.1:9222/devtools/page/swarm' };
+  let loaded = false;
+  const page = vm.createContext({location:{protocol:'plugin:',hostname:'swarm--swarm_board-5000',pathname:'/'},
+    top:{},sidecar:{},document:{readyState:'loading',querySelector:() => loaded ? {} : null}});
+  const calls = [], handlers = new Map();
+  let nextScript = 0;
+  const client = {connected:true,
+    async call(method,params) {
+      calls.push({method,params});
+      if (method === 'Runtime.evaluate') return {result:{value:vm.runInContext(params.expression,page)}};
+      if (method === 'Page.addScriptToEvaluateOnNewDocument') return {identifier:`script-${++nextScript}`};
+      return {};
+    },
+    on(name,handler) { handlers.set(name,handler); },cancelPending() {},
+    close() { this.connected=false;handlers.get('close')?.(); },
+  };
+  const basename = path => String(path).split('/').at(-1);
+  const helper = runner(async () => client, {
+    readFile:async path => files[basename(path)] ?? '9222\n',
+    stat:async path => ({mtimeMs:mtimes[basename(path)]}),
+    fetch:async () => ({ok:true,json:async () => [target]}),
+  });
+  assert.equal(helper.eligibleTarget(target,9222),true);
+  for (const unrelated of [
+    {...target,type:'page'},
+    {...target,url:'plugin://other--swarm_board-5000/'},
+    {...target,url:'plugin://swarm--swarm_board-5000/unrelated'},
+    {...target,webSocketDebuggerUrl:'ws://outside.invalid:9222/devtools/page/swarm'},
+  ]) assert.equal(helper.eligibleTarget(unrelated,9222),false);
+  helper.setBundle(await helper.loadBundle());
+  try {
+    await helper.discover();
+    const session = helper.sessions.get('swarm');
+    assert.ok(session,'a loading Swarm frame keeps its DOM-ready installation');
+    assert.equal(page.__antigravityChineseHelper,undefined);
+    assert.equal(helper.snapshot().translatedSidecars,0);
+    assert.equal(calls.some(call => call.method === 'Runtime.addBinding'),false);
+    loaded=true;page.document.readyState='complete';
+    handlers.get('Page.domContentEventFired')();
+    await new Promise(resolve => setTimeout(resolve,120));
+    const first = page.__antigravityChineseHelper;
+    assert.equal(first.version,'sidecar-v1');assert.equal(page.display,'看板');
+    assert.equal(page.__antigravitySubagentContext,undefined);
+    assert.equal(helper.snapshot().connectedWindows,0);
+    assert.equal(helper.snapshot().translatedSidecars,1);
+
+    files['translations.json']=JSON.stringify({strings:{Board:'共享看板'}});mtimes['translations.json']++;
+    await helper.reload();
+    assert.equal(page.__antigravityChineseHelper,first,'a dictionary refresh retains the instance');
+    assert.equal(page.display,'共享看板');assert.equal(page.starts,1);
+    mtimes['renderer.js']++;
+    await helper.reload();
+    assert.equal(page.__antigravityChineseHelper,first,'a main renderer edit does not reinstall Swarm');
+    files['swarm-renderer.js']=source.replace('sidecar-v1','sidecar-v2');mtimes['swarm-renderer.js']++;
+    await helper.reload();
+    assert.equal(page.__antigravityChineseHelper.version,'sidecar-v2');
+    assert.equal(page.starts,2);assert.equal(page.restores,1);
+    await helper.stop();
+    assert.equal(page.__antigravityChineseHelper,undefined);
+    assert.equal(page.display,'Board');assert.equal(page.restores,2);
+    assert.ok(calls.some(call => call.method === 'Page.removeScriptToEvaluateOnNewDocument'));
+  } finally { await helper.stop(); }
+});
+
 test('a connection completed after shutdown is closed without installing a renderer', async () => {
   const connection = deferred();
   const socket = new FakeSocket();
@@ -129,8 +205,8 @@ test('shutdown preserves a pending registration identifier and removes it withou
   let stopped;
 
   try {
-    // Let discovery identify the window, enable Page, then enter installNow.
-    for (const method of ['Runtime.evaluate', 'Page.enable', 'Runtime.evaluate']) {
+    // Let discovery identify the native window, bind settings, then enter installNow.
+    for (const method of ['Runtime.evaluate', 'Runtime.addBinding', 'Page.enable', 'Runtime.evaluate']) {
       await nextTurn();
       const request = socket.sent.at(-1);
       assert.equal(request?.method, method);
