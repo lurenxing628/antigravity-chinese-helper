@@ -4627,6 +4627,7 @@
     "timer-unit:h": "小时",
     "timer-unit:m": "分钟",
     "timer-unit:s": "秒",
-    "timer-default-name": "{duration}计时器"
+    "timer-default-name": "{duration}计时器",
+    "swarm-ui:tool-worker": "执行成员 {member}"
   }
 }

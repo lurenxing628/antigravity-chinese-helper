@@ -548,6 +548,33 @@ test('a transient title RPC failure retries once with the same model and prompt'
   assert.equal(f.controller.status().failed, 0);
 });
 
+test('a Chinese title with a long file name saves on the first attempt and remains applied after restart', async t => {
+  const source = '验收aps-architecture-consolidation-roadmap.md,检查是否完成，实现是否全面';
+  const title = 'aps-architecture-consolidation-roadmap.md 验收与完整性检查';
+  const storage = memoryStorage();
+  const f = fixture({ storage, generate: () => ({ response: title }) });
+  let resumed;
+  t.after(() => { f.controller.dispose(); resumed?.controller.dispose(); });
+  await f.bind();
+  await f.client.startCascade({ cascadeId: 'new' });
+  await f.client.sendUserCascadeMessage(message('new', source));
+  await settle();
+  assert.equal(f.calls.generated.length, 1);
+  assert.ok(f.calls.generated[0].request.prompt.includes(source));
+  assert.equal(f.calls.saved.length, 1);
+  assert.equal(f.summary('new').annotations.title, title);
+  assert.equal(f.controller.status().failed, 0);
+  assert.equal(JSON.parse(storage.snapshot()['antigravityChineseHelper.title.auto.new']).phase, 'applied');
+  f.controller.dispose();
+  resumed = fixture({ storage, summaries: { new: f.summary('new') } });
+  await resumed.bind();
+  await resumed.controller.ready;
+  await settle();
+  assert.equal(resumed.summary('new').annotations.title, title);
+  assert.equal(resumed.calls.generated.length, 0);
+  assert.equal(resumed.calls.saved.length, 0);
+});
+
 test('an invalid English title retries once and saves a subsequent Chinese result', async t => {
   let attempts = 0;
   const f = fixture({ generate: () => ({ response: ++attempts === 1 ? 'Fix Login Button' : '修复登录界面' }) });

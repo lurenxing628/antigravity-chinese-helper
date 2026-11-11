@@ -1070,7 +1070,9 @@ test('agent and task list counts share native card and running-summary ownership
   for(const [tool,icon,prefix,text,expected,translatedPrefix] of [
     ['swarm','robot_2','Titled','swarm "A5 Stage 5.4b Round-2 Fixes $&"','协作群“A5 Stage 5.4b Round-2 Fixes $&”','已命名'],
     ['swarm','robot_2','Spawned','3 workers (@fix-b1-r2-1–@fix-b1-r2-3)','3 个执行成员（@fix-b1-r2-1–@fix-b1-r2-3）','已启动'],
+    ['swarm','robot_2','Spawned','worker @s2-plan-b1','执行成员 @s2-plan-b1','已启动'],
     ['swarm','robot_2','Killed','3 workers (@fix-b1-r2-1–@fix-b1-r2-3)','3 个执行成员（@fix-b1-r2-1–@fix-b1-r2-3）','已终止'],
+    ['swarm','robot_2','Killed','worker @s2-b1','执行成员 @s2-b1','已终止'],
     ['swarm','robot_2','Checked','swarm status (A5 Stage 5.4b Round-2 Fixes)','协作群状态（A5 Stage 5.4b Round-2 Fixes）','已检查'],
     ['read_board','forum','Read','1 message from board (#2)','1 条留言板消息（#2）','已读取'],
     ['read_board','forum','Read','board (0 messages)','留言板（0 条消息）','已读取'],
