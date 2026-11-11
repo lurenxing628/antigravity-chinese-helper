@@ -541,8 +541,9 @@ test('summary item nouns install before compiled running and completed summaries
   f.evaluate(`var items = function items({count,artifacts}) {
     return count>0?artifacts?count===1?"artifact":"artifacts":count===1?"file":"files":"";
   };
-  var group = function group({steps:a,isRunning:b}) {
-    if(b)return "Working";
+  var group = function group({steps:a,isRunning:b,focus:c}) {
+    if(c)return c;
+    if(b)return a.active?running(a.active):"Working";
     var parts=[];
     if(a.other){const n=items({count:a.other,artifacts:a.artifacts});parts.push(n?\`Explored \${n}\`:"Explored");}
     if(a.commands)parts.push(\`\${parts.length===0?"Ran":"ran"} \${a.commands===1?"command":"commands"}\`);
@@ -551,12 +552,31 @@ test('summary item nouns install before compiled running and completed summaries
   };
   var running = function running(input) {
     const marker={toolSummary:input};
-    return input.edit?\`Editing \${items(input)}\`:input.command?"Running command":"Exploring";
-  };`);
+    if(input.command){
+      if(input.toolAction)return input.toolAction;
+      const text=input.toolSummary;
+      return text?/^running\\b/i.test(text)?text.replace(/^running\\b/i,"Running"):
+        \`Running \${decap(text)}\`:"Running command";
+    }
+    return input.edit?\`Editing \${items(input)}\`:"Exploring";
+  };
+  var decap=text=>!text||/^[A-Z]{2}/.test(text)?text:text.charAt(0).toLowerCase()+text.slice(1);`);
   f.install();
   assert.equal(f.window.group({steps:{other:2,commands:1,edits:3},isRunning:false}), '已查看 文件, 已运行 命令, 已编辑 文件');
   assert.equal(f.window.group({steps:{other:1,artifacts:true},isRunning:false}), '已查看 交付物');
   assert.equal(f.window.running({edit:true,count:2,artifacts:true}), '正在编辑 交付物');
+  for(const [toolSummary,expected] of [
+    ['Answer  Codex R2 $& questions on wrappers and naming','运行中 answer  Codex R2 $& questions on wrappers and naming'],
+    ['rUnNiNg  Answer $& questions','运行中  Answer $& questions']
+  ]) {
+    const active=Object.freeze({command:true,toolSummary});
+    assert.equal(f.window.running(active),expected);
+    assert.equal(f.window.group({steps:{active},isRunning:true}),expected);
+    assert.equal(active.toolSummary,toolSummary);
+  }
+  assert.equal(f.window.running({command:true}),'正在运行命令');
+  assert.equal(f.window.running({command:true,toolAction:'Running supplied action'}),'Running supplied action');
+  assert.equal(f.window.group({steps:{active:{command:true}},isRunning:true,focus:'Running supplied focus'}),'Running supplied focus');
   assert.equal(f.window.items({count:0}), '');
 });
 

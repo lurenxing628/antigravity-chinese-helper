@@ -2419,7 +2419,7 @@
   // item classifier first so both running and completed summaries use it.
   for (const [entry, words, templates, kind] of [
     [pathEntry, [], ['Editing', 'Reading', 'Listing', 'Searching'], 'status-path'],
-    [runningEntry, ['Running command', 'Exploring'], ['Editing'], 'status-running'],
+    [runningEntry, ['Running command', 'Exploring', 'Running'], ['Editing', 'Running'], 'status-running'],
     [groupEntry, ['Working', 'Thinking', 'Explored', 'Ran', 'ran', 'command', 'commands', 'Edited', 'edited', 'Done'], ['Explored'], 'status-group']
   ]) {
     if (!entry) continue;
