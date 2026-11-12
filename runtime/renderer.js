@@ -7,7 +7,7 @@
   if (!document.documentElement || !document.body) return null;
   window.__antigravityChineseHelper?.uninstall?.();
 
-  const VERSION = '0.3.35';
+  const VERSION = '0.3.38';
   let strings, normalizedStrings;
   setStrings(dictionary);
   let stopped = false;

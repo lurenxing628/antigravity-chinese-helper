@@ -1,12 +1,12 @@
 // Explicit integration check against an isolated copy; never uses the live App.
-// node tests/backend-native.integration.mjs [path/to/frida]
+// node tests/backend-native.integration.mjs [path/to/frida] [path/to/language_server]
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import { tmpdir, homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { launchBackendApp } from '../runtime/backend-launch.mjs';
 import { prepareBackendCopy, createBackendRuntime } from '../runtime/backend-runtime.mjs';
@@ -14,7 +14,7 @@ import { prepareBackendCopy, createBackendRuntime } from '../runtime/backend-run
 const require = createRequire(import.meta.url);
 const runtimeDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'runtime');
 const stateDir = await mkdtemp(join(tmpdir(), 'agh-native-budget-'));
-const officialBackendPath = '/Applications/Antigravity.app/Contents/Resources/bin/language_server';
+const officialBackendPath = resolve(process.argv[3] ?? '/Applications/Antigravity.app/Contents/Resources/bin/language_server');
 const fixturePath = join(stateDir, 'main.cjs');
 const pidPath = join(stateDir, 'backend.pid');
 const readyPath = join(stateDir, 'ready-consumed.json');
@@ -29,14 +29,17 @@ const isRunning = pid => {
   catch (error) { if (error.code === 'ESRCH') return false; throw error; }
 };
 let session, runtime, backendPid;
-let startupGateVerified = false;
+let startupGateVerified = false, buildCL;
 try {
-  const { binaryPath } = await prepareBackendCopy({officialBackendPath, stateDir});
+  const prepared = await prepareBackendCopy({officialBackendPath, stateDir});
+  const { binaryPath } = prepared;
+  buildCL = prepared.buildCL;
   const listener = createServer();
   await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve));
   const port = listener.address().port;
   await new Promise(resolve => listener.close(resolve));
   const backendArgs = ['--standalone','--headless','--disable_telemetry', `--gemini_dir=${join(stateDir, 'data')}`,
+    '--config_dir=isolated-config',
     `--http_server_port=${port}`, '--csrf_token=isolated-budget-check', '--override_model_name=gemini-2.5-pro-windsurf',
     '--cloud_code_endpoint=http://127.0.0.1:9','--api_server_url=http://127.0.0.1:9',
     '--analytics_server_url=http://127.0.0.1:9','--inference_api_server_url=http://127.0.0.1:9'];
@@ -73,7 +76,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => child.kil
   await (fridaModule.default ?? fridaModule).getLocalDevice();
   runtime = createBackendRuntime({
     fridaModulePath, hookSourcePath:join(runtimeDir, 'backend-hook.js'),
-    expectedBinaryPath:binaryPath, targetTokens:512000,
+    expectedBinaryPath:binaryPath, layout:prepared.layout, targetTokens:512000,
   });
   session = await launchBackendApp({
     enabled:true, appExecutable:process.execPath, appArgs:[fixturePath],
@@ -158,7 +161,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => child.kil
     while (next++ < 500) await resolveConfig(ordinary);
   }));
   assert.equal((await runtime.status()).native.lastBudget.applied, 512000);
-  assert.equal(existsSync(exitPath), false, 'Native process must survive concurrent Go stack growth');
+  assert.equal(existsSync(exitPath), false, '并发配置解析后后台必须保持运行');
   assert.equal(isRunning(backendPid), true);
   await runtime.detach();
   await resolveConfig(ordinary);
@@ -168,7 +171,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => child.kil
   assert.equal((await runtime.status()).native.lastBudget.applied, 768000);
   await resolveConfig(parent, 300000);
   assert.equal((await runtime.status()).native.parentLimit, 300000);
-  console.log(JSON.stringify({startupGateVerified, parentLimit:300000, childLimit:512000, clampedLimit:capped.capacity,
+  console.log(JSON.stringify({buildCL, startupGateVerified, parentLimit:300000, childLimit:512000, clampedLimit:capped.capacity,
     restoredDefault:256000, concurrentResolutions:500, reattachedLimit:768000}));
 } catch (error) {
   session ??= error.session;

@@ -4,13 +4,13 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
-import { createBackendRuntime, prepareBackendCopy } from './backend-runtime.mjs';
+import { createBackendRuntime, inspectBackendBinary, prepareBackendCopy } from './backend-runtime.mjs';
 import { connectBackendApp, launchBackendApp } from './backend-launch.mjs';
 
 const exec = promisify(execFile);
 const require = createRequire(import.meta.url);
-const savedMessage = '已保存。退出 Antigravity 后，从汉化助手菜单选择“通过助手启动 Antigravity”。';
-const runningMessage = 'Antigravity 正在运行。请先退出，再从此菜单启动，以启用子代理上下文设置。';
+const savedMessage = '已保存。正常退出 Antigravity 后，点击“Antigravity 汉化助手”图标启动。';
+const runningMessage = '已切到正在运行的 Antigravity，但本次子代理上下文覆盖未启用。请正常退出后，点击“Antigravity 汉化助手”图标重新启动。';
 
 function validLimit(tokens) {
   return tokens === null || Number.isSafeInteger(tokens) && tokens > 0 && tokens <= 4294967295;
@@ -74,46 +74,68 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
     const environment = JSON.parse(stdout).LSEnvironment ?? {};
     return { ...process.env, ...environment };
   }
-  async function validReceipt(receipt) {
+  async function inspectReceipt(receipt) {
     if (!receipt || !Number.isSafeInteger(receipt.appPid) || receipt.appPid <= 0 ||
-        !Number.isSafeInteger(receipt.backendPid) || receipt.backendPid <= 0) return false;
+        !Number.isSafeInteger(receipt.backendPid) || receipt.backendPid <= 0) return null;
     let inspector;
-    try { inspector = new URL(receipt.inspectorUrl); } catch { return false; }
-    if (inspector.protocol !== 'ws:' || inspector.hostname !== '127.0.0.1' || !inspector.port) return false;
+    try { inspector = new URL(receipt.inspectorUrl); } catch { return null; }
+    if (inspector.protocol !== 'ws:' || inspector.hostname !== '127.0.0.1' || !inspector.port) return null;
     const [app, official, helper, backendFolder, current] = await Promise.all([
       realpath(appExecutable), realpath(officialBackendPath), realpath(receipt.helperBackendPath),
       realpath(join(directory, 'backend')), processes(),
     ]);
     const ownedPath = relative(backendFolder, helper).split(sep);
-    return receipt.officialBackendPath === official && helper !== official &&
-      ownedPath.length === 2 && /^\d+$/.test(ownedPath[0]) && ownedPath[1] === 'language_server' &&
-      current.get(receipt.appPid) === app && current.get(receipt.backendPid) === helper;
+    if (receipt.officialBackendPath !== official || helper === official || ownedPath.length !== 2 ||
+        !/^\d+$/.test(ownedPath[0]) || ownedPath[1] !== 'language_server') return null;
+    return { appPid: receipt.appPid, backendPid: receipt.backendPid, appExecutable: app, helperBackendPath: helper,
+      matches: current.get(receipt.appPid) === app && current.get(receipt.backendPid) === helper };
+  }
+
+  async function reapOrphanedBackend(owned) {
+    if (!owned) return;
+    const appPid = owned.session?.appPid ?? owned.appPid;
+    if (!Number.isSafeInteger(appPid) || appPid <= 0) return;
+    const current = await processes();
+    if (current.get(appPid) === owned.appExecutable) return;
+    owned.appGone = true;
+    if (owned.backendGone || !Number.isSafeInteger(owned.backendPid) || owned.backendPid <= 0) return;
+    if (current.get(owned.backendPid) === owned.helperBackendPath) {
+      // Once its App has exited, only this recorded helper copy is ours to reap.
+      // Killing it also releases Frida requests stuck in its last native thread.
+      try { process.kill(owned.backendPid, 'SIGKILL'); }
+      catch (error) { if (error.code !== 'ESRCH') throw error; }
+    }
+    // A missing or reused PID also means the original native target has gone.
+    owned.backendGone = true;
   }
 
   async function releaseOwned(owned) {
     if (!owned) return;
-    if (owned.releasing) return owned.releasing;
     owned.cancelled = true;
+    // An earlier release may already be waiting on this now-orphaned backend.
+    await reapOrphanedBackend(owned);
+    if (owned.releasing) return owned.releasing;
     owned.releasing = (async () => {
-      let failure, appGone = false;
-      const appPid = owned.session?.appPid ?? owned.session?.getConnectionInfo?.().appPid ?? owned.appPid;
-      if (Number.isSafeInteger(appPid) && appPid > 0) {
-        try { appGone = (await processes()).get(appPid) !== owned.appExecutable; } catch {}
-      }
+      let failure;
       // Release an owned Inspector pause before waiting for native detachment.
       // A dead or replaced PID is no longer ours to resume or reconnect to.
-      if (!appGone) {
+      if (!owned.appGone) {
         try { await owned.session?.restore(); } catch (error) { failure = error; }
       }
+      // The App may have exited while its Inspector was being restored.
+      await reapOrphanedBackend(owned);
       try { await owned.runtime.dispose(); } catch (error) { failure ??= error; }
+      // An exited target has no live hooks left to restore. Frida can report
+      // its destruction before its detached notification reaches this runner.
+      if (owned.appGone && owned.backendGone) failure = null;
       if (owner === owned) {
-        if (appGone) {
+        if (owned.appGone) {
           try { await rm(receiptPath, { force: true }); } catch (error) { failure ??= error; }
         }
         if (!failure) owner = null;
       }
       if (failure) throw failure;
-      return { appGone };
+      return { appGone: Boolean(owned.appGone) };
     })();
     try { return await owned.releasing; }
     catch (error) { owned.releasing = null; throw error; }
@@ -128,19 +150,21 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
     }
     catch (cleanup) { publish({ active: false, error: `${error.message}；恢复正常执行失败：${cleanup.message}` }); }
   }
-  function createOwner(helperBackendPath, executable, appPid = null) {
-    const owned = { session: null, cancelled: false, attaching: false, releasing: null, appPid, appExecutable: executable,
+  function createOwner(helperBackendPath, executable, layout, appPid = null, backendPid = null) {
+    const owned = { session: null, cancelled: false, attaching: false, releasing: null, appPid, backendPid,
+      appExecutable: executable, helperBackendPath,
       runtime: createBackendRuntime({ fridaModulePath: fridaModulePath(), hookSourcePath: join(runtimeDir, 'backend-hook.js'),
-        expectedBinaryPath: helperBackendPath, targetTokens }) };
+        expectedBinaryPath: helperBackendPath, layout, targetTokens }) };
     owner = owned;
     return owned;
   }
   function callbacks(owned, official, helper) {
     return {
       async onBackendSpawn(pid, { signal, appPid, inspectorUrl }) {
+        owned.appPid = appPid;
+        owned.backendPid = pid;
         if (disposed || owned.cancelled || signal.aborted) throw new Error('子代理上下文连接已取消');
         owned.attaching = true;
-        owned.appPid = appPid;
         try {
           // This records ownership, not successful instrumentation. Keep it even
           // if the first attach fails so a helper reload can validate and reconnect.
@@ -165,16 +189,18 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
       publish({ active: false, error: null });
       const receipt = await readJson(receiptPath);
       if (!receipt || disposed) return getStatus();
-      let matches = false;
-      try { matches = await validReceipt(receipt); }
+      let candidate;
+      try { candidate = await inspectReceipt(receipt); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
-      if (!matches) {
+      if (!candidate?.matches) {
+        await reapOrphanedBackend(candidate);
         await rm(receiptPath, { force: true });
         return getStatus();
       }
-      const [helper, executable] = await Promise.all([realpath(receipt.helperBackendPath), realpath(appExecutable)]);
+      const { helperBackendPath: helper, appExecutable: executable } = candidate;
+      const layout = await inspectBackendBinary(helper);
       if (disposed) return getStatus();
-      const owned = createOwner(helper, executable, receipt.appPid);
+      const owned = createOwner(helper, executable, layout, receipt.appPid, receipt.backendPid);
       try {
         const session = await connectBackendApp({ enabled: true, ...receipt, helperBackendPath: helper,
           ...callbacks(owned, receipt.officialBackendPath, helper) });
@@ -241,11 +267,21 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
       });
     },
     launch() {
+      // Refresh may be waiting on an old native dispose inside the serial queue.
+      // Reap outside that queue so a new launch can release it after the App exits.
+      const orphanCleanup = disposed ? Promise.resolve(null)
+        : reapOrphanedBackend(owner).then(() => null, error => error);
       return serial(async () => {
         if (disposed) return { launched: false, message: '汉化助手已退出' };
         try {
+          const cleanupError = await orphanCleanup;
+          if (cleanupError) throw cleanupError;
           const executable = await realpath(appExecutable);
-          if ([...(await processes()).values()].includes(executable)) return { launched: false, message: runningMessage };
+          if ([...(await processes()).values()].includes(executable)) {
+            await exec('/usr/bin/open', [appPath], { timeout: 10000 });
+            const active = status.active && owner && !owner.appGone;
+            return { launched: false, message: targetTokens === null || active ? '' : runningMessage };
+          }
           if (disposed) return { launched: false, message: '汉化助手已退出' };
           await releaseOwned(owner);
           if (targetTokens === null) {
@@ -257,10 +293,10 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
           // Resolve dependencies before creating a copy or starting the app.
           fridaModulePath();
           const prepared = await prepareBackendCopy({ officialBackendPath: official, stateDir: directory });
-          const helper = await realpath(prepared.binaryPath);
+          const helper = prepared.binaryPath;
           const environment = await appEnvironment();
           if (disposed) return { launched: false, message: '汉化助手已退出' };
-          const owned = createOwner(helper, executable);
+          const owned = createOwner(helper, executable, prepared.layout);
           try {
             const session = await launchBackendApp({ enabled: true, appExecutable: executable,
               officialBackendPath: official, helperBackendPath: helper, env: environment,

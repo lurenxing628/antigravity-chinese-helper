@@ -1,13 +1,14 @@
 import { execFile } from 'node:child_process';
 import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { parseBackendMetadata } from './backend-metadata.mjs';
+import { deriveBackendLayout } from './backend-layout.mjs';
 
 const exec = promisify(execFile);
 const require = createRequire(import.meta.url);
-const supportedBuildCL = '1017595969';
 const entitlements = `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
   <key>com.apple.security.get-task-allow</key><true/>
@@ -15,14 +16,19 @@ const entitlements = `<?xml version="1.0" encoding="UTF-8"?>
 </dict></plist>
 `;
 
+/** Symbols, field layouts and the Go instruction/GC contract are one check. */
+export async function inspectBackendBinary(binaryPath) {
+  const binary = await readFile(binaryPath);
+  return deriveBackendLayout(binary, parseBackendMetadata(binary));
+}
+
 /** Prepare an independently signed copy; the official installation is read-only. */
 export async function prepareBackendCopy({ officialBackendPath, stateDir }) {
   const official = await realpath(officialBackendPath);
   const { stdout } = await exec(official, ['--stamp'], { timeout: 10000, maxBuffer: 1024 * 1024 });
   const buildCL = stdout.match(/^Built at CL: (\d+)\r?$/m)?.[1];
-  if (buildCL !== supportedBuildCL) {
-    throw new Error(`不支持的后端版本：${buildCL ?? '未返回 CL'}；当前仅支持 CL ${supportedBuildCL}`);
-  }
+  if (!buildCL) throw new Error('后台未返回有效的构建编号');
+  // 只解析实际将启动的副本，解析结果随副本交给连接流程复用。
 
   const folder = join(resolve(stateDir), 'backend', buildCL);
   await mkdir(folder, { recursive: true, mode: 0o700 });
@@ -37,8 +43,9 @@ export async function prepareBackendCopy({ officialBackendPath, stateDir }) {
     await exec('/usr/bin/codesign', ['--force', '--sign', '-', '--timestamp=none', '--entitlements', entitlementsPath, temporaryBinary],
       { timeout: 30000, maxBuffer: 1024 * 1024 });
     await exec('/usr/bin/codesign', ['--verify', '--strict', temporaryBinary], { timeout: 30000, maxBuffer: 1024 * 1024 });
+    const layout = await inspectBackendBinary(temporaryBinary);
     await rename(temporaryBinary, binaryPath);
-    return { binaryPath, buildCL };
+    return { binaryPath: await realpath(binaryPath), buildCL, layout };
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
@@ -52,7 +59,7 @@ function contextLimit(tokens) {
 }
 
 /** Own one local Frida session without depending on an MCP server or session ID. */
-export function createBackendRuntime({ fridaModulePath, hookSourcePath, expectedBinaryPath, targetTokens = null }) {
+export function createBackendRuntime({ fridaModulePath, hookSourcePath, expectedBinaryPath, layout, targetTokens = null }) {
   let limit = contextLimit(targetTokens);
   let connection = null;
   let disposed = false;
@@ -116,8 +123,9 @@ export function createBackendRuntime({ fridaModulePath, hookSourcePath, expected
         if (connection?.pid === pid && connection.initialized && !connection.session.isDetached()) return readStatus();
         await release(connection);
         lastError = detachedReason = null;
-        const [frida, source, binaryPath] = await Promise.all([
-          loadFrida(), readFile(hookSourcePath, 'utf8'), realpath(expectedBinaryPath),
+        const [frida, hook, codeMemory] = await Promise.all([
+          loadFrida(), readFile(hookSourcePath, 'utf8'),
+          readFile(join(dirname(hookSourcePath), 'backend-code-memory.js'), 'utf8'),
         ]);
         let current;
         try {
@@ -133,11 +141,11 @@ export function createBackendRuntime({ fridaModulePath, hookSourcePath, expected
           };
           session.detached.connect(current.onDetached);
           connection = current;
-          current.script = await session.createScript(source, { runtime: frida.ScriptRuntime.V8 });
+          current.script = await session.createScript(`${codeMemory}\n${hook}`, { runtime: frida.ScriptRuntime.V8 });
           await current.script.load();
-          // initialize verifies Process.mainModule.path and the supported native
-          // instructions before installing hooks. Loading alone installs none.
-          await current.script.exports.initialize(binaryPath, limit);
+          // Loading alone installs no hooks. initialize checks the owned module
+          // path and live instruction blocks, then activates native-only stubs.
+          await current.script.exports.initialize(expectedBinaryPath, limit, layout);
           current.initialized = true;
           return readStatus();
         } catch (error) {

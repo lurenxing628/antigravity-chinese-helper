@@ -3,11 +3,15 @@ set -euo pipefail
 
 project_dir="${0:A:h}"
 app_dir="$project_dir/Antigravity汉化助手.app"
-if /bin/ps -axo args= | /usr/bin/grep -Fx "$app_dir/Contents/MacOS/AntigravityChineseHelper" >/dev/null; then
+if /bin/ps -axo args= | /usr/bin/awk -v helper="$app_dir/Contents/MacOS/AntigravityChineseHelper" '$0 == helper || index($0, helper " ") == 1 { found = 1 } END { exit !found }'; then
     echo "请先从菜单栏退出汉化助手，再重新构建。" >&2
     exit 1
 fi
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
+icon_work_dir=$(/usr/bin/mktemp -d)
+trap '/bin/rm -rf "$icon_work_dir"' EXIT
+xcrun swift "$project_dir/packaging/GenerateIcon.swift" "$icon_work_dir/HelperIcon.iconset"
+/usr/bin/iconutil -c icns "$icon_work_dir/HelperIcon.iconset" -o "$app_dir/Contents/Resources/HelperIcon.icns"
 
 xcrun swiftc -O -target "$(/usr/bin/uname -m)-apple-macos12.0" -framework AppKit \
     "$project_dir/packaging/Helper.swift" \
@@ -30,6 +34,7 @@ cat > "$app_dir/Contents/Info.plist" <<PLIST
     <key>CFBundleDisplayName</key><string>Antigravity 汉化助手</string>
     <key>CFBundleExecutable</key><string>AntigravityChineseHelper</string>
     <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleIconFile</key><string>HelperIcon</string>
     <key>CFBundleShortVersionString</key><string>$app_version</string>
     <key>CFBundleVersion</key><string>$app_version</string>
     <key>LSMinimumSystemVersion</key><string>12.0</string>

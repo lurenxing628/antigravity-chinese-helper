@@ -5,6 +5,7 @@ import Foundation
 final class HelperDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem!
     private let statusLine = NSMenuItem(title: "正在启动汉化…", action: nil, keyEquivalent: "")
+    private let subagentLine = NSMenuItem(title: "正在读取子代理覆盖状态…", action: nil, keyEquivalent: "")
     private let toggleItem = NSMenuItem(title: "暂停汉化并恢复英文", action: #selector(toggleTranslation), keyEquivalent: "")
     private let launchItem = NSMenuItem(title: "通过助手启动 Antigravity", action: #selector(launchAntigravity), keyEquivalent: "")
     private var runner: Process?
@@ -33,6 +34,8 @@ final class HelperDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         let menu = NSMenu()
         statusLine.isEnabled = false
         menu.addItem(statusLine)
+        subagentLine.isEnabled = false
+        menu.addItem(subagentLine)
         menu.addItem(NSMenuItem.separator())
         launchItem.target = self
         menu.addItem(launchItem)
@@ -46,17 +49,24 @@ final class HelperDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         menu.addItem(item("退出并恢复英文", action: #selector(quitHelper)))
         statusItem.menu = menu
 
-        startRunner()
+        if CommandLine.arguments.contains("--background") {
+            startRunner()
+        } else {
+            launchAntigravity()
+        }
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             self?.refreshStatus()
         }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if wantsTranslation {
+            launchAntigravity()
+            return false
+        }
         guard let menu = statusItem?.menu else { return false }
         sender.activate(ignoringOtherApps: true)
-        // Reopening the app also exposes its controls when the status item is
-        // outside the visible menu bar. Reuse the same menu and actions.
+        // 暂停时只展示菜单，明确恢复之前不启动 Antigravity 或 runner。
         DispatchQueue.main.async {
             menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
         }
@@ -164,35 +174,39 @@ final class HelperDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidatio
     }
 
     private func refreshStatus() {
-        defer { statusItem.button?.toolTip = "Antigravity 汉化助手：\(statusLine.title)" }
+        defer { statusItem.button?.toolTip = "Antigravity 汉化助手：\(statusLine.title)；\(subagentLine.title)" }
         toggleItem.title = wantsTranslation ? "暂停汉化并恢复英文" : "恢复汉化"
         toggleItem.isEnabled = !stopping && !launching
         launchItem.title = launching ? "正在启动 Antigravity…" : "通过助手启动 Antigravity"
         launchItem.isEnabled = wantsTranslation && !stopping && !isQuitting && !launching
-        if stopping { return }
-        if !wantsTranslation {
-            statusLine.title = "已暂停 · 英文界面"
+        subagentLine.title = "正在读取子代理覆盖状态…"
+        if stopping {
+            subagentLine.title = "正在停止子代理覆盖…"
             return
         }
-        if launching {
-            statusLine.title = "正在通过助手启动 Antigravity…"
+        if !wantsTranslation {
+            statusLine.title = "已暂停 · 英文界面"
+            subagentLine.title = "子代理覆盖已暂停"
             return
         }
         if let error = lastError {
             statusLine.title = error
+            subagentLine.title = "子代理覆盖状态不可用"
             return
         }
         guard runner?.isRunning == true else {
             statusLine.title = "汉化助手尚未运行"
+            subagentLine.title = "子代理覆盖尚未运行"
             return
         }
         let path = supportFolder.appendingPathComponent("status.json")
         guard let data = try? Data(contentsOf: path),
               let value = try? JSONDecoder().decode(RunnerStatus.self, from: data) else {
-            statusLine.title = "正在连接 Antigravity…"
+            statusLine.title = launching ? "正在通过助手启动 Antigravity…" : "正在连接 Antigravity…"
             return
         }
-        statusLine.title = value.menuTitle
+        statusLine.title = launching ? "正在通过助手启动 Antigravity…" : value.menuTitle
+        subagentLine.title = value.subagentMenuTitle
     }
 
     private struct LaunchReply: Decodable {

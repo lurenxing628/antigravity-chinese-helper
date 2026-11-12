@@ -59,6 +59,7 @@ final class AppWatcher {
 
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
+        configuration.arguments = ["--background"]
         // The observer uses the helper's executable. Do not let LaunchServices
         // reuse this background process when opening the menu bar application.
         configuration.createsNewApplicationInstance = true

@@ -15,6 +15,7 @@ const helperBackendPath = join(stateDir, 'backend/1017595969/language_server');
 const configPath = join(stateDir, 'backend-context.json');
 const receiptPath = join(stateDir, 'backend-session.json');
 const receipt = {appPid:101, backendPid:202, inspectorUrl:'ws://127.0.0.1:9229/fixture', officialBackendPath, helperBackendPath};
+const fixtureLayout = { format:1, profile:'fixture-layout' };
 
 function deferred() {
   let resolve, reject;
@@ -32,7 +33,7 @@ function fixture({targetTokens = 400000, savedReceipt = null, running = [], conn
   if (savedReceipt) files.set(receiptPath, JSON.stringify(savedReceipt));
   const events = [], writes = [], sessions = [], runtimes = [], statuses = [];
   const behavior = {running:[...running], connectError, attachError, readyError, holdReady,
-    writeError:null, configureError:null, configureGate:null};
+    writeError:null, configureError:null, configureGate:null, disposeGate:null, disposeError:null, killError:null};
   let temporary = 0, launchSequence = 0;
   const absent = path => Object.assign(new Error(`ENOENT: ${path}`), {code:'ENOENT'});
   const execFile = (command, args, _options, callback) => {
@@ -68,7 +69,14 @@ function fixture({targetTokens = 400000, savedReceipt = null, running = [], conn
         return snapshot();
       },
       async status() { return snapshot(); },
-      async dispose() { events.push({type:'runtime-dispose'}); state.disposed = true; state.attached = false; return snapshot(); }
+      async dispose() {
+        events.push({type:'runtime-dispose'});
+        const error = behavior.disposeError; behavior.disposeError = null;
+        if (behavior.disposeGate) await behavior.disposeGate.promise;
+        state.disposed = true; state.attached = false;
+        if (error) throw error;
+        return snapshot();
+      }
     };
     runtimes.push(runtime); events.push({type:'runtime-create', options});
     return runtime;
@@ -111,7 +119,19 @@ function fixture({targetTokens = 400000, savedReceipt = null, running = [], conn
   const require = Object.assign(() => { throw new Error('No real module loading is allowed'); }, {resolve:path => path});
   const context = vm.createContext({
     execFile, promisify, join, resolve, relative, sep, homedir:() => '/fixture/home', createRequire:() => require,
-    process:{pid:303, env:{FROM_PROCESS:'host', SHARED_ENV:'host'}, kill() { assert.fail('manager must not kill a process'); }},
+    process:{pid:303, env:{FROM_PROCESS:'host', SHARED_ENV:'host'}, kill(pid, signal) {
+      events.push({type:'kill', pid, signal});
+      assert.equal(signal, 'SIGKILL');
+      assert.equal(behavior.running.find(([current]) => current === pid)?.[1], helperBackendPath,
+        'only the recorded helper backend may be terminated');
+      const error = behavior.killError; behavior.killError = null;
+      if (!error || error.code === 'ESRCH') {
+        behavior.running = behavior.running.filter(([current]) => current !== pid);
+        behavior.disposeGate?.resolve();
+      }
+      if (error) throw error;
+      return true;
+    }},
     readFile:async path => { if (!files.has(path)) throw absent(path); return files.get(path); },
     writeFile:async (path, value, options) => {
       writes.push({path, value:String(value), options}); events.push({type:'write', path});
@@ -123,7 +143,8 @@ function fixture({targetTokens = 400000, savedReceipt = null, running = [], conn
     realpath:async path => resolve(path),
     rename:async (from, to) => { if (!files.has(from)) throw absent(from); files.set(to, files.get(from)); files.delete(from); },
     rm:async path => { for (const key of files.keys()) if (key === path || key.startsWith(`${path}/`)) files.delete(key); },
-    prepareBackendCopy:async options => { events.push({type:'prepare', options}); return {binaryPath:helperBackendPath, buildCL:'1017595969'}; },
+    prepareBackendCopy:async options => { events.push({type:'prepare', options}); return {binaryPath:helperBackendPath, buildCL:'1017595969', layout:fixtureLayout}; },
+    inspectBackendBinary:async path => { events.push({type:'inspect', path}); return fixtureLayout; },
     createBackendRuntime,
     launchBackendApp:options => sessionFor('launch', options),
     connectBackendApp:options => sessionFor('connect', options),
@@ -213,10 +234,10 @@ test('launch respects running apps and clears exited or replaced owners before a
   const running = fixture({running:[[101, appExecutable]]}); t.after(() => running.manager.dispose());
   await running.manager.ready;
   const refused = await running.manager.launch();
-  assert.equal(refused.message, 'Antigravity 正在运行。请先退出，再从此菜单启动，以启用子代理上下文设置。');
+  assert.match(refused.message, /覆盖未启用/);
   assert.equal(running.count('prepare'), 0);
   assert.equal(running.count('launch'), 0);
-  assert.equal(running.events.some(event => event.command === '/usr/bin/open'), false);
+  assert.deepEqual(running.events.filter(event => event.command === '/usr/bin/open').map(event => event.args), [[appPath]]);
 
   const normal = fixture({targetTokens:null}); t.after(() => normal.manager.dispose());
   await normal.manager.ready; await normal.manager.launch();
@@ -225,7 +246,7 @@ test('launch respects running apps and clears exited or replaced owners before a
   assert.equal(normal.count('launch'), 0);
   assert.equal(normal.count('runtime-create'), 0);
 
-  for (const afterExit of [[], [[101, '/Applications/Other.app/Contents/MacOS/Other']]]) {
+  for (const afterExit of [[], [[101, '/Applications/Other.app/Contents/MacOS/Other']], [[202, '/fixture/reused-backend']]]) {
     const ended = fixture({savedReceipt:receipt, running:[[101, appExecutable], [202, helperBackendPath]]});
     t.after(() => ended.manager.dispose());
     await ended.manager.ready;
@@ -244,9 +265,88 @@ test('launch respects running apps and clears exited or replaced owners before a
     assert.equal(ended.count('launch'), 1);
     assert.equal(ended.manager.getStatus().active, true);
     assert.equal(ended.sessions[0].restored, false);
-    if (afterExit.length) assert.ok(ended.behavior.running.some(([pid, path]) => pid === 101 && path === afterExit[0][1]),
-      'the process reusing the old PID remains untouched');
+    assert.equal(ended.count('kill'), 0, 'missing or reused backend PIDs are never terminated');
+    for (const [oldPid, oldPath] of afterExit) assert.ok(
+      ended.behavior.running.some(([pid, path]) => pid === oldPid && path === oldPath),
+      'the process reusing an old PID remains untouched');
   }
+});
+
+test('重复打开只聚焦已有窗口，默认设置不准备后台副本', async t => {
+  const active = fixture();
+  t.after(() => active.manager.dispose());
+  await active.manager.ready;
+  const [first, repeated] = await Promise.all([active.manager.launch(), active.manager.launch()]);
+  assert.equal(first.launched, true);
+  assert.equal(repeated.launched, false);
+  assert.equal(repeated.message, '');
+  assert.equal(active.count('launch'), 1);
+  assert.equal(active.count('prepare'), 1);
+  assert.deepEqual(active.events.filter(event => event.command === '/usr/bin/open').map(event => event.args), [[appPath]]);
+
+  const defaultRunning = fixture({targetTokens:null, running:[[101, appExecutable]]});
+  t.after(() => defaultRunning.manager.dispose());
+  await defaultRunning.manager.ready;
+  const focused = await defaultRunning.manager.launch();
+  assert.equal(focused.launched, false);
+  assert.equal(focused.message, '');
+  assert.equal(defaultRunning.count('prepare'), 0);
+  assert.equal(defaultRunning.count('runtime-create'), 0);
+  assert.deepEqual(defaultRunning.events.filter(event => event.command === '/usr/bin/open').map(event => event.args), [[appPath]]);
+});
+
+test('a later launch reaps an orphan before the serial queue can finish its pending native disposal', {timeout:2000}, async t => {
+  const f = fixture({savedReceipt:receipt, running:[[101, appExecutable], [202, helperBackendPath]]});
+  const gate = deferred();
+  t.after(async () => { gate.resolve(); await f.manager.dispose(); });
+  await f.manager.ready;
+  f.behavior.disposeGate = gate;
+  f.behavior.disposeError = new Error('fixture native target was destroyed');
+  f.sessions[0].phase = 'failed';
+  const refreshing = f.manager.refresh();
+  await nextTurn();
+  assert.equal(f.count('runtime-dispose'), 1);
+  assert.equal(f.count('kill'), 0, 'Inspector loss cannot terminate a still-running App or its backend');
+
+  // The first release saw a live App. It exits while Frida is still waiting.
+  f.behavior.running = [[202, helperBackendPath]];
+  const launched = await f.manager.launch();
+  assert.equal(launched.launched, true, 'launch must reap before waiting behind refresh in the serial queue');
+  assert.equal((await refreshing).active, false);
+  assert.deepEqual(f.events.filter(event => event.type === 'kill'), [{type:'kill', pid:202, signal:'SIGKILL'}]);
+  assert.equal(f.manager.getStatus().active, true);
+  assert.equal(f.manager.getStatus().error, null, 'an ended Frida target cannot keep the old owner stuck');
+  assert.equal(JSON.parse(f.files.get(receiptPath)).appPid, 301);
+});
+
+test('an App exit reaps only its recorded backend before disposal and accepts an ESRCH exit race', {timeout:2000}, async t => {
+  const f = fixture({savedReceipt:receipt, running:[[101, appExecutable], [202, helperBackendPath]]});
+  const gate = deferred();
+  t.after(async () => { gate.resolve(); await f.manager.dispose(); });
+  await f.manager.ready;
+  f.behavior.running = [[202, helperBackendPath]];
+  f.behavior.disposeGate = gate;
+  f.behavior.killError = Object.assign(new Error('fixture backend already exited'), {code:'ESRCH'});
+  f.sessions[0].phase = 'exited';
+  const status = await f.manager.refresh();
+  assert.equal(status.active, false);
+  assert.equal(status.error, null);
+  assert.equal(f.files.has(receiptPath), false);
+  assert.ok(f.events.findIndex(event => event.type === 'kill') < f.events.findIndex(event => event.type === 'runtime-dispose'));
+  assert.equal(f.count('restore'), 0);
+  assert.equal((await f.manager.launch()).launched, true);
+});
+
+test('helper reload reaps a verified orphan before discarding its receipt', async t => {
+  const f = fixture({savedReceipt:receipt, running:[[202, helperBackendPath]]});
+  t.after(() => f.manager.dispose());
+  await f.manager.ready;
+  assert.deepEqual(f.events.filter(event => event.type === 'kill'), [{type:'kill', pid:202, signal:'SIGKILL'}]);
+  assert.equal(f.files.has(receiptPath), false);
+  assert.equal(f.count('connect'), 0);
+  assert.equal(f.count('runtime-create'), 0);
+  assert.equal(f.manager.getStatus().error, null);
+  assert.equal((await f.manager.launch()).launched, true);
 });
 
 test('enabled launch forwards bundle environment and restores owned sessions on failure or disposal', async () => {

@@ -3,12 +3,19 @@ set -euo pipefail
 
 source_dir="${0:A:h}"
 install_dir="$HOME/Library/Application Support/AntigravityChineseHelper/application"
+applications_dir="$HOME/Applications"
+app_entry="$applications_dir/Antigravity汉化助手.app"
 agent_label="local.antigravity.chinese-helper.watcher"
 agent_plist="$HOME/Library/LaunchAgents/$agent_label.plist"
 agent_target="gui/$(/usr/bin/id -u)/$agent_label"
 
 if /bin/ps -axo comm=,args= | /usr/bin/awk 'index($0, "/Antigravity汉化助手.app/Contents/MacOS/AntigravityChineseHelper") && !index($0, "--watch-antigravity") { found = 1 } END { exit !found }'; then
     echo "请先从菜单栏退出汉化助手，再重新安装。" >&2
+    exit 1
+fi
+
+if [[ -e "$app_entry" && ! -L "$app_entry" ]]; then
+    echo "应用程序入口已被现有文件占用，请先移走：$app_entry" >&2
     exit 1
 fi
 
@@ -23,6 +30,9 @@ mkdir -p "$install_dir"
 /bin/cp "$source_dir/关闭自动启动.command" "$install_dir/关闭自动启动.command"
 /bin/chmod +x "$install_dir/关闭自动启动.command"
 
+mkdir -p "$applications_dir"
+/bin/ln -sfn "$install_dir/Antigravity汉化助手.app" "$app_entry"
+
 mkdir -p "${agent_plist:h}"
 /usr/bin/plutil -create xml1 "$agent_plist"
 /usr/bin/plutil -insert Label -string "$agent_label" "$agent_plist"
@@ -35,5 +45,6 @@ mkdir -p "${agent_plist:h}"
 /bin/launchctl bootstrap "gui/$(/usr/bin/id -u)" "$agent_plist"
 
 echo "已安装到：$install_dir"
+echo "应用程序入口：$app_entry（可拖到 Dock，点击启动或聚焦 Antigravity）。"
 echo "已开启随 Antigravity 自动启动；Antigravity 已运行时会立即打开助手。"
 echo "关闭自动启动：双击安装目录中的“关闭自动启动.command”。"
