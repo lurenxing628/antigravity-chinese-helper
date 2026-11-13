@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBackendMetadata } from '../runtime/backend-metadata.mjs';
+import { parseBackendMetadata, prepareBackendMetadata, reserveBackendBudget } from '../runtime/backend-metadata.mjs';
 
 // A small, real-format Mach-O / pclntab / rtype fixture. Code addresses, Go
 // fields, descriptor locations and the moduledata tail can move independently.
 function fixture({ codeShift = 0, fieldShift = 0, typeShift = 0, boundary = 0x40,
-  reorderFields = false, duplicateFunction = false, duplicateType = false, wrongFieldType = false } = {}) {
+  reorderFields = false, duplicateFunction = false, duplicateType = false, wrongFieldType = false, wrongInterfaceKind = false } = {}) {
   const bytes = Buffer.alloc(0x9000), imageBase = 0x100000000;
   const text = 0x400 + codeShift, pcln = 0x1000, pclnSize = 0x1000, module = 0x700;
   const types = 0x2200, typesSize = 0x5000, gofunc = imageBase + pcln + 0xc00, rodata = imageBase + 0x800;
@@ -35,6 +35,8 @@ function fixture({ codeShift = 0, fieldShift = 0, typeShift = 0, boundary = 0x40
     'google3/third_party/jetski/cortex/utils/utils.ClampCheckpointConfigForModelInfo',
     'google3/third_party/jetski/cortex/config/config.GetModelInfoFromPlannerConfig',
     'google3/third_party/jetski/cortex/sdk/sdk.ResolveCustomAgentSpec',
+    'google3/third_party/oneharness/internal/core/core.runInvocationHooks',
+    'google3/third_party/oneharness/internal/core/core.(*Machine).stepPreInvocation',
   ];
   if (duplicateFunction) names.push(names[0]);
   const nameStart = pcln + 0x60, table = pcln + 0x500, tableSize = (names.length * 2 + 1) * 4;
@@ -88,9 +90,32 @@ function fixture({ codeShift = 0, fieldShift = 0, typeShift = 0, boundary = 0x40
     'cortex_go_proto.CascadePlannerConfig': [['PlanModel', 'codeium_common_go_proto.Model', 16], ['CustomModelInfoOverride', '*codeium_common_go_proto.ModelInfo', 32], ['MaxOutputTokens', 'uint32', 48]],
     'cortex_go_proto.CortexTrajectoryMetadata': [['ParentConversationId', 'string', 16], ['SubagentSpec', '*cortex_go_proto.SubagentSpec', 48]],
     'codeium_common_go_proto.ModelInfo': [['ModelId', 'codeium_common_go_proto.Model', 16], ['MaxTokens', 'int32', 24], ['MaxOutputTokens', 'int32', 32]],
+    'core.Machine': [['agent', '*core.Agent', 0], ['input', '*core.RunInput', 8]],
+    'core.RunInput': [['Trajectory', 'trajectory.Trajectory', 16], ['ExecutionMetadata', 'core.ExecutionMetadata', 144], ['MaxContextTokens', 'int', 224]],
+    'core.Agent': [['Serializer', 'core.Serializer', 168]],
+    'core.ExecutionMetadata': [['PlannerConfig', '*cortex_go_proto.CascadePlannerConfig', 16]],
+    'integration.AugmentedSerializer': [['Serializer', 'core.Serializer', 0]],
+    'serializers.DefaultSerializer': [['fallbackConverter', 'serializers.StepFallbackConverter', 176]],
+    'chatconverters.TrajectoryChatConverter': [['checkpointConfig', '*cortex_go_proto.CheckpointConfig', 16], ['plannerModelInfo', '*codeium_common_go_proto.ModelInfo', 32]],
+    'gemini_coder_go_proto.Step': [['Step', 'gemini_coder_go_proto.isStep_Step', 88]],
+    'gemini_coder_go_proto.Step_UserInput': [['UserInput', '*cortex_go_proto.CortexStepUserInput', 0]],
+    'cortex_go_proto.CortexStepUserInput': [['UserConfig', '*cortex_go_proto.CascadeConfig', 136]],
+    'trajectory.protoTrajectory': [['metadata', '*cortex_go_proto.CortexTrajectoryMetadata', 64]],
+    'dbtrajectory.dbTrajectory': [['pb', '*gemini_coder_go_proto.Trajectory', 48]],
+    'gemini_coder_go_proto.Trajectory': [['Metadata', '*cortex_go_proto.CortexTrajectoryMetadata', 152]],
+    'decorators.executionIDDecorator': [['Trajectory', 'trajectory.Trajectory', 0]],
+    'decorators.StagingDecorator': [['base', 'trajectory.Trajectory', 16]],
+    'decorators.stepEnricherDecorator': [['Trajectory', 'trajectory.Trajectory', 0]],
+    'decorators.TruncationDecorator': [['Trajectory', 'trajectory.Trajectory', 0]],
+    'decorators.AccumulatorDecorator': [['Trajectory', 'trajectory.Trajectory', 0]],
+    'decorators.AgentStateUpdaterDecorator': [['Trajectory', 'trajectory.Trajectory', 0]],
+    'decorators.TelemetryDecorator': [['Trajectory', 'trajectory.Trajectory', 0]],
+    'decorators.TranscriptLogDecorator': [['Trajectory', 'trajectory.Trajectory', 0]],
+    'decorators.replacerDecorator': [['Trajectory', 'trajectory.Trajectory', 0]],
+    'integration.iapiStrippingTrajectory': [['Trajectory', 'trajectory.Trajectory', 0]],
     'cortex_go_proto.SubagentSpec': [],
   };
-  for (const name of Object.keys(structures)) descriptors.set(name, descriptor(name, 25, 0x100, true));
+  for (const name of Object.keys(structures)) descriptors.set(name, descriptor(name, 25, name === 'core.ExecutionMetadata' ? 80 : 0x100, true));
   function fieldType(name) {
     if (descriptors.has(name)) return descriptors.get(name);
     let start;
@@ -98,7 +123,9 @@ function fixture({ codeShift = 0, fieldShift = 0, typeShift = 0, boundary = 0x40
       start = descriptor(name, 22, 8);
       u64(start + 48, imageBase + fieldType(name.slice(1)));
     } else {
-      const [kind, size] = name === 'string' ? [24, 16] : name === 'uint32' ? [10, 4] : name === 'bool' ? [1, 1] : [5, 4];
+      const interfaces = ['trajectory.Trajectory', 'core.Serializer', 'serializers.StepFallbackConverter', 'gemini_coder_go_proto.isStep_Step'];
+      const [kind, size] = interfaces.includes(name) ? [wrongInterfaceKind && name === 'core.Serializer' ? 24 : 20, 16] : name === 'int' ? [2, 8] :
+        name === 'string' ? [24, 16] : name === 'uint32' ? [10, 4] : name === 'bool' ? [1, 1] : [5, 4];
       start = descriptor(name, kind, size);
     }
     descriptors.set(name, start);
@@ -127,7 +154,7 @@ function fixture({ codeShift = 0, fieldShift = 0, typeShift = 0, boundary = 0x40
 test('metadata follows moved code, reordered fields and a moved moduledata boundary', () => {
   const first = fixture(), moved = fixture({ codeShift: 0x80, fieldShift: 8, typeShift: 0x100, boundary: 0x60, reorderFields: true });
   const original = parseBackendMetadata(first.bytes), result = parseBackendMetadata(moved.bytes);
-  assert.equal(Object.keys(result.functions).length, 7);
+  assert.equal(Object.keys(result.functions).length, 9);
   assert.equal(result.functions.getCascadeConfigForTrajectory.rva, moved.text + 0x10);
   assert.equal(result.functions.getCascadeConfigForTrajectory.fileOffset, moved.text + 0x10);
   assert.equal(result.functions.getCascadeConfigForTrajectory.size, 0x20);
@@ -135,6 +162,13 @@ test('metadata follows moved code, reordered fields and a moved moduledata bound
   assert.equal(result.types.CheckpointConfig.fields.MaxTokenLimit.offset, 48);
   assert.equal(original.types.CheckpointConfig.fields.MaxTokenLimit.offset, 24);
   assert.deepEqual(result.types.ModelInfo.fields.MaxTokens, { name: 'MaxTokens', offset: 32, type: 'int32', size: 4 });
+  assert.equal(result.functions.runInvocationHooks.rva, moved.text + 0xf0);
+  assert.equal(result.functions.stepPreInvocation.rva, moved.text + 0x110);
+  assert.equal(result.types.RunInput.fields.MaxContextTokens.offset, 24);
+  assert.equal(result.types.RunInput.fields.Trajectory.offset, 232);
+  assert.equal(result.types.ExecutionMetadata.size, 80);
+  assert.equal(result.types.TrajectoryChatConverter.rva - original.types.TrajectoryChatConverter.rva, 0x100);
+  assert.equal(result.types.StepUserInput.pointerRva - original.types.StepUserInput.pointerRva, 0x100);
   assert.deepEqual(result.scratchGC, {
     locals: { n: 2, nbit: 8, masks: [[0], [1]] },
     stackObjects: [{ offset: -16, size: 16, ptrBytes: 16, mask: [2] }],
@@ -152,6 +186,7 @@ test('required function and type names must identify one exact target', () => {
 
 test('the discovered field must still satisfy the configuration schema contract', () => {
   assert.throws(() => parseBackendMetadata(fixture({ wrongFieldType: true }).bytes), /field contract changed.*MaxTokenLimit/);
+  assert.throws(() => parseBackendMetadata(fixture({ wrongInterfaceKind: true }).bytes), /field contract changed.*Serializer/);
 });
 
 test('truncated or malformed executable metadata is rejected before returning hook data', () => {
@@ -172,4 +207,101 @@ test('GC data needs a unique module boundary and bounded locals and object masks
   assert.throws(() => parseBackendMetadata(locals.bytes), /function data is outside/);
   const object = fixture(); object.bytes.writeInt32LE(24, object.objects + 16);
   assert.throws(() => parseBackendMetadata(object.bytes), /invalid.*stack object/);
+});
+
+function reservableFixture() {
+  const value = fixture(), { bytes } = value;
+  bytes.writeUInt32LE(5, 32 + 56); bytes.writeUInt32LE(5, 32 + 60);
+  return value;
+}
+function appendCommand(bytes, command, length) {
+  const size = bytes.readUInt32LE(20), start = 32 + size;
+  bytes.fill(0, start, start + length);
+  bytes.writeUInt32LE(command, start); bytes.writeUInt32LE(length, start + 4);
+  bytes.writeUInt32LE(bytes.readUInt32LE(16) + 1, 16); bytes.writeUInt32LE(size + length, 20);
+  return start;
+}
+function leb(value) {
+  const bytes = [];
+  do { const part = value % 128; value = Math.floor(value / 128); bytes.push(part | (value ? 128 : 0)); } while (value);
+  return bytes;
+}
+
+test('declares one RX tail reservation without moving original code, Go metadata, or section ordinals', () => {
+  const { bytes } = reservableFixture(), before = parseBackendMetadata(bytes), originalCode = Buffer.from(bytes.subarray(0x400, 0x600));
+  assert.equal(before.budgetSlot, null);
+  const slot = reserveBackendBudget(bytes);
+  assert.deepEqual(slot, { rva:0x8000, size:0x1000, codeRva:0x8020, capacity:0xfe0 });
+  const declared = Buffer.from(bytes);
+  assert.deepEqual(reserveBackendBudget(bytes), slot);
+  assert.deepEqual(bytes, declared, '重复声明复用同一个NOTE，不追加命令或抢占新的范围');
+  const result = parseBackendMetadata(bytes);
+  assert.deepEqual(result.budgetSlot, slot);
+  assert.deepEqual(result.functions, before.functions);
+  assert.deepEqual(result.types, before.types);
+  assert.deepEqual(result.scratchGC, before.scratchGC);
+  assert.deepEqual(bytes.subarray(0x400, 0x600), originalCode);
+  assert.equal(bytes.readUInt32LE(32 + 64), 4, 'LC_NOTE不插入section');
+  const prepared = reservableFixture();
+  assert.deepEqual(prepareBackendMetadata(prepared.bytes), result, '产品准备入口直接复用同一Mach-O事实产生Go布局');
+  assert.deepEqual(prepared.bytes, bytes, '准备和只声明入口共用同一NOTE发布规则');
+});
+
+test('rejects insufficient header or RX tail padding and nonzero original padding before changing the copy', () => {
+  const header = reservableFixture();
+  header.bytes.writeBigUInt64LE(BigInt(header.imageBase + 0x1c0), 32 + 72 + 32);
+  header.bytes.writeUInt32LE(0x1c0, 32 + 72 + 48);
+  const original = Buffer.from(header.bytes);
+  assert.throws(() => reserveBackendBudget(header.bytes), /header has insufficient padding/);
+  assert.deepEqual(header.bytes, original);
+  const tail = reservableFixture(); tail.bytes.writeBigUInt64LE(0x7220n, 32 + 48);
+  assert.throws(() => reserveBackendBudget(tail.bytes), /insufficient single-page tail padding/);
+  const occupied = reservableFixture(); occupied.bytes[0x8000] = 1;
+  assert.throws(() => reserveBackendBudget(occupied.bytes), /padding is not zero-filled/);
+});
+
+test('link-edit payloads and section relocations cannot claim structurally unassigned padding', () => {
+  const payload = reservableFixture(), cmd = appendCommand(payload.bytes, 0x29, 16);
+  payload.bytes.writeUInt32LE(0x8000, cmd + 8); payload.bytes.writeUInt32LE(8, cmd + 12);
+  assert.throws(() => reserveBackendBudget(payload.bytes), /link-edit data occupies/);
+  const reloc = reservableFixture();
+  reloc.bytes.writeUInt32LE(0x8000, 32 + 72 + 56); reloc.bytes.writeUInt32LE(1, 32 + 72 + 60);
+  assert.throws(() => reserveBackendBudget(reloc.bytes), /section relocations occupies/);
+  const headerPayload = reservableFixture(), note = appendCommand(headerPayload.bytes, 0x31, 40);
+  headerPayload.bytes.write('OtherOwner', note + 8);
+  headerPayload.bytes.writeBigUInt64LE(BigInt(note + 40), note + 24);
+  headerPayload.bytes.writeBigUInt64LE(40n, note + 32);
+  assert.throws(() => reserveBackendBudget(headerPayload.bytes), /Mach-O note occupies the AGHBudget note header space/);
+});
+
+test('checks actual rebase and bind destinations rather than only their LINKEDIT byte ranges', () => {
+  for (const kind of ['rebase', 'bind']) {
+    const { bytes } = reservableFixture(), cmd = appendCommand(bytes, 0x80000022, 48);
+    const stream = kind === 'rebase' ? [0x11, 0x20, ...leb(0x8000), 0x51, 0] :
+      [0x11, 0x40, ...Buffer.from('_marker\0'), 0x51, 0x70, ...leb(0x8000), 0x90, 0];
+    bytes.set(stream, 0x7400);
+    const field = cmd + 8 + (kind === 'bind' ? 8 : 0);
+    bytes.writeUInt32LE(0x7400, field); bytes.writeUInt32LE(stream.length, field + 4);
+    assert.throws(() => reserveBackendBudget(bytes), /dyld fixup writes into/);
+  }
+});
+
+test('function entries and unsupported fixup formats prevent reserving the tail', () => {
+  const functions = reservableFixture(), cmd = appendCommand(functions.bytes, 0x26, 16);
+  const stream = [...leb(0x8000), 0]; functions.bytes.set(stream, 0x7400);
+  functions.bytes.writeUInt32LE(0x7400, cmd + 8); functions.bytes.writeUInt32LE(stream.length, cmd + 12);
+  assert.throws(() => reserveBackendBudget(functions.bytes), /function entry occupies/);
+  const chained = reservableFixture(); appendCommand(chained.bytes, 0x80000034, 16);
+  assert.throws(() => reserveBackendBudget(chained.bytes), /unsupported Mach-O command 0x80000034/);
+});
+
+test('reconnection revalidates a declared note against the structural tail and file payloads', () => {
+  const moved = reservableFixture(); reserveBackendBudget(moved.bytes);
+  const note = 32 + moved.bytes.readUInt32LE(20) - 40;
+  moved.bytes.writeBigUInt64LE(0x7000n, note + 24);
+  assert.throws(() => parseBackendMetadata(moved.bytes), /does not identify the structural RX tail/);
+  const payload = reservableFixture(); reserveBackendBudget(payload.bytes);
+  const cmd = appendCommand(payload.bytes, 0x29, 16);
+  payload.bytes.writeUInt32LE(0x8000, cmd + 8); payload.bytes.writeUInt32LE(8, cmd + 12);
+  assert.throws(() => parseBackendMetadata(payload.bytes), /link-edit data occupies/);
 });

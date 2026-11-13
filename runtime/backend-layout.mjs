@@ -1,5 +1,5 @@
 // This is one Go arm64 register-ABI compiler profile. It recognizes only the
-// three native blocks we replace; a different register/stack contract is refused.
+// four native entry words we replace; a different register/stack contract is refused.
 const profile = 'go-arm64-regabi-fp-v1';
 const unsupported = message => new Error(`Unsupported backend ABI: ${message}`);
 const check = (condition, message) => { if (!condition) throw unsupported(message); };
@@ -69,7 +69,8 @@ export function deriveBackendLayout(buffer, metadata) {
   check(Buffer.isBuffer(buffer), 'expected an executable Buffer');
   check(metadata?.arch === 'arm64' && metadata.pointerSize === 8, 'expected arm64 / 8-byte pointers');
   const names = ['getCascadeConfigForTrajectory', 'getCascadeConfig', 'GetCascadeConversationalConfigWithExperiment',
-    'clampAndValidateConfig', 'ClampCheckpointConfigForModelInfo', 'GetModelInfoFromPlannerConfig', 'ResolveCustomAgentSpec'];
+    'clampAndValidateConfig', 'ClampCheckpointConfigForModelInfo', 'GetModelInfoFromPlannerConfig', 'ResolveCustomAgentSpec',
+    'runInvocationHooks', 'stepPreInvocation'];
   const functions = {};
   for (const name of names) {
     const value = metadata.functions?.[name];
@@ -103,6 +104,14 @@ export function deriveBackendLayout(buffer, metadata) {
     CascadePlannerConfig:{ PlanModel:4, CustomModelInfoOverride:8, MaxOutputTokens:4 },
     CortexTrajectoryMetadata:{ ParentConversationId:16, SubagentSpec:8 },
     ModelInfo:{ ModelId:4, MaxTokens:4 },
+    Machine:{ agent:8, input:8 }, RunInput:{ Trajectory:16, ExecutionMetadata:80, MaxContextTokens:8 },
+    Agent:{ Serializer:16 }, ExecutionMetadata:{ PlannerConfig:8 }, AugmentedSerializer:{ Serializer:16 },
+    DefaultSerializer:{ fallbackConverter:16 }, TrajectoryChatConverter:{ checkpointConfig:8, plannerModelInfo:8 },
+    Step:{ Step:16 }, StepUserInput:{ UserInput:8 }, CortexStepUserInput:{ UserConfig:8 },
+    ProtoTrajectory:{ metadata:8 }, DbTrajectory:{ pb:8 }, Trajectory:{ Metadata:8 },
+    IapiStrippingTrajectory:{ Trajectory:16 }, ExecutionIDDecorator:{ Trajectory:16 }, StagingDecorator:{ base:16 }, StepEnricherDecorator:{ Trajectory:16 },
+    TruncationDecorator:{ Trajectory:16 }, AccumulatorDecorator:{ Trajectory:16 }, AgentStateUpdaterDecorator:{ Trajectory:16 },
+    TelemetryDecorator:{ Trajectory:16 }, TranscriptLogDecorator:{ Trajectory:16 }, ReplacerDecorator:{ Trajectory:16 },
   };
   for (const [typeName, wanted] of Object.entries(required)) {
     const type = metadata.types?.[typeName];
@@ -115,6 +124,11 @@ export function deriveBackendLayout(buffer, metadata) {
       fields[typeName][fieldName] = field.offset;
     }
   }
+  const typeRefs = Object.fromEntries(Object.keys(required).map(name => {
+    const { rva, pointerRva } = metadata.types[name];
+    check([rva, pointerRva].every(value => Number.isSafeInteger(value) && value >= 0 && value % 8 === 0), `missing runtime type reference ${name}`);
+    return [name, { rva, pointerRva }];
+  }));
   const outer = functions.getCascadeConfigForTrajectory, manager = functions.getCascadeConfig;
   const conversational = functions.GetCascadeConversationalConfigWithExperiment, clamp = functions.clampAndValidateConfig;
   const outerCall = call(outer, manager), managerCall = call(manager, conversational), conversationalCall = call(conversational, clamp);
@@ -143,6 +157,19 @@ export function deriveBackendLayout(buffer, metadata) {
     check(result.size >= 32 && result.size % 16 === 0, 'invalid Go frame size');
     return result;
   }
+  const hooks = functions.runInvocationHooks, preInvocation = functions.stepPreInvocation;
+  frame(hooks);
+  const preFrame = frame(preInvocation), preHookCall = call(preInvocation, hooks);
+  const machineSpill = preFrame.size + 8;
+  check(entries(preInvocation).some(item => item.pc > preFrame.end && item.pc < preHookCall && store(item.word, 0, 31, machineSpill)), 'pre-invocation machine spill changed');
+  const consumeRva = unique(entries(hooks).filter(item => {
+    if (item.pc + 24 > hooks.rva + hooks.size) return false;
+    const sequence = words(hooks, item.pc, 6), first = memory(sequence[0]), receiver = memory(sequence[2]), context = memory(sequence[3]);
+    return first?.load && !first.vector && first.rn === 31 && first.rt === 5 && first.size === 8 && !first.writeback &&
+      load(sequence[1], 5, 5, 0x30) && receiver?.load && !receiver.vector && receiver.rn === 31 && receiver.rt === 0 && receiver.size === 8 && !receiver.writeback &&
+      context?.load && !context.vector && context.rn === 31 && context.rt === 1 && context.rt2 === 2 && context.width === 8 && !context.writeback &&
+      move(sequence[4], 3, 4) && sequence[5] === 0xd63f00a0;
+  }), 'delivered-step append boundary').pc;
   const outerFrame = frame(outer);
   for (const fn of [manager, conversational, clamp]) frame(fn);
   const frameSize = outerFrame.size;
@@ -233,7 +260,7 @@ export function deriveBackendLayout(buffer, metadata) {
   // MOV and load/store blocks. Other arithmetic loses the known offset; using
   // such an address is refused. Go calls clobber all ordinary argument registers.
   // There is no callee analysis or recovery of arbitrary values/signatures.
-  const states = new Map(), pending = [{ pc:resetRva + 16, aliases:new Map([[29, new Set([-8])]]) }];
+  const states = new Map(), pending = [{ pc:resetRva + 4, aliases:new Map([[29, new Set([-8])]]) }];
   const cloneAliases = aliases => new Map([...aliases].map(([register, offsets]) => [register, new Set(offsets)]));
   const origin = (aliases, register) => register === 31 ? new Set([0]) : aliases.get(register);
   const assign = (aliases, register, offsets) => {
@@ -243,7 +270,7 @@ export function deriveBackendLayout(buffer, metadata) {
   };
   while (pending.length) {
     const { pc, aliases:incoming } = pending.pop();
-    check(pc >= resetRva + 16 && pc < outer.rva + outer.size && pc % 4 === 0, 'post-reset control flow leaves its verified lifetime');
+    check(pc >= resetRva + 4 && pc < outer.rva + outer.size && pc % 4 === 0, 'post-reset control flow leaves its verified lifetime');
     const previous = states.get(pc);
     if (previous) {
       let changed = false;
@@ -301,17 +328,13 @@ export function deriveBackendLayout(buffer, metadata) {
   }
   check(states.has(finalRva), 'successful return is unreachable after reset');
 
-  const site = (fn, rva, continueRva) => {
-    // A replaced middle instruction must never remain an original branch target.
-    for (const item of entries(fn)) {
-      const branch = jump(item.word, item.pc);
-      check(!branch || branch.target <= rva || branch.target >= rva + 16, 'a native branch enters the replaced block');
-    }
-    return { rva, originalWords:words(fn, rva, 4), continueRva };
-  };
-  return { format:1, profile, functions:Object.fromEntries(Object.entries(functions).map(([name, fn]) => [name, fn.rva])), fields,
-    sites:{ reset:site(outer, resetRva, outerCall), observe:{ ...site(clamp, observeRva, observeRva + 20), modelInfoRegister:0 },
-      final:site(outer, finalRva, finalRva + 16) },
+  // Keep a short verification block, but redirect only its first instruction.
+  // All later instructions, including original branch destinations, stay put.
+  const site = (fn, rva) => ({ rva, originalWords:words(fn, rva, 4), continueRva:rva + 4 });
+  return { format:1, profile, budgetSlot:metadata.budgetSlot ?? null, functions:Object.fromEntries(Object.entries(functions).map(([name, fn]) => [name, fn.rva])), fields, typeRefs,
+    sites:{ reset:site(outer, resetRva), observe:{ ...site(clamp, observeRva), modelInfoRegister:0 },
+      final:site(outer, finalRva), consume:site(hooks, consumeRva) },
+    consume:{ parentReturnRva:preHookCall + 4, machineSpill },
     callerReturnRvas:[conversationalCall + 4, managerCall + 4, outerCall + 4], frameSize,
     metadataSpill:metadataSpillOffset, clampCfgSpill, scratchOffset, scratchSize };
 }

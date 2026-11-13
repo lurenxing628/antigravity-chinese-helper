@@ -300,3 +300,23 @@ test('missing or disabled quotas do not count down; switching and disposing card
   f.open('weekly'); f.advance(60000);
   assert.equal(f.timers.size, 0, 'disposed event listeners cannot restart the timer');
 });
+
+
+test('main budget feedback confirms persistence and keeps native readiness separate', async t => {
+  let f;
+  const setting = {modelKey:'1417',modelLabel:'Fixture',customLimit:null,effectiveLimit:256000,defaultLimit:256000,
+    maxLimit:1032192,pending:false,supported:true,error:null,nativeReady:false,message:''};
+  f = fixture(undefined, {actions:{setContextLimit:async tokens => {
+    f.view.update({contextSetting:{...setting,customLimit:tokens,effectiveLimit:tokens,message:'设置已保存，等待后端接入'}});
+    return true;
+  }}});
+  t.after(() => f.view.dispose());
+  f.view.update({contextSetting:setting});
+  const input=f.element('context-limit-input'),apply=f.element('context-limit-apply'),status=f.element('context-limit-status');
+  input.value='512';input.emit('input');f.element('context-limit-form').emit('submit');await settle();
+  assert.equal(apply.textContent,'已保存');
+  assert.equal(status.textContent,'设置已保存，等待后端接入');
+  assert.equal(status.getAttribute('data-error'),'false');
+  f.view.update({contextSetting:{...setting,customLimit:512000,effectiveLimit:512000,nativeReady:true,message:'后端已接入'}});
+  assert.equal(status.textContent,'后端已接入','readiness-only broadcasts must update the visible message');
+});

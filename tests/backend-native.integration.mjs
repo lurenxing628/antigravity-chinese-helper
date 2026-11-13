@@ -1,27 +1,28 @@
 // Explicit integration check against an isolated copy; never uses the live App.
-// node tests/backend-native.integration.mjs [path/to/frida] [path/to/language_server]
+// node tests/backend-native.integration.mjs [path/to/language_server]
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
-import { tmpdir, homedir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { launchBackendApp } from '../runtime/backend-launch.mjs';
 import { prepareBackendCopy, createBackendRuntime } from '../runtime/backend-runtime.mjs';
 
-const require = createRequire(import.meta.url);
+const exec = promisify(execFile);
 const runtimeDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'runtime');
 const stateDir = await mkdtemp(join(tmpdir(), 'agh-native-budget-'));
-const officialBackendPath = resolve(process.argv[3] ?? '/Applications/Antigravity.app/Contents/Resources/bin/language_server');
+const officialBackendPath = resolve(process.argv[2] ?? '/Applications/Antigravity.app/Contents/Resources/bin/language_server');
+const machExecutablePath = join(stateDir, 'backend-mach');
 const fixturePath = join(stateDir, 'main.cjs');
 const pidPath = join(stateDir, 'backend.pid');
 const readyPath = join(stateDir, 'ready-consumed.json');
 const exitPath = join(stateDir, 'backend-exit.json');
 const logPath = join(stateDir, 'backend.log');
-const fridaModulePath = process.argv[2] ?? process.env.ANTIGRAVITY_HELPER_FRIDA
-  ?? join(homedir(), '.local/share/mcp-tools/frida-mcp/node_modules/frida');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const isRunning = pid => {
   if (!pid) return false;
@@ -31,6 +32,9 @@ const isRunning = pid => {
 let session, runtime, backendPid;
 let startupGateVerified = false, buildCL;
 try {
+  await exec('/usr/bin/xcrun', ['clang', '-O2', '-Wall', '-Wextra', join(runtimeDir, 'backend-mach.c'), '-o', machExecutablePath],
+    {timeout:30000});
+  await exec('/usr/bin/codesign', ['--force', '--sign', '-', '--timestamp=none', machExecutablePath], {timeout:30000});
   const prepared = await prepareBackendCopy({officialBackendPath, stateDir});
   const { binaryPath } = prepared;
   buildCL = prepared.buildCL;
@@ -70,12 +74,8 @@ child.once('close', (code, signal) => {
 });
 for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => child.kill('SIGTERM'));
 `);
-  // Cold Frida imports hid the original spawn/dyld race. Warm both operations
-  // before launch so attachment starts as soon as the production gate permits it.
-  const fridaModule = await import(pathToFileURL(require.resolve(fridaModulePath)).href);
-  await (fridaModule.default ?? fridaModule).getLocalDevice();
   runtime = createBackendRuntime({
-    fridaModulePath, hookSourcePath:join(runtimeDir, 'backend-hook.js'),
+    machExecutablePath,
     expectedBinaryPath:binaryPath, layout:prepared.layout, targetTokens:512000,
   });
   session = await launchBackendApp({
@@ -152,6 +152,30 @@ for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => child.kil
   const capped = (await runtime.status()).native.lastBudget;
   assert(capped.capacity > 512000 && capped.capacity < 2000000);
   assert.equal(capped.applied, capped.capacity);
+  // Losing the controller leaves the last published limit in the target. A new
+  // runtime adopts that installation instead of allocating another generation.
+  const installed = (await runtime.status()).native;
+  const assertSameInstallation = native => {
+    assert.equal(native.generation, installed.generation, 'Reconnect must retain the installation generation');
+    assert.equal(native.descriptor, installed.descriptor, 'The target retains one installation descriptor');
+    assert.equal(native.code, installed.code, 'Reconnect must retain the published code mapping');
+  };
+  const inspectRemovedInstallation = async () => {
+    const {stdout} = await exec(machExecutablePath, ['inspect', String(backendPid), binaryPath,
+      ...['reset', 'observe', 'final', 'consume'].map(name => String(prepared.layout.sites[name].rva))], {timeout:15000});
+    // The production inspector checks all three trailing words and RX mappings,
+    // including the retained NOTE/code after all four redirects are withdrawn.
+    const native = JSON.parse(stdout);
+    assertSameInstallation(native);
+    assert.equal(native.siteMask, 0);
+    assert.equal(native.initialized, false);
+    assert.equal(native.targetTokens, null);
+  };
+  runtime = createBackendRuntime({machExecutablePath, expectedBinaryPath:binaryPath,
+    layout:prepared.layout, targetTokens:512000});
+  assertSameInstallation((await runtime.attach(backendPid, {descriptor:installed.descriptor})).native);
+  await resolveConfig(ordinary);
+  assert.equal((await runtime.status()).native.lastBudget.applied, 512000);
   await runtime.setLimit(null);
   await resolveConfig(ordinary);
   assert.equal((await runtime.status()).native.lastBudget.applied, 256000);
@@ -164,15 +188,58 @@ for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => child.kil
   assert.equal(existsSync(exitPath), false, '并发配置解析后后台必须保持运行');
   assert.equal(isRunning(backendPid), true);
   await runtime.detach();
+  await inspectRemovedInstallation();
   await resolveConfig(ordinary);
-  await runtime.attach(backendPid);
+  assertSameInstallation((await runtime.attach(backendPid)).native);
   await runtime.setLimit(768000);
   await resolveConfig(ordinary);
   assert.equal((await runtime.status()).native.lastBudget.applied, 768000);
   await resolveConfig(parent, 300000);
   assert.equal((await runtime.status()).native.parentLimit, 300000);
+  // RunCommand is the backend's own Go process-creation path. Check observable
+  // output from every exec while the same target's budget hooks are withdrawn,
+  // reinstalled and configured, with no target-side agent or control thread.
+  let forkExecCommands = 0;
+  await Promise.all([
+    ...Array.from({length:8}, async () => {
+      for (let count = 0; count < 40; count++) {
+        const command = await rpc('RunCommand', {command:'/bin/echo',
+          args:['agh-native-fork-exec'], cwd:stateDir, timeoutMs:'5000'});
+        assert.equal(command.stdout, 'agh-native-fork-exec\n');
+        assert.equal(command.exitCode ?? 0, 0);
+        assert.equal(command.timedOut ?? false, false);
+        forkExecCommands++;
+      }
+    }),
+    (async () => {
+      for (let cycle = 0; cycle < 4; cycle++) {
+        await runtime.setLimit(null);
+        await runtime.setLimit(512000);
+        await runtime.detach();
+        await inspectRemovedInstallation();
+        assertSameInstallation((await runtime.attach(backendPid)).native);
+      }
+      await runtime.setLimit(768000);
+    })(),
+  ]);
+  assert.equal(forkExecCommands, 320);
+  await resolveConfig(ordinary);
+  assert.equal((await runtime.status()).native.lastBudget.applied, 768000);
+  assert.equal(existsSync(exitPath), false, '并发 fork→exec 和启停后后台必须保持运行');
+  const appExited = once(session.process, 'exit');
+  // 让夹具按正常信号处理关闭后台；不先卸载调试器，也不调用 restore。
+  session.process.kill('SIGTERM');
+  let exitDeadline;
+  try {
+    await Promise.race([appExited, new Promise((_, reject) => {
+      exitDeadline = setTimeout(() => reject(new Error('应用退出被调试连接阻塞')), 10000);
+    })]);
+  } finally { clearTimeout(exitDeadline); }
+  assert.equal(session.getStatus().phase, 'exited');
+  assert.equal((await runtime.status()).attached, false);
   console.log(JSON.stringify({buildCL, startupGateVerified, parentLimit:300000, childLimit:512000, clampedLimit:capped.capacity,
-    restoredDefault:256000, concurrentResolutions:500, reattachedLimit:768000}));
+    restoredDefault:256000, concurrentResolutions:500, reattachedLimit:768000,
+    adoptedGeneration:installed.generation, forkExecCommands, concurrentToggleCycles:4, normalExitVerified:true}));
 } catch (error) {
   session ??= error.session;
   if (existsSync(logPath)) console.error((await readFile(logPath, 'utf8')).slice(-524288));

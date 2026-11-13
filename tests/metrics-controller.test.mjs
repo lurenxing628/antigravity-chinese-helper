@@ -1,189 +1,6 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import test from 'node:test';
-import {setImmediate as nextTurn} from 'node:timers/promises';
-import vm from 'node:vm';
-
-const renderer = fs.readFileSync(new URL('../runtime/renderer.js', import.meta.url), 'utf8');
-const start = renderer.indexOf('(function createContextRingController');
-const end = renderer.indexOf('\n});', start);
-assert.ok(start >= 0 && end > start, 'the actual controller is present');
-const controllerSource = renderer.slice(start, end + 3);
-const model = 1417;
-const settle = async () => { await nextTurn(); await nextTurn(); };
-
-function deferred() {
-  let resolve, reject;
-  const promise = new Promise((done, fail) => { resolve = done; reject = fail; });
-  return {promise, resolve, reject};
-}
-
-function usage(input, output, cache) {
-  return {model, inputTokens:BigInt(input), outputTokens:BigInt(output), cacheReadTokens:BigInt(cache)};
-}
-
-function record(index, overrides = {}) {
-  return {stepIndices:[index], plannerConfig:{planModel:model}, metadata:{case:'chatModel', value:{
-    model, usage:usage(10, (index + 1) * (2 * (index + 1) + 1), 30),
-    timeToFirstToken:{seconds:BigInt(index + 1), nanos:500000000},
-    streamingDuration:{seconds:BigInt(index + 1), nanos:500000000},
-    ...overrides
-  }}};
-}
-
-function state(id, generation, {stepUsage, costSummary} = {}) {
-  return {conversationId:id, fullyIdle:false, costSummary, trajectorySlice:{
-    totalGeneratorMetadataLength:generation,
-    generatorMetadatasInSlice:generation ? [{stepIndices:[generation - 1], plannerConfig:{planModel:model}}] : [],
-    totalStepsLength:generation, stepsSlice:{startIndex:Math.max(0, generation - 1)},
-    stepsInSlice:stepUsage ? [{metadata:{modelUsage:stepUsage}}] : []
-  }};
-}
-
-function fixture(initial, {metadata = () => ({generatorMetadata:[]}), catalog, config, stored = {}, save, load, windowGlobals = {},
-  childStates = {}, byParent = {}, summaries = {}} = {}) {
-  let current = initial;
-  let viewId = initial?.conversationId;
-  const listeners = new Set();
-  const storageListeners = new Set();
-  const storeListeners = new Set();
-  const childListeners = new Map(), childProviders = new Map(), registryActive = new Map();
-  const calls = {metadata:[], catalog:0, catalogRequests:[], config:0, resolved:[], sent:[], saved:[], subscribed:[], unsubscribed:[]};
-  const selected = {value:model, label:'Gemini Fixture'};
-  let actions;
-  const provider = {
-    getState:() => current,
-    onDidChange(listener) { listeners.add(listener); return {dispose:() => listeners.delete(listener)}; }
-  };
-  const store = {
-    getState:() => ({trajectorySummaries:{summaries,indexes:{byParent}}}),
-    subscribe(listener) { storeListeners.add(listener); return () => storeListeners.delete(listener); }
-  };
-  function childProvider(id) {
-    if (!childProviders.has(id)) {
-      const listeners = new Set();
-      childListeners.set(id, listeners);
-      childProviders.set(id, {
-        getState:() => childStates[id],
-        onDidChange(listener) { listeners.add(listener); return {dispose:() => listeners.delete(listener)}; }
-      });
-    }
-    return childProviders.get(id);
-  }
-  const registry = {
-    getAgentStates:() => new Map([...childProviders].map(([id, provider]) => [id, {provider}])),
-    peek:id => childProviders.get(id),
-    subscribe(id) {
-      calls.subscribed.push(id);
-      registryActive.set(id, (registryActive.get(id) ?? 0) + 1);
-      return {agentStateProvider:childProvider(id), unsubscribe() {
-        calls.unsubscribed.push(id);
-        registryActive.set(id, registryActive.get(id) - 1);
-      }};
-    }
-  };
-  const client = {
-    getAvailableModels(request) {
-      calls.catalog++;
-      calls.catalogRequests.push({...request});
-      return catalog ? catalog(request) : Promise.resolve({models:{
-        fixture:{model, maxTokens:1048576, maxOutputTokens:65536, displayName:'Gemini Fixture'},
-        claude:{model:1402, maxTokens:1000000, maxOutputTokens:128000, displayName:'Claude Fixture'}
-      }});
-    },
-    getResolvedCascadeConfig(request) {
-      calls.config++;
-      calls.resolved.push(request);
-      return config ? config(request) : Promise.resolve({cascadeConfig:{
-        checkpointConfig:{enabled:true, maxTokenLimit:request?.overrideConfig?.checkpointConfig?.maxTokenLimit ?? 256000}, plannerConfig:{maxOutputTokens:65536}
-      }});
-    },
-    getCascadeTrajectoryGeneratorMetadata(request) {
-      calls.metadata.push({...request});
-      return metadata(request);
-    },
-    async sendUserCascadeMessage(request, options) { calls.sent.push({method:'message', request, options, receiver:this}); return 'message-result'; },
-    async sendAllQueuedMessages(request, options) { calls.sent.push({method:'queued', request, options, receiver:this}); return 'queued-result'; }
-  };
-  const createView = () => ({
-    host:{}, updates:[], disposed:false,
-    update(snapshot) {
-      assert.equal(this.disposed, false, 'a late callback must not write to a disposed view');
-      this.updates.push(structuredClone(snapshot));
-    },
-    dispose() { this.disposed = true; }
-  });
-  let view = createView();
-  let anchor = {
-    isConnected:true,
-    matches:selector => selector === '[data-testid="model-selector-trigger"]',
-    getAttribute:() => null,
-    closest:selector => selector === '[data-cascade-id]' ? {getAttribute:() => viewId} : null,
-    after(host) { assert.equal(host, view.host); },
-    __reactFiber$fixture:{memoizedProps:{value:{
-      cascadeContext:{state:{agentStateProvider:provider}}, selectedModel:selected
-    }}, return:{memoizedProps:{value:{store}}, return:{memoizedProps:{value:registry},
-      return:{memoizedProps:{services:{core:{authService:{_lsClient:client}}}}, return:null}}}}
-  };
-  const storage = {...stored};
-  const nativeStorage = {
-    getItems:async () => load ? load() : ({...storage}),
-    async updateItems(changes) {
-      await save?.(changes);
-      calls.saved.push({...changes});
-      for (const [key, value] of Object.entries(changes)) {
-        if (value === null) delete storage[key]; else storage[key] = value;
-      }
-      for (const listener of storageListeners) listener(changes);
-    },
-    onChanged(listener) { storageListeners.add(listener); return () => storageListeners.delete(listener); }
-  };
-  // The native protobuf runtime stores scalar defaults on message prototypes.
-  const checkpointSchema = {kind:'message', typeName:'exa.cortex_pb.CheckpointConfig', members:[
-    {fieldKind:'scalar', localName:'maxTokenLimit', default:0},
-    {fieldKind:'scalar', localName:'tokenThreshold', default:0},
-    {fieldKind:'scalar', localName:'enabled', default:false}
-  ]};
-  const cascadeSchema = {kind:'message', typeName:'exa.cortex_pb.CascadeConfig', fields:[{localName:'checkpointConfig', message:checkpointSchema}]};
-  const sendSchema = {kind:'message', typeName:'exa.language_server_pb.SendUserCascadeMessageRequest', fields:[{localName:'cascadeConfig', message:cascadeSchema}]};
-  function createNativeMessage(schema) {
-    const defaults = {};
-    for (const field of schema.members) if (field.fieldKind === 'scalar') defaults[field.localName] = field.default;
-    const message = Object.create(defaults);
-    message.$typeName = schema.typeName;
-    return message;
-  }
-  const document = {defaultView:{...windowGlobals, nativeStorage, sendSchema, createNativeMessage}};
-  const create = vm.runInNewContext(controllerSource, {queueMicrotask});
-  const controller = create(document, (_document, _anchor, callbacks) => {
-    actions = callbacks;
-    if (view.disposed) view = createView();
-    return view;
-  });
-  return {
-    controller, calls, get view() { return view; }, listeners, storeListeners, childListeners, registryActive, client, storage, nativeStorage,
-    mount:() => controller.discover(anchor),
-    remount() { anchor.isConnected = false; controller.cleanup(); anchor = {...anchor,isConnected:true}; controller.discover(anchor); },
-    rebindProvider() {
-      anchor.__reactFiber$fixture.memoizedProps.value.cascadeContext.state.agentStateProvider = {...provider};
-      controller.discover(anchor);
-    },
-    useClient(value) {
-      anchor.__reactFiber$fixture.return.return.return.memoizedProps.services.core.authService._lsClient = value;
-      controller.discover(anchor);
-    },
-    setLimit:tokens => actions.setContextLimit(tokens),
-    select(value, label = String(value)) { selected.value = value; selected.label = label; controller.discover(anchor); },
-    emit(next = current, id = next.conversationId ?? viewId) { current = next; viewId = id; for (const listener of listeners) listener(); },
-    emitChild(id, next = childStates[id]) {
-      childStates[id] = next;
-      for (const listener of childListeners.get(id) ?? []) listener();
-    },
-    setParents(next) { byParent = next; for (const listener of storeListeners) listener(); },
-    setSummary(id, summary) { summaries = {...summaries,[id]:summary}; for (const listener of storeListeners) listener(); },
-    snapshot:() => view.updates.at(-1)
-  };
-}
+import {fixture, model, settle, deferred, usage, record, state} from './helpers/metrics-fixture.mjs';
 
 test('paged history counts generators once and averages the last ten completed replies', async t => {
   const records = Array.from({length:14}, (_, index) => record(index));
@@ -879,7 +696,7 @@ test('context preferences survive reload, stay model-specific, and restore clean
   f.mount(); await settle();
   const request = {cascadeId:'A', cascadeConfig:{plannerConfig:{planModel:model}}};
   await f.client.sendUserCascadeMessage(request);
-  assert.equal(f.calls.sent.at(-1).request, request, 'no override means the original request passes through');
+  assert.equal(f.calls.sent.at(-1).request.cascadeConfig.checkpointConfig.maxTokenLimit, 256000, 'the resolved default is explicit for message consumption');
   await f.setLimit(500000); await settle();
   const other = {cascadeId:'other', cascadeConfig:{plannerConfig:{planModel:1402}}};
   await f.client.sendUserCascadeMessage(other);
@@ -905,7 +722,7 @@ test('context preferences survive reload, stay model-specific, and restore clean
   assert.equal(f.snapshot().contextSetting.customLimit, null);
   assert.equal(f.snapshot().contextSetting.effectiveLimit, 256000);
   await f.client.sendUserCascadeMessage(request);
-  assert.equal(f.calls.sent.at(-1).request, request);
+  assert.equal(f.calls.sent.at(-1).request.cascadeConfig.checkpointConfig.maxTokenLimit, 256000);
   assert.equal(Object.keys(f.storage).length, 0);
   f.controller.dispose();
   assert.equal(f.client.sendUserCascadeMessage, original);
@@ -928,6 +745,47 @@ test('the first send waits for persisted context preferences to finish loading',
   loaded.resolve(saved);
   await sent; await settle();
   assert.equal(f.calls.sent[0].request.cascadeConfig.checkpointConfig.maxTokenLimit, 500000);
+});
+
+test('the first default send waits for its existing baseline even while the numeric model catalog is loading', async t => {
+  for (const [catalogPending, limit] of [[false,256000],[true,256000],[true,null]]) {
+    const baseline = deferred(), models = deferred();
+    const f = fixture(state('A', 0), {
+      config:() => baseline.promise,
+      ...(catalogPending ? {catalog:() => models.promise} : {})
+    });
+    t.after(() => f.controller.dispose());
+    f.mount(); await settle();
+    const explicit = {cascadeId:'A',cascadeConfig:{plannerConfig:{planModel:model},checkpointConfig:{maxTokenLimit:320000}}};
+    await f.client.sendUserCascadeMessage(explicit);
+    assert.equal(f.calls.sent[0].request, explicit, 'an explicit budget does not wait for the default lookup');
+    const requests = ['sendUserCascadeMessage','sendAllQueuedMessages'].map(method => ({method,
+      request:{cascadeId:'A',cascadeConfig:{plannerConfig:{planModel:model}}}}));
+    const pending = requests.map(({method,request}) => f.client[method](request));
+    await settle();
+    assert.equal(f.calls.sent.length, 1, 'a missing persisted override cannot let the old backend budget survive the first send');
+    assert.equal(f.calls.config, 1, 'sending reuses the lookup already started by the selector');
+    baseline.resolve({cascadeConfig:{checkpointConfig:{enabled:true,maxTokenLimit:limit},plannerConfig:{maxOutputTokens:65536}}});
+    await Promise.all(pending);
+    if (limit === null) {
+      for (const [index,call] of f.calls.sent.slice(1).entries()) {
+        assert.equal(call.request, requests[index].request, 'a resolved unknown default keeps the request intact and allows sending');
+      }
+    } else assert.deepEqual(f.calls.sent.slice(1).map(call => call.request.cascadeConfig.checkpointConfig.maxTokenLimit), [limit,limit]);
+    models.resolve({models:{fixture:{model,maxTokens:1048576,maxOutputTokens:65536}}});
+    await settle();
+  }
+});
+
+test('a named model catalog failure cannot silently send without its persisted custom budget', async t => {
+  const f = fixture(state('A',0), {
+    stored:{'antigravityChineseHelper.contextLimit.1417':'512000'},
+    catalog:() => Promise.reject(new Error('catalog offline'))
+  });
+  t.after(() => f.controller.dispose());
+  f.mount(); await settle();
+  await assert.rejects(f.client.sendUserCascadeMessage({cascadeId:'A',cascadeConfig:{plannerConfig:{modelName:'fixture'}}}), /catalog offline/);
+  assert.equal(f.calls.sent.length, 0, 'failed model identity resolution must preserve the saved-budget contract');
 });
 
 test('context limit reports the backend clamp instead of inventing model capacity', async t => {
@@ -980,7 +838,7 @@ test('new servers read catalog checkpoint budgets and retain both send overrides
   assert.equal(await f.setLimit(null), true);
   assert.equal(f.snapshot().contextSetting.effectiveLimit, 256000);
   await f.client.sendUserCascadeMessage(request);
-  assert.equal(f.calls.sent.at(-1).request, request);
+  assert.equal(f.calls.sent.at(-1).request.cascadeConfig.checkpointConfig.maxTokenLimit, 256000);
 });
 
 test('an unknown backend default does not prevent removing a saved context override', async t => {
@@ -995,6 +853,10 @@ test('an unknown backend default does not prevent removing a saved context overr
   assert.equal(await f.setLimit(null), true);
   assert.equal(f.snapshot().contextSetting.customLimit, null);
   assert.equal(Object.keys(f.storage).length, 0);
+  assert.match(f.snapshot().contextSetting.message, /默认额度未知/);
+  const request = {cascadeId:'A',cascadeConfig:{plannerConfig:{planModel:model}}};
+  await f.client.sendUserCascadeMessage(request);
+  assert.equal(f.calls.sent.at(-1).request, request, 'an unknown default is never invented or allowed to block sending');
 });
 
 test('failed context configuration or persistence leaves the previous sending budget intact', async t => {
@@ -1036,5 +898,72 @@ test('a late context query cannot apply a previous model preference to the newly
   assert.equal(f.snapshot().contextSetting.customLimit, null);
   const request = {cascadeId:'A', cascadeConfig:{plannerConfig:{planModel:1402}}};
   await f.client.sendUserCascadeMessage(request);
-  assert.equal(f.calls.sent.at(-1).request, request);
+  assert.equal(f.calls.sent.at(-1).request.cascadeConfig.checkpointConfig.maxTokenLimit, 256000);
+});
+
+
+test('known defaults travel with both message paths while explicit request budgets keep priority', async t => {
+  const f = fixture(state('A', 0)); t.after(() => f.controller.dispose());
+  f.mount(); await settle();
+  await f.setLimit(512000); await f.setLimit(null);
+  const plain = {cascadeId:'A',cascadeConfig:{plannerConfig:{planModel:model}}};
+  const explicit = {cascadeId:'A',cascadeConfig:{plannerConfig:{planModel:model},checkpointConfig:{maxTokenLimit:320000,enabled:true,tokenThreshold:40000}}};
+  for (const method of ['sendUserCascadeMessage','sendAllQueuedMessages']) {
+    await f.client[method](plain);
+    assert.equal(f.calls.sent.at(-1).request.cascadeConfig.checkpointConfig.maxTokenLimit, 256000);
+    await f.client[method](explicit);
+    assert.equal(f.calls.sent.at(-1).request, explicit);
+    assert.equal(explicit.cascadeConfig.checkpointConfig.tokenThreshold, 40000);
+  }
+  assert.equal(plain.cascadeConfig.checkpointConfig, undefined, 'materializing a budget never mutates the caller request');
+});
+
+test('native notification failure preserves saved main limits and broadcasts refresh every window', async t => {
+  const listeners = new Set(), notifications = [];
+  let fail = true;
+  const bridge = {
+    getStatus:async () => ({nativeReady:false,mainMessage:'已保存，等待后端接入'}),
+    subscribe(listener) {listeners.add(listener); return () => listeners.delete(listener);},
+    async mainSettingsChanged(...args) {
+      notifications.push(args);
+      if (fail === 'read') {
+        for (const listener of listeners) listener({nativeReady:true,mainMessage:'无法读取主代理上下文设置'});
+        throw new Error('official storage unreadable');
+      }
+      if (fail) throw new Error('connection lost');
+      return {nativeReady:true,mainMessage:'后端已接入'};
+    }
+  };
+  const f = fixture(state('A',0), {windowGlobals:{__antigravitySubagentContext:bridge}});
+  t.after(() => f.controller.dispose());
+  f.mount(); await settle();
+  assert.equal(await f.setLimit(512000), true, 'a committed setting stays successful when notification fails');
+  assert.equal(f.storage['antigravityChineseHelper.contextLimit.1417'], '512000');
+  assert.equal(f.snapshot().contextSetting.customLimit, 512000);
+  assert.equal(f.snapshot().contextSetting.error, null);
+  assert.match(f.snapshot().contextSetting.message, /设置已保存，后端同步失败/);
+  assert.deepEqual(notifications, [[]], 'the notification carries no budget and the local change only notifies once');
+  await f.client.sendUserCascadeMessage({cascadeId:'A',cascadeConfig:{plannerConfig:{planModel:model}}});
+  assert.equal(f.calls.sent.at(-1).request.cascadeConfig.checkpointConfig.maxTokenLimit, 512000);
+  fail = false;
+  await f.nativeStorage.updateItems({'antigravityChineseHelper.contextLimit.1417':'600000'}); await settle();
+  assert.equal(notifications.length, 2);
+  assert.equal(f.snapshot().contextSetting.customLimit, 600000);
+  assert.equal(f.snapshot().contextSetting.nativeReady, true);
+  assert.equal(f.snapshot().contextSetting.message, '后端已接入');
+  for (const listener of listeners) listener({nativeReady:false,mainMessage:'后端已断开'});
+  assert.equal(f.snapshot().contextSetting.nativeReady, false);
+  assert.equal(f.snapshot().contextSetting.message, '后端已断开');
+  fail = 'read';
+  assert.equal(await f.setLimit(null), true, 'a notification failure after its broadcast must preserve a committed reset');
+  assert.equal(f.snapshot().contextSetting.customLimit, null);
+  assert.equal(f.storage['antigravityChineseHelper.contextLimit.1417'], undefined);
+  assert.equal(f.snapshot().contextSetting.error, null);
+  assert.match(f.snapshot().contextSetting.message, /设置已保存，后端同步失败.*official storage unreadable/);
+  for (const listener of listeners) listener({nativeReady:true,mainMessage:'',error:'子代理额度保存失败'});
+  assert.equal(f.snapshot().contextSetting.message, '', 'an unrelated child setting error does not make main synchronization fail');
+  for (const listener of listeners) listener({nativeReady:true,mainMessage:'无法读取主代理上下文设置'});
+  assert.equal(f.snapshot().contextSetting.message, '无法读取主代理上下文设置', 'main status remains visible after restoring the default');
+  f.controller.dispose();
+  assert.equal(listeners.size, 0);
 });

@@ -6,6 +6,7 @@ const mov = (rd, rm) => (0xaa0003e0 | (rm << 16) | rd) >>> 0;
 const add = (rd, rn, value, subtract = false) => ((subtract ? 0xd1000000 : 0x91000000) | (value << 10) | (rn << 5) | rd) >>> 0;
 const ldr = (rt, rn, offset, width = 8) => ((width === 8 ? 0xf9400000 : 0xb9400000) | ((offset / width) << 10) | (rn << 5) | rt) >>> 0;
 const str = (rt, rn, offset) => (0xf9000000 | ((offset / 8) << 10) | (rn << 5) | rt) >>> 0;
+const ldp = (rt, rt2, rn, offset) => (0xa9400000 | ((offset / 8) << 15) | (rt2 << 10) | (rn << 5) | rt) >>> 0;
 const branch = (pc, target, link = false) => ((link ? 0x94000000 : 0x14000000) | (((target - pc) / 4) & 0x03ffffff)) >>> 0;
 const cbz = (pc, target, register, nonzero = false) => ((nonzero ? 0xb5000000 : 0xb4000000) | ((((target - pc) / 4) & 0x7ffff) << 5) | register) >>> 0;
 const restore = 0xa97ffbfd, ret = 0xd65f03c0;
@@ -13,15 +14,16 @@ const restore = 0xa97ffbfd, ret = 0xd65f03c0;
 // A compact fixture retains the real blocks' register and stack relationships.
 // Function RVAs, frame size and protobuf offsets can move independently.
 function fixture({ relocate = false, reorderFields = false, frameSize = 0x100 } = {}) {
-  const buffer = Buffer.alloc(0x500);
+  const buffer = Buffer.alloc(0x700);
   for (let offset = 0; offset < buffer.length; offset += 4) buffer.writeUInt32LE(0xd503201f, offset);
   const definitions = [
     ['getCascadeConfigForTrajectory', 0, 0x200], ['getCascadeConfig', 0x200, 0x80],
     ['GetCascadeConversationalConfigWithExperiment', 0x280, 0x80], ['clampAndValidateConfig', 0x300, 0x100],
     ['ClampCheckpointConfigForModelInfo', 0x400, 0x20], ['GetModelInfoFromPlannerConfig', 0x420, 0x20], ['ResolveCustomAgentSpec', 0x440, 0x20],
+    ['runInvocationHooks', 0x460, 0x180], ['stepPreInvocation', 0x5e0, 0x80],
   ];
-  const locations = relocate ? [0x210000, 0x101000, 0x305000, 0x121000, 0x401000, 0x203000, 0x117000] :
-    [0x1000, 0x4000, 0x7000, 0xa000, 0xc000, 0xd000, 0xe000];
+  const locations = relocate ? [0x210000, 0x101000, 0x305000, 0x121000, 0x401000, 0x203000, 0x117000, 0x501000, 0x601000] :
+    [0x1000, 0x4000, 0x7000, 0xa000, 0xc000, 0xd000, 0xe000, 0xf000, 0x11000];
   const functions = Object.fromEntries(definitions.map(([name, fileOffset, size], index) => [name, { name, fileOffset, size, rva:locations[index] }]));
   const field = (offset, size, type = 'fixture') => ({ offset, size, type });
   const types = {
@@ -31,6 +33,28 @@ function fixture({ relocate = false, reorderFields = false, frameSize = 0x100 } 
     CortexTrajectoryMetadata:{ size:256, fields:{ ParentConversationId:field(reorderFields ? 64 : 56, 16), SubagentSpec:field(reorderFields ? 120 : 112, 8) } },
     ModelInfo:{ size:256, fields:{ ModelId:field(reorderFields ? 16 : 8, 4), MaxTokens:field(reorderFields ? 28 : 20, 4) } },
   };
+  const consumptionFields = {
+    Machine:{ agent:[0,8], input:[8,8] },
+    RunInput:{ Trajectory:[16,16], ExecutionMetadata:[144,80], MaxContextTokens:[224,8] },
+    Agent:{ Serializer:[168,16] }, ExecutionMetadata:{ PlannerConfig:[16,8] },
+    AugmentedSerializer:{ Serializer:[0,16] }, DefaultSerializer:{ fallbackConverter:[176,16] },
+    TrajectoryChatConverter:{ checkpointConfig:[16,8], plannerModelInfo:[32,8] },
+    Step:{ Step:[88,16] }, StepUserInput:{ UserInput:[0,8] }, CortexStepUserInput:{ UserConfig:[136,8] },
+    ProtoTrajectory:{ metadata:[64,8] }, DbTrajectory:{ pb:[48,8] }, Trajectory:{ Metadata:[152,8] },
+    ExecutionIDDecorator:{ Trajectory:[0,16] }, StagingDecorator:{ base:[16,16] },
+    StepEnricherDecorator:{ Trajectory:[0,16] }, TruncationDecorator:{ Trajectory:[0,16] },
+    AccumulatorDecorator:{ Trajectory:[0,16] }, AgentStateUpdaterDecorator:{ Trajectory:[0,16] },
+    TelemetryDecorator:{ Trajectory:[0,16] }, TranscriptLogDecorator:{ Trajectory:[0,16] }, ReplacerDecorator:{ Trajectory:[0,16] },
+    IapiStrippingTrajectory:{ Trajectory:[0,16] },
+  };
+  for (const [name, selected] of Object.entries(consumptionFields)) {
+    types[name] = { size:256, fields:Object.fromEntries(Object.entries(selected).map(([fieldName,[offset,size]]) =>
+      [fieldName,field(offset + (reorderFields ? 8 : 0),size)])) };
+  }
+  for (const [index,type] of Object.values(types).entries()) {
+    type.rva = (relocate ? 0x700000 : 0x20000) + index * 0x100;
+    type.pointerRva = type.rva + 0x80;
+  }
   const low = frameSize - 0x48, high = low + 24, array = low - 16, scratch = low + 16, varp = frameSize - 8;
   const metadata = { format:1, arch:'arm64', pointerSize:8, imageBase:relocate ? 0x200000000 : 0x100000000, functions, types,
     scratchGC:{ locals:{ n:2, nbit:20, masks:[Array(3).fill(0), Array(3).fill(0)] }, stackObjects:[
@@ -66,6 +90,14 @@ function fixture({ relocate = false, reorderFields = false, frameSize = 0x100 } 
     branch(pc(clamp, 0x40), pc(clamp, 0x48)), mov(3, 31), cbz(pc(clamp, 0x48), pc(clamp, 0x54), 3),
     ldr(2, 3, types.CascadePlannerConfig.fields.MaxOutputTokens.offset, 4), branch(pc(clamp, 0x50), pc(clamp, 0x58)), mov(2, 31), mov(1, 0), ldr(0, 31, 0x40),
     branch(pc(clamp, 0x60), functions.ClampCheckpointConfigForModelInfo.rva, true));
+  const hooks = 'runInvocationHooks', step = 'stepPreInvocation';
+  put(hooks, 0x10, add(20, 31, 0x160, true), (0xa9000000 | (127 << 15) | (30 << 10) | (20 << 5) | 29) >>> 0,
+    add(31, 20, 0), add(29, 31, 8, true));
+  put(hooks, 0x20, str(6,31,0x198), str(7,31,0x1a0), str(0,31,0x168), str(1,31,0x170));
+  put(hooks, 0x80, ldr(5,31,0x198), ldr(5,5,0x30), ldr(0,31,0x1a0), ldp(1,2,31,0x168), mov(3,4), 0xd63f00a0);
+  smallFrame(step,0xb0);
+  put(step,0x0c,str(0,31,0xb8));
+  put(step,0x30,branch(pc(step,0x30),functions[hooks].rva,true));
   return { buffer, metadata, put, pc, scratch, outer, clamp };
 }
 
@@ -75,8 +107,8 @@ test('derives relocated functions, reordered fields and a moved Go frame without
   assert.equal(first.sites.reset.rva, original.pc(original.outer, 0xb0));
   assert.equal(plan.sites.reset.rva, moved.pc(moved.outer, 0xb0));
   assert.equal(plan.sites.observe.rva, moved.pc(moved.clamp, 0x34));
-  assert.equal(plan.sites.observe.continueRva, moved.pc(moved.clamp, 0x48));
-  assert.equal(plan.sites.final.continueRva, moved.pc(moved.outer, 0x130));
+  assert.equal(plan.sites.observe.continueRva, moved.pc(moved.clamp, 0x38));
+  assert.equal(plan.sites.final.continueRva, moved.pc(moved.outer, 0x124));
   assert.deepEqual(plan.callerReturnRvas, [moved.pc('GetCascadeConversationalConfigWithExperiment', 0x34), moved.pc('getCascadeConfig', 0x34), moved.pc(moved.outer, 0xc4)]);
   assert.equal(plan.metadataSpill, 0x168);
   assert.equal(plan.clampCfgSpill, 0x78);
@@ -84,6 +116,11 @@ test('derives relocated functions, reordered fields and a moved Go frame without
   assert.equal(plan.scratchSize, 24);
   assert.equal(plan.fields.CascadeConfig.PlannerConfig, 24);
   assert.equal(plan.fields.ModelInfo.MaxTokens, 28);
+  assert.equal(plan.sites.consume.rva,moved.pc('runInvocationHooks',0x80));
+  assert.equal(plan.sites.consume.continueRva,moved.pc('runInvocationHooks',0x84));
+  assert.deepEqual(plan.consume,{parentReturnRva:moved.pc('stepPreInvocation',0x34),machineSpill:0xb8});
+  assert.equal(plan.fields.RunInput.MaxContextTokens,232);
+  assert.deepEqual(plan.typeRefs.StepUserInput,{rva:moved.metadata.types.StepUserInput.rva,pointerRva:moved.metadata.types.StepUserInput.pointerRva});
   assert.deepEqual(JSON.parse(JSON.stringify(plan)), plan, 'The installation plan contains only JSON data');
 });
 
@@ -189,11 +226,26 @@ test('拒绝 SIMD 寄存器冒充标量加载、溢出存储及栈帧契约', ()
   }
 });
 
-test('rejects a changed success return ABI and a branch into a replacement block', () => {
+test('rejects a changed success return ABI and preserves native branches after a redirected word', () => {
   const wrongReturn = fixture();
   wrongReturn.put(wrongReturn.outer, 0x124, mov(4, 1));
   assert.throws(() => deriveBackendLayout(wrongReturn.buffer, wrongReturn.metadata), /successful trajectory epilogue/);
   const interiorBranch = fixture();
-  interiorBranch.put(interiorBranch.outer, 0xcc, branch(interiorBranch.pc(interiorBranch.outer, 0xcc), interiorBranch.pc(interiorBranch.outer, 0xb4)));
-  assert.throws(() => deriveBackendLayout(interiorBranch.buffer, interiorBranch.metadata), /post-reset control flow leaves|branch enters/);
+  // This targets the original CBZ immediately after the one redirected load.
+  interiorBranch.put(interiorBranch.clamp, 0x68,
+    branch(interiorBranch.pc(interiorBranch.clamp, 0x68), interiorBranch.pc(interiorBranch.clamp, 0x38)));
+  const plan = deriveBackendLayout(interiorBranch.buffer, interiorBranch.metadata);
+  assert.equal(plan.sites.observe.continueRva, interiorBranch.pc(interiorBranch.clamp, 0x38));
+});
+
+test('rejects changed consumed-step arguments, trajectory method, or machine frame before native publication', () => {
+  for (const [name,offset,instruction,error] of [
+    ['runInvocationHooks',0x90,mov(3,0),/delivered-step append boundary/],
+    ['runInvocationHooks',0x84,ldr(5,5,0x38),/delivered-step append boundary/],
+    ['stepPreInvocation',0x0c,str(0,31,0xc0),/pre-invocation machine spill changed/],
+  ]) {
+    const value=fixture();
+    value.put(name,offset,instruction);
+    assert.throws(()=>deriveBackendLayout(value.buffer,value.metadata),error);
+  }
 });

@@ -20,6 +20,11 @@ xcrun swiftc -O -target "$(/usr/bin/uname -m)-apple-macos12.0" -framework AppKit
     "$project_dir/packaging/RunnerStatus.swift" \
     -o "$app_dir/Contents/MacOS/AntigravityChineseHelper"
 
+xcrun clang -O2 -Wall -Wextra -target "$(/usr/bin/uname -m)-apple-macos12.0" \
+    "$project_dir/runtime/backend-mach.c" \
+    -o "$app_dir/Contents/MacOS/AntigravityBackendMach"
+codesign --force --sign - --timestamp=none "$app_dir/Contents/MacOS/AntigravityBackendMach"
+
 app_version=$(/usr/bin/sed -n "s/^  const VERSION = '\([0-9][0-9.]*\)';$/\1/p" "$project_dir/runtime/renderer.js")
 if [[ -z "$app_version" ]]; then
     echo "无法从 runtime/renderer.js 读取版本号。" >&2

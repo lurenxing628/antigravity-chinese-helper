@@ -7,7 +7,7 @@
   if (!document.documentElement || !document.body) return null;
   window.__antigravityChineseHelper?.uninstall?.();
 
-  const VERSION = '0.3.38';
+  const VERSION = '0.3.40';
   let strings, normalizedStrings;
   setStrings(dictionary);
   let stopped = false;
@@ -304,7 +304,8 @@
   settingReset.setAttribute('data-testid', 'context-limit-reset');
   settingButtons.append(settingApply, settingReset);
   settingControls.append(settingInputRow, settingButtons);
-  const settingStatus = document.createElement('p'); settingStatus.className = 'setting-status'; settingStatus.setAttribute('role', 'status');
+  const settingStatus = document.createElement('p'); settingStatus.className = 'setting-status'; settingStatus.setAttribute('role', 'status'); settingStatus.setAttribute('data-testid', 'context-limit-status');
+  settingForm.setAttribute('data-testid', 'context-limit-form');
   settingForm.append(settingTitle, settingControls, settingHint, settingStatus);
   context.panel.prepend(createSubagentContextForm());
   context.panel.prepend(settingForm);
@@ -324,7 +325,7 @@
     clearApplyFeedback(); writeText(settingApply, '应用中');
     const applied = await actions.setContextLimit(tokens);
     if (disposed || currentSetting?.modelKey !== modelKey) return;
-    writeText(settingApply, applied ? '已应用' : '应用');
+    writeText(settingApply, applied ? '已保存' : '应用');
     if (applied) applyFeedbackTimer = window.setTimeout(clearApplyFeedback, 1800);
   });
   listen(settingReset, 'click', () => { clearApplyFeedback(); if (!settingReset.disabled) actions.setContextLimit?.(null); });
@@ -351,8 +352,9 @@
     const adjusted = setting?.customLimit !== null && setting?.effectiveLimit > 0 && setting.effectiveLimit !== setting.customLimit;
     settingEffective.hidden = !adjusted;
     writeText(settingEffective, adjusted ? `实际 ${formatTokens(setting.effectiveLimit)}` : '');
-    writeText(settingStatus, setting?.error ?? '');
-    settingStatus.hidden = !setting?.error;
+    const message = setting?.error || setting?.message || '';
+    writeText(settingStatus, message);
+    settingStatus.hidden = !message;
     writeAttribute(settingStatus, 'data-error', String(Boolean(setting?.error)));
   }
   function createSubagentContextForm() {
@@ -585,7 +587,7 @@
     const metricsChanged = !currentMetrics || Boolean(currentSubagentMetrics) !== Boolean(nextSubagentMetrics) ||
       metrics.some(({key}) => currentMetrics[key] !== nextMetrics[key] || currentSubagentMetrics?.[key] !== nextSubagentMetrics?.[key]);
     const setting = snapshot?.contextSetting ?? null;
-    const settingChanged = !current || current.maxContext !== next.maxContext || ['modelKey', 'modelLabel', 'defaultLimit', 'customLimit', 'effectiveLimit', 'maxLimit', 'pending', 'error', 'supported']
+    const settingChanged = !current || current.maxContext !== next.maxContext || ['modelKey', 'modelLabel', 'defaultLimit', 'customLimit', 'effectiveLimit', 'maxLimit', 'pending', 'error', 'supported', 'message', 'nativeReady']
       .some(key => currentSetting?.[key] !== setting?.[key]);
     if (!ringsChanged && !metricsChanged && !settingChanged) return false;
     if (settingChanged) updateSetting(setting, next.maxContext);
@@ -1039,6 +1041,34 @@
   let stopped = false;
   const quotaHubs = new Map();
   const appWindow = document.defaultView;
+  const mainBridge = appWindow.__antigravitySubagentContext;
+  let nativeStatus = null, nativeRevision = 0, mainRequestRevision = 0, mainSyncError = null;
+  function acceptNativeStatus(next) {
+    nativeStatus = next; mainSyncError = null; publishContextSettings();
+  }
+  const nativeSubscription = mainBridge?.subscribe?.(next => {
+    if (!stopped) { nativeRevision++; acceptNativeStatus(next); }
+  });
+  const initialNativeRevision = nativeRevision;
+  if (typeof mainBridge?.getStatus === 'function') Promise.resolve().then(() => mainBridge.getStatus()).then(next => {
+    if (!stopped && nativeRevision === initialNativeRevision) acceptNativeStatus(next);
+  }, () => {});
+  async function mainSettingsChanged() {
+    if (stopped) return;
+    const revision = nativeRevision, requestRevision = ++mainRequestRevision;
+    try {
+      if (typeof mainBridge?.mainSettingsChanged !== 'function') throw new Error('原生上下文服务未连接');
+      const next = await mainBridge.mainSettingsChanged();
+      if (!stopped && nativeRevision === revision) acceptNativeStatus(next);
+    } catch (failure) {
+      // A failed reread may publish its status before rejecting this request.
+      // Keep that same request's failure visible even after the broadcast.
+      if (!stopped && mainRequestRevision === requestRevision) {
+        mainSyncError = `设置已保存，后端同步失败：${failure?.message ?? String(failure)}`;
+        publishContextSettings();
+      }
+    }
+  }
   // A child-frame WindowProxy is not a schema and rejects cross-origin reads.
   // Its window property remains accessible and identifies the browsing context.
   const nativeGlobals = Object.getOwnPropertyNames(appWindow).map(key => Object.getOwnPropertyDescriptor(appWindow,key)?.value)
@@ -1161,10 +1191,17 @@
   const storageSubscription = storage?.onChanged?.(changes => {
     storageReady.then(() => {
       if (stopped) return;
+      let externalChange = false;
       for (const key of readStoredLimits(changes)) {
         const setting = contextSettings.get(key);
-        if (setting && !setting.applying) refreshContextSetting(setting);
+        // A local save notifies only after updateItems succeeds. Its broadcast
+        // may arrive before that promise resolves; another window notifies here.
+        if (!setting?.applying) {
+          externalChange = true;
+          if (setting) refreshContextSetting(setting);
+        }
       }
+      if (externalChange) void mainSettingsChanged();
     });
   });
   const currentFiber = element => {
@@ -1205,26 +1242,47 @@
       const descriptor = Object.getOwnPropertyDescriptor(client, method), original = descriptor?.value;
       if (!descriptor?.writable || typeof original !== 'function') continue;
       const wrapper = function contextLimitedRequest(...args) {
+        let baselineLimit = null;
         const send = () => {
           const request = args[0], planner = request?.cascadeConfig?.plannerConfig;
           const model = cache.models?.get(String(planner?.planModel)) ?? cache.models?.get(planner?.modelName);
           const modelKey = model?.key ?? (planner?.planModel ? String(planner.planModel) : null);
-          const limit = contextLimits.get(modelKey);
-          if (!stopped && cache.users.size && limit !== undefined) {
-            // The native resolver clamps this to model capacity minus output;
-            // TrajectoryToChatMessages uses the enabled checkpoint budget.
-            // Native protobuf messages carry scalar defaults on their prototype.
-            const existing = request.cascadeConfig.checkpointConfig;
+          const existing = request?.cascadeConfig?.checkpointConfig;
+          // A consumed message needs an explicit budget even when returning to
+          // default. Reuse the already resolved model baseline; an unknown
+          // default leaves the native request intact rather than guessing one.
+          const limit = contextLimits.get(modelKey) ?? positive(existing?.maxTokenLimit) ?? contextSettings.get(modelKey)?.view.defaultLimit ?? baselineLimit;
+          if (!stopped && cache.users.size && Number.isSafeInteger(limit) && limit > 0 && limit <= 4294967295 && existing?.maxTokenLimit !== limit) {
+            // Native installation applies this at message consumption and keeps
+            // the final model capacity, output reserve and checkpoint rules.
             const checkpointConfig = existing ? copyMessage(existing, {maxTokenLimit:limit}) : Object.assign(createCheckpoint(), {maxTokenLimit:limit});
             args[0] = copyMessage(request, {cascadeConfig:copyMessage(request.cascadeConfig, {checkpointConfig})});
           }
           return original.apply(this, args);
         };
-        // Preserve the first send after restart: saved preferences must load first.
+        const prepareDefault = () => {
+          const request = args[0], planner = request?.cascadeConfig?.plannerConfig;
+          const model = cache.models?.get(String(planner?.planModel)) ?? cache.models?.get(planner?.modelName);
+          const modelKey = model?.key ?? (planner?.planModel ? String(planner.planModel) : null);
+          if (contextLimits.has(modelKey) || positive(request?.cascadeConfig?.checkpointConfig?.maxTokenLimit)) return send();
+          const setting = contextSettings.get(modelKey);
+          // Reload may remove a preference while the backend still has its
+          // previous budget. Wait for this model's existing baseline lookup,
+          // including a numeric model whose catalog has not finished loading.
+          // Other sends do not start a new default query.
+          const pending = setting?.client === client ? setting.ready :
+            cache.configs.get(configKey({planModel:model?.id ?? planner?.planModel, modelName:planner?.planModel ? undefined : planner?.modelName}));
+          if (!pending) return send();
+          return Promise.resolve(pending).then(config => {
+            baselineLimit = setting?.client === client ? setting.view.defaultLimit : config?.enabled ? positive(config.limit) : null;
+          }, () => {}).then(send);
+        };
+        // Saved preferences and an already pending default must resolve before
+        // the first message can replace a previous backend execution's budget.
         const readyToSend = () => {
           const planner = args[0]?.cascadeConfig?.plannerConfig;
           return !planner?.planModel && planner?.modelName && !cache.models?.has(planner.modelName)
-            ? catalog(client, Boolean(cache.models)).then(send) : send();
+            ? catalog(client, Boolean(cache.models)).then(prepareDefault) : prepareDefault();
         };
         return storageLoaded ? readyToSend() : storageReady.then(readyToSend);
       };
@@ -1387,7 +1445,18 @@
       setting.client = instance.client; setting.model = model;
       refreshContextSetting(setting);
     }
-    return {...setting.view};
+    const view = {...setting.view, nativeReady:nativeStatus?.nativeReady === true};
+    const messages = [];
+    if (mainSyncError) messages.push(mainSyncError);
+    else if (nativeStatus?.mainMessage) messages.push(nativeStatus.mainMessage);
+    else if (view.customLimit !== null) messages.push(view.nativeReady
+      ? '已接入后端，后续新消息使用已保存设置。'
+      : '设置已保存，原生上下文服务尚未接入。');
+    if (!view.pending && view.customLimit === null && view.defaultLimit === null) {
+      messages.push('后端默认额度未知，运行中或排队消息暂不能明确恢复默认。');
+    }
+    view.message = messages.filter(Boolean).join('；');
+    return view;
   }
   async function setContextLimit(instance, tokens) {
     const current = contextSetting(instance), setting = current && contextSettings.get(current.modelKey);
@@ -1416,6 +1485,9 @@
       if (tokens === null) contextLimits.delete(view.modelKey); else contextLimits.set(view.modelKey, tokens);
       view.customLimit = tokens; view.effectiveLimit = effective;
       if (tokens === null) view.defaultLimit = effective;
+      // Persistence has committed. Native connection errors must not roll back
+      // the saved preference or report it as a failed save.
+      await mainSettingsChanged();
       return true;
     } catch {
       if (!stopped && setting.revision === revision) view.error = error;
@@ -2018,7 +2090,7 @@
     },
     cleanup() { for (const instance of instances.values()) if (!instance.anchor.isConnected) disposeInstance(instance); },
     dispose() {
-      stopped = true; disposeSubscription(storageSubscription);
+      stopped = true; disposeSubscription(storageSubscription); disposeSubscription(nativeSubscription);
       for (const instance of instances.values()) disposeInstance(instance);
       titles?.dispose();
     },

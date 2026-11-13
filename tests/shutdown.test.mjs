@@ -39,6 +39,8 @@ function runner(connect = () => { throw new Error('Unexpected connection'); }, o
   const context = vm.createContext({
     CdpClient: { connect }, dirname, join, fileURLToPath,
     homedir: () => '/mock-home',
+    antigravityDataDirectories: ['Antigravity', 'antigravity'].map(name =>
+      join('/mock-home', 'Library/Application Support', name)),
     process: { env: { ANTIGRAVITY_HELPER_SHUTDOWN_TIMEOUT_MS: '9000' }, pid: 123, exitCode: null },
     readFile: async () => '9222\n',
     writeFile: async () => {}, unlink: async () => {},
@@ -50,9 +52,11 @@ function runner(connect = () => { throw new Error('Unexpected connection'); }, o
     ...overrides,
   });
   vm.runInContext(runnerSource + `\n globalThis.runnerTest = {
-    sessions, stop, discover, disconnect, install, reload, loadBundle, snapshot, eligibleTarget,
+    sessions, stop, discover, disconnect, install, reload, loadBundle, snapshot, eligibleTarget, tick, publishBackendStatus,
+    installBackendBridge, handleBackendRequest,
     setDiscoverySettled(value) { discoverySettled = value; },
     setBundle(value) { bundle = value; },
+    setBackend(value) { backend = value; },
   };`, context, { filename: 'runtime/runner.mjs' });
   return context.runnerTest;
 }
@@ -241,4 +245,93 @@ test('shutdown preserves a pending registration identifier and removes it withou
     client.close();
     await Promise.allSettled([discovering, stopped]);
   }
+});
+
+test('页面不可达时仍检查后台，菜单状态不等待失联页面响应', async () => {
+  for (const missingPort of [true, false]) {
+    let status = {targetTokens:512000, active:true, error:null, message:''};
+    const written = [];
+    const helper = runner(undefined, {
+      readFile:async () => {
+        if (missingPort) throw Object.assign(new Error('没有页面调试端口'), {code:'ENOENT'});
+        return '9222\n';
+      },
+      fetch:async () => { throw new Error('页面调试连接已关闭'); },
+      stat:async () => ({mtimeMs:1}),
+      writeFile:async (_path, contents) => { written.push(JSON.parse(contents)); },
+    });
+    helper.setBundle({sourceMtime:1, swarm:{sourceMtime:1}, dictionaryMtime:1});
+    helper.setBackend({
+      getStatus:() => status,
+      async refresh() { status = {...status, active:false, message:'已保存，等待下次启动'}; },
+    });
+    await helper.tick();
+    assert.equal(helper.snapshot().subagentContext.active, false);
+    assert.equal(helper.snapshot().state, 'waiting-for-app');
+    const response = deferred();
+    helper.sessions.set('失联的旧窗口', {kind:'main', client:{connected:false, call:() => response.promise}});
+    const publishing = helper.publishBackendStatus();
+    await nextTurn();
+    assert.equal(written.at(-1).subagentContext.active, false, '本机菜单状态不被页面消息阻塞');
+    response.resolve({});
+    await publishing;
+  }
+});
+
+test('主设置通知只发送变更信号，manager重读后经同一bridge返回native状态', async () => {
+  const helper = runner();
+  const status = {targetTokens:null, active:false, nativeReady:true, mainOverrides:true, mainMessage:''};
+  const operations = [];
+  helper.setBackend({
+    ready:Promise.resolve(),
+    getStatus() { operations.push('status'); return status; },
+    async setLimit(tokens) { operations.push(['set-limit', tokens]); return status; },
+    async mainSettingsChanged() { operations.push('main-settings-changed'); return status; },
+  });
+  const page = vm.createContext({setTimeout, clearTimeout,
+    location:{protocol:'https:',hostname:'127.0.0.1'},
+    electronNative:{getZoomLevel() {}}, nativeStorage:{getItems() {}},
+  });
+  vm.runInContext('globalThis.top = globalThis;', page);
+  const requests = [];
+  const session = {client:{async call(method, params) {
+    assert.equal(method, 'Runtime.evaluate');
+    assert.equal(params.contextId, 7);
+    return {result:{value:vm.runInContext(params.expression, page)}};
+  }}};
+  page.__aghBackendRequest = payload => {
+    requests.push(JSON.parse(payload));
+    void helper.handleBackendRequest(session, {name:'__aghBackendRequest', payload, executionContextId:7});
+  };
+  vm.runInContext(`(${helper.installBackendBridge.toString()})();`, page);
+  const bridge = page.__antigravitySubagentContext;
+  try {
+    const result = await bridge.mainSettingsChanged();
+    assert.deepEqual(JSON.parse(JSON.stringify(result)), status);
+    assert.deepEqual(requests, [{id:1, method:'main-settings-changed'}], '主额度值和存在性不跨bridge复制');
+    assert.deepEqual(operations, ['main-settings-changed']);
+    await bridge.getStatus();
+    await bridge.setLimit(512000);
+    assert.deepEqual(operations, ['main-settings-changed', 'status', ['set-limit', 512000]]);
+  } finally { bridge.dispose(); }
+});
+
+test('主设置通知不能在binding缺失时返回已生效，也不能从嵌入页面触发manager', async () => {
+  const helper = runner();
+  let notified = 0;
+  helper.setBackend({ready:Promise.resolve(), async mainSettingsChanged() { notified++; return {}; }});
+  const page = vm.createContext({setTimeout, clearTimeout});
+  vm.runInContext(`(${helper.installBackendBridge.toString()})();`, page);
+  const bridge = page.__antigravitySubagentContext;
+  try { await assert.rejects(bridge.mainSettingsChanged(), /上下文服务未连接/); }
+  finally { bridge.dispose(); }
+  let calls = 0;
+  const session = {client:{async call(method) {
+    assert.equal(method, 'Runtime.evaluate'); calls++;
+    return {result:{value:false}};
+  }}};
+  await helper.handleBackendRequest(session, {name:'__aghBackendRequest',
+    payload:JSON.stringify({id:1, method:'main-settings-changed'}), executionContextId:8});
+  assert.equal(calls, 1, '只检查发起页身份，不向非原生顶层页面settle');
+  assert.equal(notified, 0);
 });

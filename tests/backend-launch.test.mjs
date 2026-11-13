@@ -70,7 +70,7 @@ function next(){
 const ordinary=cp.spawn(${JSON.stringify(officialBackendPath)},['--stamp'],{stdio:['ignore','pipe','pipe']});
 ordinary.stdout.on('data',chunk=>record({event:'ordinary',...JSON.parse(chunk)}));
 ordinary.once('exit',()=>setTimeout(next,100));
-setInterval(()=>{},1000);
+const lifetime = setInterval(()=>{if(fs.existsSync(${JSON.stringify(directory)}+'/quit-app'))clearInterval(lifetime);},20);
 `);
   const sessions = [];
   t.after(async () => {
@@ -89,11 +89,11 @@ setInterval(()=>{},1000);
     await rm(directory, { recursive: true, force: true });
   });
   return {
-    async start(onBackendSpawn, onError) {
+    async start(onBackendSpawn, onStateChange) {
       try {
         const session = await launchBackendApp({ enabled: true, appExecutable: process.execPath,
           officialBackendPath, helperBackendPath, appArgs: [main], backendArgs: ['--helper-budget=500000'],
-          onBackendSpawn, onError });
+          onBackendSpawn, onStateChange });
         sessions.push(session);
         return session;
       } catch (error) {
@@ -101,10 +101,10 @@ setInterval(()=>{},1000);
         throw error;
       }
     },
-    async reconnect(receipt, onBackendSpawn) {
+    async reconnect(receipt, onBackendSpawn, onStateChange) {
       try {
         const session = await connectBackendApp({ enabled: true, ...receipt,
-          officialBackendPath, helperBackendPath, backendArgs: ['--helper-budget=500000'], onBackendSpawn });
+          officialBackendPath, helperBackendPath, backendArgs: ['--helper-budget=500000'], onBackendSpawn, onStateChange });
         sessions.push(session);
         return session;
       } catch (error) {
@@ -113,6 +113,7 @@ setInterval(()=>{},1000);
       }
     },
     requestExit: round => writeFile(join(directory, `exit-${round}`), ''),
+    requestAppExit: () => writeFile(join(directory, 'quit-app'), ''),
     releaseReady: round => writeFile(join(directory, `ready-${round}`), ''),
     async events() {
       try { return (await readFile(log, 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse); }
@@ -165,7 +166,9 @@ test('spawn returns immediately and fragmented ready lines gate stdout and stder
 test('attachment failure leaves an owned pause that restore can release', async t => {
   const f = await fixture(t, 2);
   const failures = [];
-  const session = await f.start(async () => { throw new Error('Fixture attach failure'); }, error => failures.push(error));
+  const session = await f.start(async () => { throw new Error('Fixture attach failure'); }, state => {
+    if (state.phase === 'failed') failures.push(state.error);
+  });
   await assert.rejects(session.ready, /Fixture attach failure/);
   assert.equal(session.getStatus().phase, 'failed');
   assert.equal(failures.length, 1);
@@ -321,6 +324,35 @@ test('a mismatched saved PID is rejected without debugger control or restore com
   assert.equal(launched.process.exitCode, null);
   await f.requestExit(1);
   await until(async () => (await f.events()).some(event => event.event === 'exit'));
+});
+
+test('助手持续运行时，首次启动和重连的应用都能正常退出再启动', { timeout:20000 }, async t => {
+  for (const reconnect of [false, true]) {
+    const f = await fixture(t, 1, true);
+    const states = [];
+    const launched = await f.start(async () => {}, state => states.push(state.phase));
+    await launched.ready;
+    let current = launched;
+    if (reconnect) {
+      const receipt = launched.getConnectionInfo();
+      await launched.restore();
+      states.length = 0;
+      current = await f.reconnect(receipt, async () => {}, state => states.push(state.phase));
+    }
+    const exited = once(launched.process, 'exit');
+    await f.requestExit(1);
+    await f.requestAppExit();
+    await until(() => launched.process.exitCode !== null);
+    assert.deepEqual(await exited, [0, null]);
+    assert.ok(states.includes('exiting'), '调试器必须主动解除退出屏障，不等进程exit事件');
+    assert.equal(states.includes('failed'), false);
+    await current.restore();
+    assert.ok(['exiting', 'exited'].includes(current.getStatus().phase), '清理不能把退出终态改回restored');
+    const next = await f.start(async () => {});
+    await next.ready;
+    await until(() => next.process.exitCode !== null);
+    assert.equal(next.process.exitCode, 0);
+  }
 });
 
 test('the app keeps writing console output after its launcher controller exits', { timeout: 20000 }, async t => {

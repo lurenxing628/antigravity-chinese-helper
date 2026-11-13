@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { CdpClient } from './cdp.mjs';
-import { createBackendManager } from './backend-manager.mjs';
+import { antigravityDataDirectories, createBackendManager } from './backend-manager.mjs';
 
 const runtimeDir = dirname(fileURLToPath(import.meta.url));
 const stateDir = join(homedir(), 'Library/Application Support/AntigravityChineseHelper');
@@ -41,14 +41,14 @@ let bundleError = null;
 let currentPort;
 let lastError = null;
 let appReachable = false;
-let lastHealth = 0;
+let lastRendererHealth = 0;
 let interval;
 let server;
 let backend;
 const startedAt = new Date().toISOString();
 
-// Only numeric preferences and runtime status cross this bridge. Launching the
-// App is a separate, explicit menu action on the local helper socket.
+// Child preferences, main-storage change notifications and runtime status share
+// this bridge. Launching the App remains an explicit action on the helper socket.
 function installBackendBridge() {
   if (globalThis.__antigravitySubagentContext) return;
   const pending = new Map(), listeners = new Set();
@@ -56,15 +56,16 @@ function installBackendBridge() {
   function request(method, tokens) {
     return new Promise((resolve, reject) => {
       const id = ++nextId;
-      const timer = setTimeout(() => { pending.delete(id); reject(new Error('子代理上下文服务未响应，请重新加载助手后重试')); }, 15000);
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error('上下文服务未响应，请重新加载助手后重试')); }, 15000);
       pending.set(id, {resolve, reject, timer});
       try { globalThis.__aghBackendRequest(JSON.stringify({id, method, tokens})); }
-      catch { clearTimeout(timer); pending.delete(id); reject(new Error('子代理上下文服务未连接')); }
+      catch { clearTimeout(timer); pending.delete(id); reject(new Error('上下文服务未连接')); }
     });
   }
   const bridge = {
     getStatus:() => request('status'),
     setLimit:tokens => request('set-limit', tokens),
+    mainSettingsChanged:() => request('main-settings-changed'),
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     update(status) { for (const listener of listeners) { try { listener(status); } catch {} } },
     settle({id, result, error}) {
@@ -73,7 +74,7 @@ function installBackendBridge() {
       error ? item.reject(new Error(error)) : item.resolve(result);
     },
     dispose() {
-      for (const item of pending.values()) { clearTimeout(item.timer); item.reject(new Error('子代理上下文服务已断开')); }
+      for (const item of pending.values()) { clearTimeout(item.timer); item.reject(new Error('上下文服务已断开')); }
       pending.clear(); listeners.clear();
       if (globalThis.__antigravitySubagentContext === bridge) delete globalThis.__antigravitySubagentContext;
     },
@@ -84,16 +85,18 @@ function installBackendBridge() {
 async function publishBackendStatus() {
   const status = backend?.getStatus();
   if (!status || stopping) return;
-  await Promise.allSettled([...sessions.values()].filter(session => session.kind !== 'swarm').map(session => evaluate(session.client,
-    `(() => { if (${knownApp}) globalThis.${backendBridgeKey}?.update(${JSON.stringify(status)}); })()`)));
-  await saveStatus().catch(() => {});
+  await Promise.allSettled([
+    saveStatus(),
+    ...[...sessions.values()].filter(session => session.kind !== 'swarm').map(session => evaluate(session.client,
+      `(() => { if (${knownApp}) globalThis.${backendBridgeKey}?.update(${JSON.stringify(status)}); })()`)),
+  ]);
 }
 
 async function handleBackendRequest(session, event) {
   if (event.name !== backendBinding || stopping) return;
   let request;
   try { request = JSON.parse(event.payload); } catch { return; }
-  if (!Number.isSafeInteger(request?.id) || request.id < 1 || !['status','set-limit'].includes(request.method)) return;
+  if (!Number.isSafeInteger(request?.id) || request.id < 1 || !['status','set-limit','main-settings-changed'].includes(request.method)) return;
   const inContext = expression => session.client.call('Runtime.evaluate', {
     contextId:event.executionContextId, expression, returnByValue:true, awaitPromise:true,
   });
@@ -104,8 +107,10 @@ async function handleBackendRequest(session, event) {
   let result, error;
   try {
     await backend.ready;
-    result = request.method === 'status' ? backend.getStatus() : await backend.setLimit(request.tokens);
-  } catch (failure) { error = failure.message || '无法保存子代理上下文设置'; }
+    if (request.method === 'status') result = backend.getStatus();
+    else if (request.method === 'set-limit') result = await backend.setLimit(request.tokens);
+    else result = await backend.mainSettingsChanged();
+  } catch (failure) { error = failure.message || '无法同步上下文设置'; }
   await inContext(`globalThis.${backendBridgeKey}?.settle(${JSON.stringify({id:request.id, result, error})})`);
 }
 
@@ -267,10 +272,9 @@ function scheduleInstall(session) {
 }
 
 async function portFromApp() {
-  const roots = ['Antigravity', 'antigravity'];
-  for (const root of roots) {
+  for (const directory of antigravityDataDirectories) {
     try {
-      const contents = await readFile(join(homedir(), 'Library/Application Support', root, 'DevToolsActivePort'), 'utf8');
+      const contents = await readFile(join(directory, 'DevToolsActivePort'), 'utf8');
       const port = Number(contents.split(/\r?\n/, 1)[0]);
       if (Number.isInteger(port) && port > 0 && port <= 65535) return port;
     } catch { /* App is closed or has not created the endpoint yet. */ }
@@ -365,9 +369,8 @@ async function discover() {
       }
     }
     if (stopping) return;
-    if (Date.now() - lastHealth >= 10000) {
-      lastHealth = Date.now();
-      await backend?.refresh();
+    if (Date.now() - lastRendererHealth >= 10000) {
+      lastRendererHealth = Date.now();
       for (const [id, session] of sessions) {
         try {
           const active = await evaluate(session.client, `Boolean((${sessionIdentity(session)}) && globalThis.${helperKey})`);
@@ -425,7 +428,7 @@ function tick() {
       const [sourceStat, swarmSourceStat, dictionaryStat] = await Promise.all([stat(sourcePath), stat(swarmSourcePath), stat(dictionaryPath)]);
       if (sourceStat.mtimeMs !== bundle.sourceMtime || swarmSourceStat.mtimeMs !== bundle.swarm.sourceMtime || dictionaryStat.mtimeMs !== bundle.dictionaryMtime) await reload();
     } catch { bundleError = 'dictionary-reload-failed'; }
-    await discover();
+    await Promise.all([backend?.refresh(), discover()]);
   })().finally(() => { tickPromise = null; });
   return tickPromise;
 }

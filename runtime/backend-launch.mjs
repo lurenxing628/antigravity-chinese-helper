@@ -206,10 +206,11 @@ async function validateBackendOptions({ enabled, officialBackendPath, helperBack
 
 function createBackendController({
   child = null, appPid, officialBackendPath, helperBackendPath, backendArgs,
-  onBackendSpawn, onError, timeoutMs,
+  onBackendSpawn, onStateChange, timeoutMs,
 }) {
   const firstBackend = deferred();
   const firstPause = deferred();
+  const initialized = deferred();
   const owner = randomUUID();
   const sourceURL = `${adapterSource}/${owner}`;
   const scripts = new Map();
@@ -217,13 +218,29 @@ function createBackendController({
   let active = true, installed = false, handlingSpawns = false, waitingForInitialPause = false, restorePromise;
   let verifiedTarget = false, identityRejected = false;
   let status = { phase: 'starting', appPid, backendPid: null, sequence: 0, error: null };
+  const transition = next => {
+    status = { ...status, ...next };
+    onStateChange?.({ ...status }, session);
+  };
+  const finishApplication = phase => {
+    if (status.phase === 'exited' || status.phase === phase) return;
+    active = false;
+    installed = false;
+    pause = null;
+    attachment?.abort();
+    const error = new Error('Antigravity 已结束执行');
+    firstBackend.reject(error);
+    firstPause.reject(error);
+    // 先释放退出屏障，再通知所有者清理；退出中的 JS 上下文不能再恢复或重连。
+    client?.close();
+    transition({ phase, error: null });
+  };
 
   const fail = error => {
     if (!active || status.phase === 'failed') return;
-    status = { ...status, phase: 'failed', error: error.message };
     firstBackend.reject(error);
     firstPause.reject(error);
-    try { onError?.(error, session); } catch { /* The caller owns reporting. */ }
+    transition({ phase: 'failed', error: error.message });
   };
   const evaluate = async (expression, frame) => {
     const result = frame
@@ -241,7 +258,7 @@ function createBackendController({
     attachment?.abort();
     const controller = new AbortController();
     attachment = controller;
-    status = { ...status, phase: 'attaching', backendPid: pending.pid, sequence: pending.sequence, error: null };
+    transition({ phase: 'attaching', backendPid: pending.pid, sequence: pending.sequence, error: null });
     try {
       await onBackendSpawn(pending.pid, {
         signal: controller.signal, sequence: pending.sequence, stage: pending.stage ?? 'spawn', appPid, inspectorUrl,
@@ -249,7 +266,7 @@ function createBackendController({
       if (!active || attachment !== controller || controller.signal.aborted || ownedPause && pause !== ownedPause) return;
       if (ownedPause) await resume(ownedPause);
       if (!active || attachment !== controller || controller.signal.aborted) return;
-      if (status.sequence === pending.sequence && !pause) status = { ...status, phase: 'running', error: null };
+      if (status.sequence === pending.sequence && !pause) transition({ phase: 'running', error: null });
       firstBackend.resolve(pending.pid);
     } catch (error) {
       if (active && attachment === controller && !controller.signal.aborted) throw error;
@@ -272,6 +289,10 @@ function createBackendController({
     await attachBackend(pending, ownedPause);
   };
   const watchClient = () => {
+    const watched = client;
+    client.on('NodeRuntime.waitingForDisconnect', () => {
+      if (client === watched) finishApplication('exiting');
+    });
     client.on('Debugger.scriptParsed', event => scripts.set(event.scriptId, event.url));
     client.on('Debugger.resumed', () => { pause = null; });
     client.on('Debugger.paused', event => {
@@ -284,6 +305,7 @@ function createBackendController({
       else if (owned && active && handlingSpawns) void handleBackendPause(pause).catch(fail);
     });
     client.on('close', () => {
+      if (client !== watched) return;
       attachment?.abort();
       if (active) fail(new Error('Main inspector disconnected; backend adaptation is no longer managed'));
     });
@@ -304,6 +326,7 @@ function createBackendController({
     }
     verifiedTarget = !waitingForInitialPause;
     await client.call('Debugger.enable');
+    await client.call('NodeRuntime.notifyWhenWaitingForDisconnect', { enabled: true });
   };
   const install = async (frame, legacyPause = null) => {
     const config = { key: adapterKey, owner, sourceURL, officialBackendPath, helperBackendPath, backendArgs,
@@ -313,7 +336,7 @@ function createBackendController({
     const state = await evaluate(expression, frame);
     if (!Number.isInteger(state?.sequence)) throw new Error('Backend adapter was not installed');
     installed = true;
-    status = { ...status, sequence: state.sequence };
+    transition({ sequence: state.sequence });
     return state;
   };
 
@@ -325,11 +348,15 @@ function createBackendController({
     getStatus: () => ({ ...status }),
     getConnectionInfo: () => ({ appPid, inspectorUrl, backendPid: status.backendPid }),
     restore() {
+      if (status.phase === 'exiting' || status.phase === 'exited') return Promise.resolve();
       if (restorePromise) return restorePromise;
       active = false;
       attachment?.abort();
       firstBackend.reject(new Error('Backend adapter was restored before becoming ready'));
       restorePromise = (async () => {
+        // 初始化先取得暂停点或已安装连接，清理复用这次资源交接。
+        await initialized.promise;
+        if (status.phase === 'exiting' || status.phase === 'exited') return;
         if (identityRejected || !verifiedTarget && !child) {
           client?.close();
           throw new Error('Cannot restore an unverified main process');
@@ -341,6 +368,7 @@ function createBackendController({
           // restore while its in-memory wrapper is still replacing processes.
           await connectMain();
         }
+        if (status.phase === 'exiting' || status.phase === 'exited') return;
         if (client?.connected) {
           const result = installed ? await evaluate(`(() => {
             const state = globalThis[${JSON.stringify(adapterKey)}];
@@ -357,49 +385,45 @@ function createBackendController({
               await client.call('Runtime.runIfWaitingForDebugger');
             }
           }
-          client.close();
         }
         // Swift Process.terminate() signals the helper runner's process group.
         // The app has its own group; these handles must not hold the runner open
         // after the adapter is restored while the independent app keeps running.
-        child?.unref();
-        status = { ...status, phase: 'restored', error: null };
+        if (status.phase !== 'exiting' && status.phase !== 'exited') transition({ phase: 'restored', error: null });
       })().catch(error => {
-        status = { ...status, phase: 'failed', error: `Adapter restore failed: ${error.message}` };
+        if (status.phase === 'exiting' || status.phase === 'exited') return;
+        transition({ phase: 'failed', error: `Adapter restore failed: ${error.message}` });
         restorePromise = undefined;
         throw error;
-      });
+      }).finally(() => { client?.close(); child?.unref(); });
       return restorePromise;
     },
   };
-  child?.once('exit', () => {
-    active = false;
-    attachment?.abort();
-    const error = new Error('Application exited before backend attachment completed');
-    firstBackend.reject(error);
-    firstPause.reject(error);
-    status = { ...status, phase: 'exited' };
-    client?.close();
-  });
+  child?.once('exit', () => finishApplication('exited'));
 
   return {
     async initialize(url, backendPid = null) {
+      transition({ phase: 'starting' });
       try {
         inspectorUrl = await url;
         waitingForInitialPause = backendPid === null;
         await connectMain();
+        if (status.phase === 'exiting' || status.phase === 'exited') throw new Error('Antigravity 已结束执行');
         if (waitingForInitialPause) {
           await client.call('Runtime.runIfWaitingForDebugger');
           const timer = setTimeout(() => firstPause.reject(new Error('Initial main-process pause timed out')), timeoutMs);
           let initial;
           try { initial = await firstPause.promise; } finally { clearTimeout(timer); }
-          if (!active) throw new Error('Application stopped during adapter startup');
+          if (status.phase === 'exiting' || status.phase === 'exited') throw new Error('Antigravity 已结束执行');
           if (await evaluate('process.pid', initial.frame) !== appPid) throw new Error('Main inspector application PID changed');
           verifiedTarget = true;
+          if (!active) throw new Error('子代理上下文启动已取消');
           await install(initial.frame);
+          initialized.resolve();
+          if (!active) throw new Error('子代理上下文启动已取消');
           waitingForInitialPause = false;
           handlingSpawns = true;
-          status = { ...status, phase: 'waiting-for-backend' };
+          transition({ phase: 'waiting-for-backend' });
           await resume(initial);
         } else {
           // An old helper can have disappeared while its wrapper was paused.
@@ -407,10 +431,12 @@ function createBackendController({
           const legacyPause = pause?.frame.functionName === 'helperBackendSpawn' && pause.source?.startsWith(adapterSource) ? pause : null;
           const state = await install(legacyPause?.frame, legacyPause);
           if (pause && pause.source === state.previousSourceURL && ['helperBackendReady', 'helperBackendSpawn'].includes(pause.frame.functionName)) pause.owned = true;
+          initialized.resolve();
+          if (!active) throw new Error('子代理上下文连接已取消');
           handlingSpawns = true;
           const ownedPause = pause?.owned ? pause : null;
           if (state.waitingForReady && ownedPause) {
-            status = { ...status, phase: 'waiting-for-backend', backendPid };
+            transition({ phase: 'waiting-for-backend', backendPid });
             await resume(ownedPause);
           } else {
             const pending = ownedPause ? await readPending(ownedPause) : { pid: backendPid, sequence: state.sequence, stage: 'reconnect' };
@@ -424,7 +450,7 @@ function createBackendController({
         // Preserve access to recovery without ending any application process.
         error.session = session;
         throw error;
-      }
+      } finally { initialized.resolve(); }
     },
   };
 }
@@ -435,15 +461,14 @@ function createBackendController({
  * native adapter before resolving and honor cancellation. For a new backend,
  * Electron pauses before consuming the LS's own ready line, after native startup.
  *
- * Returns a session with ready (first attachment), getConnectionInfo, getStatus
- * and restore. onError also reports later failures. Failure retains any owned
- * spawn pause for restore to release. restore never kills an app or removes
- * native instrumentation: the caller owns that cleanup. Importing does nothing.
+ * 返回 ready（首次连接）、getConnectionInfo、getStatus 和 restore。
+ * onStateChange 统一报告连接、故障和应用退出；正常退出先释放 Inspector。
+ * 活应用上的失败保留暂停点供 restore 恢复；原生注入的清理由调用方负责。
  */
 export async function launchBackendApp({
   enabled, appExecutable, officialBackendPath, helperBackendPath,
   appArgs = [], backendArgs = [], env = process.env,
-  onBackendSpawn, onError, timeoutMs = 15000,
+  onBackendSpawn, onStateChange, timeoutMs = 15000,
 }) {
   await validateBackendOptions({ enabled, officialBackendPath, helperBackendPath, backendArgs, onBackendSpawn });
   if (typeof appExecutable !== 'string' || !isAbsolute(appExecutable)) throw new TypeError('Application executable must be absolute');
@@ -456,7 +481,7 @@ export async function launchBackendApp({
     stdio: 'ignore', env, detached: true,
   });
   const controller = createBackendController({ child, appPid: child.pid ?? null, officialBackendPath,
-    helperBackendPath, backendArgs, onBackendSpawn, onError, timeoutMs });
+    helperBackendPath, backendArgs, onBackendSpawn, onStateChange, timeoutMs });
   return controller.initialize(waitForInspector(child, timeoutMs));
 }
 
@@ -470,7 +495,7 @@ export async function launchBackendApp({
  */
 export async function connectBackendApp({
   enabled, inspectorUrl, appPid, backendPid, officialBackendPath, helperBackendPath,
-  backendArgs = [], onBackendSpawn, onError, timeoutMs = 15000,
+  backendArgs = [], onBackendSpawn, onStateChange, timeoutMs = 15000,
 }) {
   await validateBackendOptions({ enabled, officialBackendPath, helperBackendPath, backendArgs, onBackendSpawn });
   if (!Number.isInteger(appPid) || appPid <= 0 || !Number.isInteger(backendPid) || backendPid <= 0) {
@@ -480,6 +505,6 @@ export async function connectBackendApp({
     throw new TypeError('Saved main inspector must be a loopback WebSocket URL');
   }
   const controller = createBackendController({ appPid, officialBackendPath, helperBackendPath,
-    backendArgs, onBackendSpawn, onError, timeoutMs });
+    backendArgs, onBackendSpawn, onStateChange, timeoutMs });
   return controller.initialize(inspectorUrl, backendPid);
 }
