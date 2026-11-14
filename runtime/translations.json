@@ -4628,6 +4628,21 @@
     "timer-unit:m": "分钟",
     "timer-unit:s": "秒",
     "timer-default-name": "{duration}计时器",
-    "swarm-ui:tool-worker": "执行成员 {member}"
+    "swarm-ui:tool-worker": "执行成员 {member}",
+    "Side Questions": "临时问题",
+    "Font Size": "字号",
+    "Appears larger on mobile": "在移动设备上显示更大",
+    "System UI": "系统界面字体",
+    "Submit Prompt (Alternate to Enter)": "发送提示词（备用快捷键）",
+    "Enter always submits. This adds a second shortcut.": "Enter 始终用于发送；这里可以设置第二个快捷键。",
+    "Jump to Previous Prompt": "跳转到上一条提示词",
+    "Jump to Next Prompt": "跳转到下一条提示词",
+    "Pin / Unpin Conversation": "置顶 / 取消置顶对话",
+    "Delete Side Question": "删除临时问题",
+    "New Side Question": "新建临时问题",
+    "Stop Side Question": "停止临时问题",
+    "Stop side question": "停止临时问题",
+    "Are you sure you want to delete this side question? This action cannot be undone.": "确定要删除此临时问题吗？此操作无法撤销。",
+    "side-question:default-title": "临时问题"
   }
 }

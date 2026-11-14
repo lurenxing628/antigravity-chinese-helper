@@ -4063,7 +4063,8 @@ test('native generated defaults preserve real Scratchpad files and Rule names, i
   // Current qnc rule-row projection branch; title and basename precede the
   // fixed fallback and the original rule/content objects remain untouched.
   f.evaluate("function qnc(t){return t.map(Ja=>{var Qa=ER(Ja.absolutePath);return{key:`rule-${Qa||Ja.memoryId}`,name:Ja.title||GR(Ja.absolutePath)||\"Rule\",path:Qa,content:Ja.content}})}");
-  const originalFile=f.window.EB,originalRows=f.window.qnc;
+  f.evaluate('var sideTitles=new Map(),Ak=select=>select(sideTitles),Xt=(state,parent,id)=>state.get(parent+":"+id); function sideName(a,b){return Ak(c=>Xt(c,a,b)??"Side Question")}');
+  const originalFile=f.window.EB,originalRows=f.window.qnc,originalSideName=f.window.sideName;
   const content=Object.freeze({text:'Rule / Scratchpad'});
   const rules=Object.freeze([
     Object.freeze({memoryId:'empty',content}),
@@ -4071,7 +4072,7 @@ test('native generated defaults preserve real Scratchpad files and Rule names, i
     Object.freeze({memoryId:'file',absolutePath:'/fixture/Rule',content})
   ]);
   f.install();
-  const savedFile=f.window.EB,savedRows=f.window.qnc;
+  const savedFile=f.window.EB,savedRows=f.window.qnc,savedSideName=f.window.sideName;
   assert.equal(savedFile({path:'/fixture/scratchpad_a1.md'}),'临时草稿');
   assert.equal(savedFile({path:'/fixture/Scratchpad.md'}),'Scratchpad');
   assert.equal(savedFile({path:'/fixture/my_report_1234567890123.md'}),'My Report (native-date)');
@@ -4079,10 +4080,15 @@ test('native generated defaults preserve real Scratchpad files and Rule names, i
   assert.deepEqual(Array.from(rows,row=>row.name),['规则','Rule','Rule']);
   assert.equal(rows[0].content,content);assert.equal(rows[2].path,'/fixture/Rule');
   assert.equal(rules[1].title,'Rule');assert.equal(rules[0].title,undefined);
+  assert.equal(savedSideName('parent','missing'),'临时问题');
+  f.window.sideTitles.set('parent:named','Side Question');
+  assert.equal(savedSideName('parent','named'),'Side Question','an actual side question title is data, even when it matches the fallback');
   f.uninstall()();
   assert.equal(f.window.EB,originalFile);assert.equal(f.window.qnc,originalRows);
   assert.equal(savedFile({path:'/fixture/scratchpad_a1.md'}),'Scratchpad');
   assert.equal(savedRows(rules)[0].name,'Rule');
+  assert.equal(f.window.sideName,originalSideName);
+  assert.equal(savedSideName('parent','missing'),'Side Question');
 });
 
 

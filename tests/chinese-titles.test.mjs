@@ -86,15 +86,19 @@ function lockManager() {
 function fixture({ summaries = { new: {
   summary: 'Fix Login Button', stepCount: 0,
   createdTime: { seconds: 1793559164n, nanos: 423000000 },
-} }, topLevel,
+} }, topLevel, forks = {}, sideQuestionType = 22,
   startCascade, send, save, read, generate = () => ({ response: '修复登录界面' }), loadModel = () => model,
   BroadcastChannel = broadcastChannels(), storage = memoryStorage(), locks } = {}) {
   let current = summaries;
+  let registeredForks = forks;
   let roots = topLevel ?? Object.fromEntries(Object.keys(summaries).map(id => [id, true]));
   const listeners = new Set();
   const calls = { started: [], sent: [], generated: [], saved: [], read: [], model: [] };
   const store = {
-    getState: () => ({ trajectorySummaries: { summaries: current, indexes: { topLevel: roots } } }),
+    getState: () => ({
+      trajectorySummaries: { summaries: current, indexes: { topLevel: roots } },
+      ephemeralFork: { forks: registeredForks },
+    }),
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
   };
   const emit = () => { for (const listener of listeners) listener(); };
@@ -120,9 +124,13 @@ function fixture({ summaries = { new: {
     async updateConversationAnnotations(request, options) {
       calls.saved.push({ request, options, receiver: this });
       const result = save ? await save(request, options) : 'saved';
-      for (const id of request.cascadeIds) {
+      for (const id of request.cascadeIds ?? [request.cascadeId]) {
+        const previous = request.mergeAnnotations ? current[id]?.annotations : {};
         current = { ...current, [id]: { ...current[id], annotations: {
-          ...(request.mergeAnnotations ? current[id]?.annotations : {}), ...request.annotations,
+          ...previous, ...request.annotations,
+          ...(request.mergeAnnotations && request.annotations.sideQuestionTitles ? {
+            sideQuestionTitles: { ...previous?.sideQuestionTitles, ...request.annotations.sideQuestionTitles },
+          } : {}),
         } } };
       }
       emit();
@@ -134,7 +142,7 @@ function fixture({ summaries = { new: {
   const controller = create(async (nativeClient) => {
     calls.model.push(nativeClient);
     return loadModel(nativeClient);
-  }, { storage, locks });
+  }, { storage, locks, sideQuestionType });
   return {
     controller, client, calls, listeners, original, BroadcastChannel,
     bind: () => controller.bind(client, store),
@@ -145,8 +153,44 @@ function fixture({ summaries = { new: {
       if (isTopLevel) roots[id] = true; else delete roots[id];
       emit();
     },
+    setFork(id, fork) { registeredForks = { ...registeredForks, [id]: fork }; emit(); },
+    removeFork(id) {
+      registeredForks = { ...registeredForks };
+      delete registeredForks[id];
+      emit();
+    },
     summary: id => current[id],
   };
+}
+
+const sideQuestionSource = '分析冗余的来源和代码收敛办法';
+const sideQuestionTitle = '分析冗余来源与收敛办法';
+const sideQuestionOffset = 4;
+function sideQuestionRequest(id = 'side', parentId = 'parent', trajectoryType = 22) {
+  return { cascadeId: id, trajectoryType,
+    baseTrajectoryIdentifier: { identifier: { case: 'cascadeId', value: parentId } } };
+}
+function sideQuestionFixture(options = {}) {
+  return fixture({
+    summaries: {
+      parent: { summary: 'An Existing Parent Conversation', stepCount: sideQuestionOffset, annotations: {
+        title: '已有父会话标题', sideQuestionCascadeIds: ['sibling'], sideQuestionTitles: { sibling: '既有兄弟标题' },
+      } },
+      side: { summary: 'A Native Side Question', trajectoryType: 22,
+        stepCount: sideQuestionOffset + 1, trajectoryId: 'side-trajectory' },
+    },
+    topLevel: { parent: true }, generate: () => ({ response: sideQuestionTitle }),
+    ...options,
+  });
+}
+function registerSideQuestion(f, id = 'side', question = sideQuestionSource) {
+  f.setFork(id, { parentConversationId: 'parent', parentTrajectoryLength: sideQuestionOffset, question });
+}
+function linkSideQuestion(f, id = 'side') {
+  const parent = f.summary('parent');
+  f.setSummary('parent', { ...parent, annotations: { ...parent.annotations,
+    sideQuestionCascadeIds: [...new Set([...parent.annotations.sideQuestionCascadeIds, id])],
+  } });
 }
 
 test('a confirmed new conversation generates one Chinese title through native APIs', async t => {
@@ -1161,4 +1205,283 @@ test('a completed shared task does not mistake another window stale summary for 
   assert.equal(other.controller.status().manualTitles, 0);
   assert.equal(Object.keys(storage.snapshot()).some(key => key.startsWith('antigravityChineseHelper.title.manual.')), false,
     'an applied terminal record must not create a durable manual tombstone from stale peer state');
+});
+
+test('a side question waits for creation and parent membership, then saves only its native title map entry', async t => {
+  const started = deferred(), storage = memoryStorage();
+  const f = sideQuestionFixture({ storage, startCascade: () => started.promise });
+  t.after(() => { started.resolve({ cascadeId: 'side' }); f.controller.dispose(); });
+  await f.bind();
+  await f.controller.ready;
+  registerSideQuestion(f);
+  const request = sideQuestionRequest(), starting = f.client.startCascade(request);
+  await f.client.sendUserCascadeMessage(message('side', sideQuestionSource));
+  await settle();
+  assert.equal(f.calls.generated.length, 0, 'a sent question still needs a confirmed native creation');
+  started.resolve({ cascadeId: 'side' });
+  await starting;
+  await settle();
+  assert.equal(f.calls.generated.length, 0, 'a confirmed fork without parent membership has no persistent title target');
+  linkSideQuestion(f);
+  await settle();
+
+  assert.equal(f.calls.generated.length, 1);
+  assert.ok(f.calls.generated[0].request.prompt.includes(sideQuestionSource));
+  assert.equal(f.calls.started[0].request, request);
+  assert.equal(f.calls.saved.length, 1);
+  assert.deepEqual(structuredClone(f.calls.saved[0].request), {
+    cascadeIds: ['parent'], annotations: { sideQuestionTitles: { side: sideQuestionTitle } }, mergeAnnotations: true,
+  });
+  assert.equal(f.summary('parent').annotations.title, '已有父会话标题');
+  assert.deepEqual(structuredClone(f.summary('parent').annotations.sideQuestionTitles), {
+    sibling: '既有兄弟标题', side: sideQuestionTitle,
+  });
+  assert.equal(f.summary('side').annotations?.title, undefined, 'the child explicit conversation title is not the side question label');
+  const record = JSON.parse(storage.snapshot()['antigravityChineseHelper.title.auto.side']);
+  assert.equal(record.kind, 'side-question');
+  assert.equal(record.parentId, 'parent');
+  assert.equal(record.stepOffset, sideQuestionOffset);
+  assert.equal(record.phase, 'applied');
+  assert.equal(f.controller.status().manualTitles, 0);
+});
+
+test('a manual side question rename cancels only that child while its sibling can finish', async t => {
+  const generated = deferred(), siblingGenerated = deferred(), storage = memoryStorage();
+  const siblingSource = '解释另一项设备利用率问题', siblingTitle = '解释设备利用率问题';
+  const f = sideQuestionFixture({ storage, generate: request => request.prompt.includes(siblingSource)
+    ? siblingGenerated.promise : generated.promise });
+  t.after(() => {
+    generated.resolve({ response: sideQuestionTitle }); siblingGenerated.resolve({ response: siblingTitle });
+    f.controller.dispose();
+  });
+  await f.bind();
+  await f.controller.ready;
+  registerSideQuestion(f);
+  await f.client.startCascade(sideQuestionRequest());
+  linkSideQuestion(f);
+  await f.client.sendUserCascadeMessage(message('side', sideQuestionSource));
+  await settle();
+  f.setSummary('other-side', { trajectoryType: 22, stepCount: sideQuestionOffset + 1 }, false);
+  registerSideQuestion(f, 'other-side', siblingSource);
+  await f.client.startCascade(sideQuestionRequest('other-side'));
+  linkSideQuestion(f, 'other-side');
+  await f.client.sendUserCascadeMessage(message('other-side', siblingSource));
+  await settle();
+  assert.equal(f.calls.generated.length, 2);
+
+  const request = { cascadeIds: ['parent'], annotations: { sideQuestionTitles: { side: '我手动指定的临时问题' } }, mergeAnnotations: true };
+  await f.client.updateConversationAnnotations(request);
+  assert.equal(f.calls.generated.find(call => call.request.prompt.includes(sideQuestionSource)).options.signal.aborted, true);
+  assert.equal(f.calls.generated.find(call => call.request.prompt.includes(siblingSource)).options.signal.aborted, false);
+  const markers = storage.snapshot();
+  assert.ok(markers['antigravityChineseHelper.title.manual.side']);
+  assert.equal(markers['antigravityChineseHelper.title.manual.parent'], undefined);
+  assert.equal(markers['antigravityChineseHelper.title.manual.other-side'], undefined);
+  generated.resolve({ response: sideQuestionTitle });
+  siblingGenerated.resolve({ response: siblingTitle });
+  await settle();
+  assert.equal(f.calls.saved.length, 2, 'only the requested manual name and the unaffected sibling are saved');
+  assert.equal(f.calls.saved[0].request, request);
+  assert.equal(f.summary('parent').annotations.title, '已有父会话标题');
+  assert.deepEqual(structuredClone(f.summary('parent').annotations.sideQuestionTitles), {
+    sibling: '既有兄弟标题', side: '我手动指定的临时问题', 'other-side': siblingTitle,
+  });
+});
+
+test('a side question manual rename in another window waits for an automatic map save and writes last', async t => {
+  const storage = memoryStorage(), locks = lockManager(), BroadcastChannel = broadcastChannels();
+  const saving = deferred(), events = [];
+  const f = sideQuestionFixture({ storage, locks, BroadcastChannel, save: async request => {
+    const title = request.annotations.sideQuestionTitles.side;
+    events.push(`auto-begin:${title}`);
+    await saving.promise;
+    events.push(`auto-end:${title}`);
+    return 'saved';
+  } });
+  const other = sideQuestionFixture({ storage, locks, BroadcastChannel, save: request => {
+    events.push(`manual:${request.annotations.sideQuestionTitles.side}`);
+    return 'saved';
+  } });
+  t.after(() => { saving.resolve(); f.controller.dispose(); other.controller.dispose(); });
+  await f.bind();
+  await other.bind();
+  await Promise.all([f.controller.ready, other.controller.ready]);
+  registerSideQuestion(f);
+  await f.client.startCascade(sideQuestionRequest());
+  linkSideQuestion(f);
+  linkSideQuestion(other);
+  await f.client.sendUserCascadeMessage(message('side', sideQuestionSource));
+  await settle();
+  assert.equal(f.calls.saved.length, 1);
+  const request = { cascadeIds: ['parent'], annotations: { sideQuestionTitles: { side: 'Manual Side Question Name' } }, mergeAnnotations: true };
+  const renaming = other.client.updateConversationAnnotations(request);
+  await settle();
+  assert.equal(other.calls.saved.length, 0, 'the manual map RPC must wait for the already dispatched automatic write');
+  saving.resolve();
+  assert.equal(await renaming, 'saved');
+  await settle();
+  assert.deepEqual(events, [`auto-begin:${sideQuestionTitle}`, `auto-end:${sideQuestionTitle}`, 'manual:Manual Side Question Name']);
+  assert.equal(other.summary('parent').annotations.sideQuestionTitles.side, 'Manual Side Question Name');
+  assert.equal(other.summary('parent').annotations.sideQuestionTitles.sibling, '既有兄弟标题');
+  assert.equal(other.summary('parent').annotations.title, '已有父会话标题');
+  assert.equal(f.calls.generated.length + other.calls.generated.length, 1);
+  assert.equal(storage.snapshot()['antigravityChineseHelper.title.manual.parent'], undefined);
+});
+
+test('a late backend side question title reapplies the durable Chinese result without generating again', async t => {
+  const storage = memoryStorage(), f = sideQuestionFixture({ storage });
+  let peer;
+  t.after(() => { f.controller.dispose(); peer?.controller.dispose(); });
+  await f.bind();
+  await f.controller.ready;
+  registerSideQuestion(f);
+  await f.client.startCascade(sideQuestionRequest());
+  linkSideQuestion(f);
+  await f.client.sendUserCascadeMessage(message('side', sideQuestionSource));
+  await settle();
+  assert.equal(JSON.parse(storage.snapshot()['antigravityChineseHelper.title.auto.side']).phase, 'applied');
+  const parent = f.summary('parent');
+  peer = sideQuestionFixture({storage,summaries:{side:f.summary('side'),parent:{...parent,annotations:{...parent.annotations,
+    sideQuestionTitles:{...parent.annotations.sideQuestionTitles,side:'A Stale Peer Title'}
+  }}}});
+  await peer.bind();
+  await peer.controller.ready;
+  await settle();
+  assert.equal(peer.calls.saved.length,0,'a newly opened window waits for the saved title before observing further backend changes');
+  assert.equal(storage.snapshot()['antigravityChineseHelper.title.manual.side'],undefined,'a stale peer must not mark the shared title as manually renamed');
+  f.setSummary('parent', { ...parent, annotations: { ...parent.annotations,
+    sideQuestionTitles: { ...parent.annotations.sideQuestionTitles, side: 'Late Native English Title' },
+  } });
+  await settle();
+  assert.equal(f.summary('parent').annotations.sideQuestionTitles.side, sideQuestionTitle);
+  assert.equal(f.calls.generated.length, 1, 'an existing Chinese result must not spend another generation request');
+  assert.equal(f.calls.saved.length, 2);
+  assert.deepEqual(structuredClone(f.calls.saved[1].request), {
+    cascadeIds: ['parent'], annotations: { sideQuestionTitles: { side: sideQuestionTitle } }, mergeAnnotations: true,
+  });
+  f.emit(); f.emit();
+  await settle();
+  assert.equal(f.calls.saved.length, 2, 'an unchanged native title causes no repeated save');
+  assert.equal(f.controller.status().manualTitles, 0, 'a backend map update is not a user rename RPC');
+});
+
+test('a side question restarts from its own input offset without a surviving ephemeral fork', async t => {
+  const storage = memoryStorage(), generated = deferred();
+  const f = sideQuestionFixture({ storage, generate: () => generated.promise });
+  let resumed;
+  t.after(() => { generated.resolve({ response: '旧实例迟到的结果' }); f.controller.dispose(); resumed?.controller.dispose(); });
+  await f.bind();
+  await f.controller.ready;
+  registerSideQuestion(f);
+  await f.client.startCascade(sideQuestionRequest());
+  linkSideQuestion(f);
+  await f.client.sendUserCascadeMessage(message('side', sideQuestionSource));
+  await settle();
+  assert.equal(f.calls.generated.length, 1);
+  assert.equal(JSON.stringify(storage.snapshot()).includes(sideQuestionSource), false, 'recovery stores the input boundary, not the question text');
+  f.controller.dispose();
+  f.removeFork('side');
+  const parentSource = '父会话最早提出的排产要求';
+  resumed = sideQuestionFixture({ storage, summaries: { parent: f.summary('parent'), side: f.summary('side') },
+    read: request => ({ steps: [{ step: { case: 'userInput', value: {
+      items: message('side', request.stepOffset === sideQuestionOffset ? sideQuestionSource : parentSource).items,
+    } } }] }),
+  });
+  await resumed.bind();
+  await resumed.controller.ready;
+  await settle();
+  assert.equal(resumed.calls.read.length, 1);
+  assert.deepEqual(structuredClone(resumed.calls.read[0].request), {
+    cascadeId: 'side', stepOffset: sideQuestionOffset, trajectoryVerbosity: 2,
+  });
+  assert.equal(resumed.calls.generated.length, 1);
+  assert.ok(resumed.calls.generated[0].request.prompt.includes(sideQuestionSource));
+  assert.equal(resumed.calls.generated[0].request.prompt.includes(parentSource), false);
+  assert.equal(resumed.summary('parent').annotations.sideQuestionTitles.side, sideQuestionTitle);
+  assert.equal(resumed.summary('parent').annotations.title, '已有父会话标题');
+  generated.resolve({ response: '旧实例迟到的结果' });
+  await settle();
+  assert.equal(f.calls.saved.length, 0, 'the disposed generator cannot overwrite the recovered result');
+});
+
+test('a side question manually renamed while the helper is off remains protected after restart', async t => {
+  const storage = memoryStorage(), f = sideQuestionFixture({ storage });
+  let resumed;
+  t.after(() => { f.controller.dispose(); resumed?.controller.dispose(); });
+  await f.bind();
+  await f.controller.ready;
+  registerSideQuestion(f);
+  await f.client.startCascade(sideQuestionRequest());
+  linkSideQuestion(f);
+  await f.client.sendUserCascadeMessage(message('side', sideQuestionSource));
+  await settle();
+  assert.equal(f.summary('parent').annotations.sideQuestionTitles.side, sideQuestionTitle);
+  f.controller.dispose();
+  await f.client.updateConversationAnnotations({ cascadeIds: ['parent'],
+    annotations: { sideQuestionTitles: { side: 'Intentional External Side Question Name' } }, mergeAnnotations: true,
+  });
+  assert.equal(storage.snapshot()['antigravityChineseHelper.title.manual.side'], undefined,
+    'the helper was off and could not observe the external manual RPC');
+  resumed = sideQuestionFixture({ storage, summaries: { parent: f.summary('parent'), side: f.summary('side') } });
+  await resumed.bind();
+  await resumed.controller.ready;
+  await settle();
+  assert.equal(resumed.calls.read.length, 0);
+  assert.equal(resumed.calls.generated.length, 0);
+  assert.equal(resumed.calls.saved.length, 0);
+  assert.equal(resumed.summary('parent').annotations.sideQuestionTitles.side, 'Intentional External Side Question Name');
+  assert.equal(resumed.summary('parent').annotations.sideQuestionTitles.sibling, '既有兄弟标题');
+});
+
+test('stopping the helper or deleting confirmed side question membership cancels an undispatched title save', async t => {
+  for (const closing of [false, true]) {
+    const generated = deferred(), f = sideQuestionFixture({ generate: () => generated.promise });
+    t.after(() => { generated.resolve({ response: sideQuestionTitle }); f.controller.dispose(); });
+    await f.bind();
+    await f.controller.ready;
+    registerSideQuestion(f);
+    await f.client.startCascade(sideQuestionRequest());
+    linkSideQuestion(f);
+    await f.client.sendUserCascadeMessage(message('side', sideQuestionSource));
+    await settle();
+    assert.equal(f.calls.generated.length, 1);
+    if (closing) f.controller.dispose();
+    else {
+      const parent = f.summary('parent');
+      f.setSummary('parent', { ...parent, annotations: { ...parent.annotations, sideQuestionCascadeIds: ['sibling'] } });
+      f.removeFork('side');
+    }
+    await settle();
+    assert.equal(f.calls.generated[0].options.signal.aborted, true);
+    generated.resolve({ response: sideQuestionTitle });
+    await settle();
+    assert.equal(f.calls.saved.length, 0);
+    assert.equal(f.summary('parent').annotations.sideQuestionTitles.side, undefined);
+    assert.equal(f.summary('parent').annotations.sideQuestionTitles.sibling, '既有兄弟标题');
+  }
+});
+
+test('ordinary forks, commit generation, help-only forks and existing side question names are not adopted', async t => {
+  const f = sideQuestionFixture();
+  t.after(() => f.controller.dispose());
+  await f.bind();
+  await f.controller.ready;
+  for (const [id, trajectoryType] of [['ordinary-fork', 4], ['commit-generation', 23], ['help-only', 22], ['named-side', 22]]) {
+    f.setSummary(id, { trajectoryType, stepCount: sideQuestionOffset + 1 }, false);
+    registerSideQuestion(f, id);
+    if (id === 'named-side') {
+      linkSideQuestion(f, id);
+      const parent = f.summary('parent');
+      f.setSummary('parent', { ...parent, annotations: { ...parent.annotations,
+        sideQuestionTitles: { ...parent.annotations.sideQuestionTitles, [id]: 'An Existing User Side Question Name' },
+      } });
+    }
+    await f.client.startCascade(sideQuestionRequest(id, 'parent', trajectoryType));
+    await f.client.sendUserCascadeMessage(message(id, sideQuestionSource));
+  }
+  await settle();
+  assert.equal(f.calls.generated.length, 0);
+  assert.equal(f.calls.saved.length, 0);
+  assert.equal(f.summary('parent').annotations.sideQuestionTitles['named-side'], 'An Existing User Side Question Name');
+  assert.equal(f.summary('parent').annotations.title, '已有父会话标题');
 });

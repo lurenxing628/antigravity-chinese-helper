@@ -660,6 +660,19 @@
   const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
   const summaries = hub => hub.store.getState().trajectorySummaries;
   const annotation = summary => summary?.annotations?.title?.trim() ?? '';
+  const isSideQuestion = record => record?.kind === 'side-question';
+  const targetSummary = (hub, record) => summaries(hub)?.summaries?.[record.id];
+  const parentSummary = (hub, record) => summaries(hub)?.summaries?.[record.parentId];
+  const sideMembers = (hub, record) => parentSummary(hub,record)?.annotations?.sideQuestionCascadeIds;
+  const currentTitle = (hub, record) => isSideQuestion(record)
+    ? parentSummary(hub,record)?.annotations?.sideQuestionTitles?.[record.id]?.trim() ?? ''
+    : annotation(targetSummary(hub,record));
+  const targetExists = (hub, record) => isSideQuestion(record)
+    ? sideMembers(hub,record)?.includes(record.id) === true
+    : Boolean(targetSummary(hub,record) && own(summaries(hub)?.indexes?.topLevel ?? {},record.id));
+  const saveRequest = record => ({cascadeIds:[isSideQuestion(record) ? record.parentId : record.id],
+    annotations:isSideQuestion(record) ? {sideQuestionTitles:{[record.id]:record.title}} : {title:record.title},
+    mergeAnnotations:true});
   const ownWrites = new WeakSet();
 
   function queueScan() {
@@ -683,10 +696,12 @@
       try { record = JSON.parse(value); } catch { lastError = 'record'; continue; }
       if (record?.v !== 1 || record.id !== id || typeof record.baseline !== 'string' ||
           !['starting','pending','generating','ready','applied','failed'].includes(record.phase)) continue;
+      if (record.kind !== undefined && (!isSideQuestion(record) || typeof record.parentId !== 'string' ||
+          !record.parentId || !Number.isInteger(record.stepOffset) || record.stepOffset < 0)) continue;
       const current = records.get(id);
       if (!initial && current?.owner === record.owner && current.revision >= record.revision) continue;
       records.set(id, record);
-      if (initial && record.phase !== 'applied') recovery.add(id);
+      if (initial && (record.phase !== 'applied' || isSideQuestion(record))) recovery.add(id);
       // A live peer has already completed this attempt. Only an unchanged
       // failure loaded at startup is eligible for restart recovery.
       else if (!initial && record.phase === 'failed') recovery.delete(id);
@@ -755,23 +770,31 @@
     operation.finally(() => { for (const id of ids) if (writes.get(id) === operation) writes.delete(id); }).catch(() => {});
     return operation;
   }
-  function hubFor(id) {
+  function hubFor(record) {
     for (const hub of hubs.values()) {
-      const state = summaries(hub);
-      if (state?.summaries?.[id] && own(state.indexes?.topLevel ?? {}, id)) return hub;
+      if (targetExists(hub,record)) return hub;
     }
     return null;
   }
   function allowed(record, hub) {
     if (manualTitles.has(record.id)) return false;
-    const summary = summaries(hub)?.summaries?.[record.id];
-    if (!summary || !own(summaries(hub)?.indexes?.topLevel ?? {}, record.id)) return false;
-    const actual = annotation(summary);
-    if (record.title && actual === record.title) return true;
+    if (!targetExists(hub,record)) return false;
+    const actual = currentTitle(hub,record);
+    if (record.title && actual === record.title) {
+      if (isSideQuestion(record)) {
+        validatedRecovery.add(record.id);
+        recovery.delete(record.id);
+      }
+      return true;
+    }
     // Only an initial recovery can contain a rename made while the helper was
     // off. Once observed here, native automatic titles may fill this same field;
     // manual edits are identified by the RPC/channel/durable manual marker.
     if (recovery.has(record.id) && !validatedRecovery.has(record.id)) {
+      // An applied side title starts observing again only after its saved value
+      // reaches this window. A mismatch can be an offline rename or a stale
+      // peer summary; neither permits a write or a shared manual marker.
+      if (isSideQuestion(record) && record.phase === 'applied') return false;
       if (actual !== record.baseline) {
         void protect([record.id]).catch(() => {});
         return false;
@@ -783,7 +806,8 @@
   }
   async function firstInput(hub, record, signal) {
     if (typeof hub.client.getCascadeTrajectorySteps !== 'function') return null;
-    const result = await hub.client.getCascadeTrajectorySteps({cascadeId:record.id, stepOffset:0, trajectoryVerbosity:2}, {signal});
+    const result = await hub.client.getCascadeTrajectorySteps({cascadeId:record.id,
+      stepOffset:isSideQuestion(record) ? record.stepOffset : 0, trajectoryVerbosity:2}, {signal});
     const input = result?.steps?.find(step => step.step?.case === 'userInput')?.step.value;
     if (!input) return null;
     return (input.items ?? []).filter(item => item.chunk?.case === 'text').map(item => item.chunk.value).join('').trim()
@@ -793,19 +817,20 @@
   async function run(id, task) {
     const work = async () => {
       await refreshRecords();
-      const record = records.get(id), hub = hubFor(id);
+      const record = records.get(id), hub = record && hubFor(record);
       const current = () => !stopped && !task.abort.signal.aborted && records.get(id) === record && !manualTitles.has(id);
-      if (storageError || !record || record.phase === 'applied' || !hub || !current()) return;
+      if (storageError || !record || (record.phase === 'applied' && !isSideQuestion(record)) || !hub || !current()) return;
       if (record.phase === 'failed' && !recovery.has(id) && record.owner !== owner) return;
       if (!allowed(record, hub)) return;
-      if (annotation(summaries(hub)?.summaries?.[id]) === record.title && record.title) {
+      if (currentTitle(hub,record) === record.title && record.title) {
+        if (isSideQuestion(record)) written.delete(id);
         if (record.phase !== 'applied') await saveRecord(record, {phase:'applied', error:null});
         return;
       }
       // Keep observing late native titles after failure so restart does not
       // mistake an automatic annotation for a manual rename.
       if (record.phase === 'failed' && !recovery.has(id)) return;
-      if (written.has(id) || record.phase === 'applied') return;
+      if (written.has(id) || (record.phase === 'applied' && !isSideQuestion(record))) return;
       let stage = 'recovery', model = null;
       try {
         if (!record.title) {
@@ -813,14 +838,14 @@
           const receipt = receipts.get(id);
           let source = receipt?.text;
           if (!receipt) {
-            recoveryReads.set(id, recoveryVersion(summaries(hub)?.summaries?.[id]));
+            recoveryReads.set(id, recoveryVersion(targetSummary(hub,record)));
             source = await firstInput(hub, record, task.abort.signal);
             if (!current() || !allowed(record, hub)) return;
             if (source === null && !record.sent) return;
             if (source !== null) await saveRecord(record, {started:true, sent:true, phase:'pending'});
           }
           if (!record.started || !record.sent) return;
-          source ||= summaries(hub)?.summaries?.[id]?.summary?.trim();
+          source ||= targetSummary(hub,record)?.summary?.trim();
           if (!source) return;
           if (recovery.delete(id)) restored++;
           attempted.add(id);
@@ -862,10 +887,10 @@
         await serializeWrite([id], async () => {
           await refreshRecords();
           if (!current() || !allowed(record, hub)) return;
-          if (annotation(summaries(hub)?.summaries?.[id]) === record.title) {
+          if (currentTitle(hub,record) === record.title) {
             await saveRecord(record, {phase:'applied', error:null}); return;
           }
-          const request = {cascadeIds:[id], annotations:{title:record.title}, mergeAnnotations:true};
+          const request = saveRequest(record);
           ownWrites.add(request);
           // Do not abort a dispatched save and release its lock early. A manual
           // rename waits for this RPC and is then sent last, including in peers.
@@ -873,8 +898,10 @@
           written.add(id);
           if (current()) {
             generated++; lastError = null; lastFailure = null; receipts.delete(id);
-            if (annotation(summaries(hub)?.summaries?.[id]) === record.title)
+            if (currentTitle(hub,record) === record.title) {
+              if (isSideQuestion(record)) written.delete(id);
               await saveRecord(record, {phase:'applied', error:null});
+            }
           }
         });
       } catch (error) {
@@ -893,27 +920,48 @@
   }
   function scan() {
     if (stopped || !loaded || storageError) return;
+    for (const start of starts) {
+      if (!start.side || !start.confirmed) continue;
+      if (targetExists(start.hub,{id:start.id,...start.side})) {
+        const record = makeRecord(start.id,start.hub,true,start.side);
+        starts.delete(start);
+        if (record) void saveRecord(record,{started:true,...(receipts.get(start.id)?.done ? {sent:true} : {}),phase:'pending'}).catch(() => {});
+        else receipts.delete(start.id);
+      } else if (!start.hub.store.getState().ephemeralFork?.forks?.[start.id]) {
+        starts.delete(start); receipts.delete(start.id);
+      }
+    }
     for (const record of records.values()) {
-      if (manualTitles.has(record.id) || record.phase === 'applied') continue;
-      const hub = hubFor(record.id);
+      if (manualTitles.has(record.id) || (record.phase === 'applied' && !isSideQuestion(record))) continue;
+      const hub = hubFor(record);
       if (!hub) {
         for (const candidate of hubs.values()) {
           const state = summaries(candidate);
-          if (state?.summaries?.[record.id] && state.indexes?.topLevel && !own(state.indexes.topLevel, record.id)) {
+          const removed = isSideQuestion(record) ? Array.isArray(sideMembers(candidate,record)) && !sideMembers(candidate,record).includes(record.id)
+            : state?.summaries?.[record.id] && state.indexes?.topLevel && !own(state.indexes.topLevel, record.id);
+          if (removed) {
             retire(record); break;
           }
         }
         continue;
       }
       if (running.has(record.id)) continue;
-      const summary = summaries(hub)?.summaries?.[record.id];
-      if (record.title && annotation(summary) === record.title) {
+      const summary = targetSummary(hub,record), actual = currentTitle(hub,record);
+      if (record.title && actual === record.title) {
+        if (isSideQuestion(record)) {
+          allowed(record,hub);
+          written.delete(record.id);
+        }
         if (record.phase !== 'applied') void saveRecord(record, {phase:'applied', error:null}).catch(() => {});
         continue;
       }
+      // Side-question auto titles share the same native map with the backend's
+      // generated title. Reuse the saved Chinese result after a late update.
+      if (isSideQuestion(record) && record.title &&
+          (record.phase === 'applied' || actual !== record.baseline)) written.delete(record.id);
       if (written.has(record.id)) continue;
       if (record.phase === 'failed' && !recovery.has(record.id) &&
-          (record.owner !== owner || annotation(summary) === record.baseline)) continue;
+          (record.owner !== owner || actual === record.baseline)) continue;
       // Voice and Best of N bypass the text-send RPC. Their confirmed new
       // trajectory uses the same first-input reader as an interrupted task.
       if (!recovery.has(record.id) && (!record.started || !record.sent && !(summary?.stepCount > 0))) continue;
@@ -923,7 +971,7 @@
       void run(record.id, task);
     }
   }
-  function makeRecord(id, hub, confirmedNew = false) {
+  function makeRecord(id, hub, confirmedNew = false, side = null) {
     if (!id || manualTitles.has(id)) return null;
     const existing = records.get(id);
     if (existing) return existing.phase === 'applied' ? null : existing;
@@ -931,12 +979,22 @@
     // The composer creates its optimistic summary (including createdTime)
     // before startCascade. Existing steps, rather than that timestamp, identify
     // a prior conversation at this entry point.
-    if (annotation(summary) || !confirmedNew && summary?.stepCount > 0) return null;
-    const record = {v:1, id, phase:'starting', started:false, sent:false, baseline:annotation(summary), title:''};
+    if (!side && (annotation(summary) || !confirmedNew && summary?.stepCount > 0)) return null;
+    const record = {v:1, id, phase:'starting', started:false, sent:false,...(side ?? {}),baseline:'',title:''};
+    record.baseline = currentTitle(hub,record);
     records.set(id, record);
     freshRecords.add(record);
     void saveRecord(record).catch(() => {});
     return record;
+  }
+  function sideQuestionTarget(request,hub) {
+    if (!Number.isInteger(options.sideQuestionType) || request.trajectoryType !== options.sideQuestionType) return null;
+    const fork = hub.store.getState().ephemeralFork?.forks?.[request.cascadeId];
+    const parentId = fork?.parentConversationId, stepOffset = fork?.parentTrajectoryLength;
+    const base = request.baseTrajectoryIdentifier?.identifier;
+    if (typeof parentId !== 'string' || !parentId || !Number.isInteger(stepOffset) || stepOffset < 0 ||
+        base?.case !== 'cascadeId' || base.value !== parentId) return null;
+    return {kind:'side-question',parentId,stepOffset};
   }
   function bind(client, store) {
     if (stopped || !client || !store || typeof client.getModelResponse !== 'function' || hubs.has(client)) return;
@@ -949,7 +1007,10 @@
     };
     hook('startCascade', original => function startWithChineseTitle(request, ...options) {
       if (stopped) return original.call(this, request, ...options);
-      const start = {id:request.cascadeId, record:request.cascadeId ? makeRecord(request.cascadeId, hub) : null};
+      const side = sideQuestionTarget(request,hub);
+      const start = {id:request.cascadeId,hub,side,
+        record:!side && request.cascadeId ? makeRecord(request.cascadeId,hub) : null};
+      if (side && (manualTitles.has(start.id) || currentTitle(hub,{id:start.id,...side}))) start.ignored = true;
       const discardNew = () => {
         if (!stopped && start.record && freshRecords.has(start.record) && !start.record.started &&
             ![...starts].some(other => other.record === start.record)) retire(start.record);
@@ -959,23 +1020,28 @@
       try { result = original.call(this, request, ...options); }
       catch (error) { starts.delete(start); discardNew(); throw error; }
       Promise.resolve(result).then(response => {
-        starts.delete(start);
-        if (stopped || start.id && !start.record) return;
+        if (!side) starts.delete(start);
+        if (stopped) return;
         const id = response.cascadeId;
+        if (side) {
+          if (start.ignored || id !== start.id) { starts.delete(start); receipts.delete(start.id); return; }
+          start.confirmed = true; queueScan(); return;
+        }
+        if (start.id && !start.record) return;
         if (!id) { discardNew(); return; }
         if (start.id && start.id !== id) discardNew();
         const record = start.id === id ? records.get(id) : makeRecord(id, hub, true);
         if (!record || record.phase === 'applied' || manualTitles.has(id)) return;
         void saveRecord(record, {started:true, ...(receipts.get(id)?.done ? {sent:true} : {}), phase:'pending'}).catch(() => {});
         queueScan();
-      }, () => { starts.delete(start); discardNew(); });
+      }, () => { starts.delete(start); if (side) receipts.delete(start.id); discardNew(); });
       return result;
     });
     hook('sendUserCascadeMessage', original => function sendWithChineseTitle(request, ...options) {
       if (stopped) return original.call(this, request, ...options);
       const id = request.cascadeId, record = records.get(id);
       const track = record && !record.sent && !manualTitles.has(id)
-        || [...starts].some(start => !start.id);
+        || [...starts].some(start => !start.id || start.side && start.id === id && !start.ignored);
       let receipt = receipts.get(id);
       const first = track && !receipt?.sending && !receipt?.done;
       if (first) {
@@ -990,14 +1056,18 @@
         const current = records.get(id);
         if (!stopped && current && !manualTitles.has(id)) {
           void saveRecord(current, {sent:true, phase:'pending'}).catch(() => {}); queueScan();
-        }
+        } else if (!stopped) queueScan();
       }, () => { receipt.sending = false; });
       return result;
     });
     hook('updateConversationAnnotations', original => function preserveNativeTitle(request, ...options) {
-      if (stopped || ownWrites.has(request) || !request.annotations || !own(request.annotations, 'title'))
+      if (stopped || ownWrites.has(request) || !request.annotations)
         return original.call(this, request, ...options);
-      const ids = (request.cascadeIds?.length ? request.cascadeIds : [request.cascadeId]).filter(id => typeof id === 'string' && id);
+      const ids = [...new Set([
+        ...(own(request.annotations,'title') ? request.cascadeIds?.length ? request.cascadeIds : [request.cascadeId] : []),
+        ...Object.keys(request.annotations.sideQuestionTitles ?? {})
+      ])].filter(id => typeof id === 'string' && id);
+      if (!ids.length) return original.call(this,request,...options);
       const savingProtection = protect(ids);
       renameChannel?.postMessage({type:'manual-rename', cascadeIds:ids});
       const receiver = this;
@@ -1013,7 +1083,8 @@
   return {
     bind, ready,
     status:() => ({boundClients:hubs.size, pending:[...records.values()].filter(record => !manualTitles.has(record.id) && !['applied','failed'].includes(record.phase)).length,
-      generated, failed, lastError, lastFailure, tracked:records.size, restored, manualTitles:manualTitles.size, storageReady:loaded, storageError}),
+      generated, failed, lastError, lastFailure, tracked:records.size, restored, manualTitles:manualTitles.size, storageReady:loaded, storageError,
+      sideQuestionSupported:Number.isInteger(options.sideQuestionType),sideQuestions:[...records.values()].filter(isSideQuestion).length}),
     dispose() {
       if (stopped) return;
       stopped = true; renameChannel?.close();
@@ -1033,7 +1104,6 @@
   const selector = '[data-testid="model-selector-trigger"]';
   const instances = new Map();
   const clients = new WeakMap();
-  const titles = createTitles?.(async client => { await catalog(client); return clientCache(client).titleModel; });
   const contextLimits = new Map();
   const contextSettings = new Map();
   const storagePrefix = 'antigravityChineseHelper.contextLimit.';
@@ -1073,6 +1143,10 @@
   // Its window property remains accessible and identifies the browsing context.
   const nativeGlobals = Object.getOwnPropertyNames(appWindow).map(key => Object.getOwnPropertyDescriptor(appWindow,key)?.value)
     .filter(value => value?.window !== value);
+  const startSchema = nativeGlobals.find(value => value?.kind === 'message' && value.typeName === 'exa.language_server_pb.StartCascadeRequest');
+  const sideQuestionType = startSchema?.fields.find(field => field.localName === 'trajectoryType')?.enum
+    ?.values.find(value => value.localName === 'SIDE_QUESTION')?.number;
+  const titles = createTitles?.(async client => { await catalog(client); return clientCache(client).titleModel; },{sideQuestionType});
   const nativeQuotaReader = nativeGlobals.find(value => typeof value === 'function' && (() => {
       const source = Function.prototype.toString.call(value);
       return source.includes('retrieveUserQuotaSummary') && source.includes('Promise.resolve') && /5E3|5000/.test(source);
@@ -3151,6 +3225,8 @@
       literal = 'Scratchpad'; key = 'artifact-label:Scratchpad'; fallback = '临时草稿';
     } else if (source.includes('absolutePath') && source.includes('memoryId') && source.includes('||"Rule"') && source.split('"Rule"').length === 2) {
       literal = 'Rule'; key = 'customization-name:Rule-fallback'; fallback = '规则';
+    } else if (source.includes('??"Side Question"') && source.split('"Side Question"').length === 2) {
+      literal = 'Side Question'; key = 'side-question:default-title'; fallback = '临时问题';
     } else continue;
     const original = entry.invoke ?? entry.original, owner = entry.owner ?? window;
     let localized, prepared = false;
@@ -6922,7 +6998,7 @@ const navigatorGroupEntry = nativeFunctions.find(entry => entry.source.includes(
   const originalLang = document.documentElement.getAttribute('lang');
   const textExcluded = 'script,style,noscript,pre,code,kbd,samp,svg,canvas,iframe,webview,input,textarea,[contenteditable]:not([contenteditable="false"]),.monaco-editor,.xterm,.cm-editor,[data-ch-keep]';
   const authored = '[role="article"],[data-testid="user-input-step"],[data-testid="turn-cards-container"],[data-testid="side-question-question"],[data-testid="side-question-answer"],[aria-label="User message"],[aria-label="Agent response"],.leading-relaxed.select-text';
-  const named = '[data-testid="conversation-row-sidebar"],[data-testid="project-header"],[data-testid="breadcrumb-segment"],[data-testid="settings-nav-item-Account"],[data-testid="automation-name"]';
+  const named = '[data-testid="conversation-row-sidebar"],[data-testid="project-header"],[data-testid="breadcrumb-segment"],[data-testid="settings-nav-item-Account"],[data-testid="automation-name"],[data-testid="side-question-row"] .agy-hover-label,[data-testid="side-question-tab-header-name"]';
   // These strings belong to the application's progress/transition renderer.
   // Changing them after its width measurements makes the native animation flicker.
   // Its slots are empty-valued spans; named slots also belong to ordinary controls.
