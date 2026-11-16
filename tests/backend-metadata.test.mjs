@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseBackendMetadata, prepareBackendMetadata, reserveBackendBudget } from '../runtime/backend-metadata.mjs';
+import { appendNativeResources, inspectNativeBinary, parseBackendMetadata, prepareBackendMetadata, reserveBackendBudget } from '../runtime/backend-metadata.mjs';
 
 // A small, real-format Mach-O / pclntab / rtype fixture. Code addresses, Go
 // fields, descriptor locations and the moduledata tail can move independently.
@@ -304,4 +304,95 @@ test('reconnection revalidates a declared note against the structural tail and f
   const cmd = appendCommand(payload.bytes, 0x29, 16);
   payload.bytes.writeUInt32LE(0x8000, cmd + 8); payload.bytes.writeUInt32LE(8, cmd + 12);
   assert.throws(() => parseBackendMetadata(payload.bytes), /link-edit data occupies/);
+});
+
+test('a declared budget keeps adjacent RX UI thunks outside its reservation on reread', () => {
+  const { bytes } = reservableFixture(), slot = reserveBackendBudget(bytes, { trailingBytes:512 });
+  assert.deepEqual(slot, { rva:0x8000, size:0xe00, codeRva:0x8020, capacity:0xde0 });
+  const note = 32 + bytes.readUInt32LE(20) - 40, uiStart = slot.rva + slot.size;
+  bytes.writeUInt32LE(0xd65f03c0, uiStart); bytes.writeUInt32LE(0xd65f03c0, bytes.length - 4);
+  assert.deepEqual(parseBackendMetadata(bytes).budgetSlot, slot, 'UI代码不要求清零，也不扩大预算NOTE');
+  assert.deepEqual(reserveBackendBudget(bytes), slot, '重读保持原预算边界');
+  const occupied = Buffer.from(bytes); occupied[slot.codeRva] = 1;
+  assert.throws(() => parseBackendMetadata(occupied), /budget reservation padding is not zero-filled/);
+  const moved = Buffer.from(bytes); moved.writeBigUInt64LE(BigInt(slot.rva + 16), note + 24);
+  assert.throws(() => parseBackendMetadata(moved), /does not identify the structural RX tail/);
+  const oversized = Buffer.concat([bytes, Buffer.alloc(16)]);
+  oversized.writeBigUInt64LE(0x1010n, note + 32);
+  assert.throws(() => parseBackendMetadata(oversized), /AGHBudget reservation is not in one RX text page/);
+});
+
+function resourcesFixture() {
+  // Like the CLI, this has only 32 bytes between load commands and __text.
+  const value = fixture({ codeShift:-0x1a8 });
+  const bytes = Buffer.alloc(0xc200);
+  value.bytes.copy(bytes);
+  bytes.writeBigUInt64LE(0xc000n, 32 + 32); bytes.writeBigUInt64LE(0xc000n, 32 + 48);
+  bytes.writeUInt32LE(5, 32 + 56); bytes.writeUInt32LE(5, 32 + 60);
+  bytes.fill(0xab, value.text, value.text + 0x200);
+  const link = appendCommand(bytes, 0x19, 72);
+  bytes.write('__LINKEDIT', link + 8);
+  bytes.writeBigUInt64LE(BigInt(value.imageBase + 0x10000), link + 24);
+  bytes.writeBigUInt64LE(0x4000n, link + 32);
+  bytes.writeBigUInt64LE(0xc000n, link + 40); bytes.writeBigUInt64LE(0x200n, link + 48);
+  bytes.writeUInt32LE(1, link + 56); bytes.writeUInt32LE(1, link + 60);
+  bytes.fill(0x5a, 0xc000, 0xc100); bytes.fill(0xcc, 0xc100);
+  const uuid = appendCommand(bytes, 0x1b, 24);
+  Buffer.from('00112233445566778899aabbccddeeff', 'hex').copy(bytes, uuid + 8);
+  const build = appendCommand(bytes, 0x32, 32);
+  bytes.writeUInt32LE(1, build + 8); bytes.writeUInt32LE(0xc0000, build + 12);
+  bytes.writeUInt32LE(0x1b0000, build + 16); bytes.writeUInt32LE(1, build + 20);
+  bytes.writeUInt32LE(3, build + 24); bytes.writeUInt32LE(0x120000, build + 28);
+  const signature = appendCommand(bytes, 0x1d, 16);
+  bytes.writeUInt32LE(0xc100, signature + 8); bytes.writeUInt32LE(0x100, signature + 12);
+  assert.equal(value.text - (32 + bytes.readUInt32LE(20)), 32);
+  return { ...value, bytes, uuid, build, signature };
+}
+
+function loadCommands(bytes) {
+  const result = [];
+  for (let position = 32, index = 0; index < bytes.readUInt32LE(16); index++) {
+    const command = bytes.readUInt32LE(position), size = bytes.readUInt32LE(position + 4);
+    result.push({ command, position, size }); position += size;
+  }
+  return result;
+}
+
+test('CLI text resources preserve UUID and existing addresses while making room for budget and signing', () => {
+  const { bytes, imageBase, text, uuid, build } = resourcesFixture(), original = Buffer.from(bytes);
+  const before = inspectNativeBinary(bytes), resources = Buffer.alloc(0x4100, 0x7a);
+  resources.write('中文界面\0');
+  const { binary, address, fileOffset } = appendNativeResources(bytes, resources);
+  assert.deepEqual(bytes, original, '转换只修改助手副本');
+  assert.equal(fileOffset, 0xc100); assert.equal(address, imageBase + 0x10100);
+  assert.deepEqual(binary.subarray(fileOffset, fileOffset + resources.length), resources);
+  assert.deepEqual(binary.subarray(text, 0xc100), original.subarray(text, 0xc100), '代码、Go数据和既有LINKEDIT负载保持原位');
+  const after = inspectNativeBinary(binary);
+  assert.deepEqual(after.allSections, before.allSections, '新增文本不插入section或更改section序号');
+  assert.deepEqual(after.functions, before.functions);
+  const link = after.segments.find(segment => segment.name === '__LINKEDIT');
+  assert.equal(link.address + fileOffset - link.fileOffset, address);
+  assert.equal(link.fileSize, binary.length - link.fileOffset);
+  assert.equal(link.memorySize, 0x8000); assert.equal(link.protection, 1);
+  const commands = loadCommands(binary), uuidCommand = commands.find(item => item.command === 0x1b);
+  assert.deepEqual(binary.subarray(uuidCommand.position + 8, uuidCommand.position + 24), original.subarray(uuid + 8, uuid + 24), 'dyld要求的UUID仍在');
+  assert.equal(commands.some(item => item.command === 0x1d), false, '旧签名交给codesign重建');
+  const buildCommand = commands.find(item => item.command === 0x32);
+  assert.equal(buildCommand.size, 24);
+  assert.deepEqual(binary.subarray(buildCommand.position + 8, buildCommand.position + 20), original.subarray(build + 8, build + 20));
+  assert.equal(binary.readUInt32LE(buildCommand.position + 20), 0);
+  const slot = reserveBackendBudget(binary);
+  assert.equal(slot.rva, 0x8000);
+  assert.equal(text - (32 + binary.readUInt32LE(20)), 16, '声明预算NOTE后仍留16字节给新签名命令');
+  assert.deepEqual(inspectNativeBinary(binary).allSections, before.allSections);
+});
+
+test('CLI text resources reject signatures outside the final LINKEDIT range', () => {
+  for (const [field, value] of [[8, 0xb000], [12, 0xf0]]) {
+    const { bytes, signature } = resourcesFixture();
+    bytes.writeUInt32LE(value, signature + field);
+    const original = Buffer.from(bytes);
+    assert.throws(() => appendNativeResources(bytes, Buffer.from('中文')), /code signature is not the final read-only link-edit data/);
+    assert.deepEqual(bytes, original);
+  }
 });

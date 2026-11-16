@@ -13,7 +13,7 @@ const restore = 0xa97ffbfd, ret = 0xd65f03c0;
 
 // A compact fixture retains the real blocks' register and stack relationships.
 // Function RVAs, frame size and protobuf offsets can move independently.
-function fixture({ relocate = false, reorderFields = false, frameSize = 0x100 } = {}) {
+function fixture({ relocate = false, reorderFields = false, frameSize = 0x100, providerClamp = false } = {}) {
   const buffer = Buffer.alloc(0x700);
   for (let offset = 0; offset < buffer.length; offset += 4) buffer.writeUInt32LE(0xd503201f, offset);
   const definitions = [
@@ -85,11 +85,18 @@ function fixture({ relocate = false, reorderFields = false, frameSize = 0x100 } 
   put(clamp, 0x0c, ldr(3, 2, types.CascadeConfig.fields.CheckpointConfig.offset), str(2, 31, 0x78), str(3, 31, 0x40),
     cbz(pc(clamp, 0x18), pc(clamp, 0x24), 2), ldr(4, 2, types.CascadeConfig.fields.PlannerConfig.offset),
     branch(pc(clamp, 0x20), pc(clamp, 0x28)), mov(4, 31), (0xa9000000 | (13 << 15) | (1 << 10) | (31 << 5)) >>> 0, mov(2, 4));
+  const plannerRegister = providerClamp ? 5 : 3, outputRegister = providerClamp ? 4 : 2;
   put(clamp, 0x30, branch(pc(clamp, 0x30), functions.GetModelInfoFromPlannerConfig.rva, true), ldr(1, 31, 0x78),
-    cbz(pc(clamp, 0x38), pc(clamp, 0x44), 1), ldr(3, 1, types.CascadeConfig.fields.PlannerConfig.offset),
-    branch(pc(clamp, 0x40), pc(clamp, 0x48)), mov(3, 31), cbz(pc(clamp, 0x48), pc(clamp, 0x54), 3),
-    ldr(2, 3, types.CascadePlannerConfig.fields.MaxOutputTokens.offset, 4), branch(pc(clamp, 0x50), pc(clamp, 0x58)), mov(2, 31), mov(1, 0), ldr(0, 31, 0x40),
-    branch(pc(clamp, 0x60), functions.ClampCheckpointConfigForModelInfo.rva, true));
+    cbz(pc(clamp, 0x38), pc(clamp, 0x44), 1), ldr(plannerRegister, 1, types.CascadeConfig.fields.PlannerConfig.offset),
+    branch(pc(clamp, 0x40), pc(clamp, 0x48)), mov(plannerRegister, 31), cbz(pc(clamp, 0x48), pc(clamp, 0x54), plannerRegister),
+    ldr(outputRegister, plannerRegister, types.CascadePlannerConfig.fields.MaxOutputTokens.offset, 4),
+    branch(pc(clamp, 0x50), pc(clamp, 0x58)), mov(outputRegister, 31));
+  if (providerClamp) {
+    put(clamp, 0x58, ldr(1, 31, 0x70), ldr(2, 31, 0x40), mov(3, 0), ldr(0, 31, 0x68),
+      branch(pc(clamp, 0x68), functions.ClampCheckpointConfigForModelInfo.rva, true));
+  } else {
+    put(clamp, 0x58, mov(1, 0), ldr(0, 31, 0x40), branch(pc(clamp, 0x60), functions.ClampCheckpointConfigForModelInfo.rva, true));
+  }
   const hooks = 'runInvocationHooks', step = 'stepPreInvocation';
   put(hooks, 0x10, add(20, 31, 0x160, true), (0xa9000000 | (127 << 15) | (30 << 10) | (20 << 5) | 29) >>> 0,
     add(31, 20, 0), add(29, 31, 8, true));
@@ -122,6 +129,23 @@ test('derives relocated functions, reordered fields and a moved Go frame without
   assert.equal(plan.fields.RunInput.MaxContextTokens,232);
   assert.deepEqual(plan.typeRefs.StepUserInput,{rva:moved.metadata.types.StepUserInput.rva,pointerRva:moved.metadata.types.StepUserInput.pointerRva});
   assert.deepEqual(JSON.parse(JSON.stringify(plan)), plan, 'The installation plan contains only JSON data');
+});
+
+test('derives the provider-aware Go 1.28 clamp without changing the observed model register', () => {
+  const value = fixture({ providerClamp:true, relocate:true, reorderFields:true, frameSize:0x140 });
+  const plan = deriveBackendLayout(value.buffer, value.metadata);
+  assert.equal(plan.sites.observe.rva, value.pc(value.clamp, 0x34));
+  assert.equal(plan.sites.observe.modelInfoRegister, 0);
+  assert.equal(plan.clampCfgSpill, 0x78);
+  assert.equal(plan.scratchOffset, value.scratch);
+});
+
+test('rejects a changed provider interface or resolved model argument in the Go 1.28 clamp', () => {
+  for (const [offset, instruction] of [[0x58, ldr(1, 31, 0x68)], [0x60, mov(3, 1)]]) {
+    const value = fixture({ providerClamp:true });
+    value.put(value.clamp, offset, instruction);
+    assert.throws(() => deriveBackendLayout(value.buffer, value.metadata), /official clamp argument preparation changed/);
+  }
 });
 
 test('rejects a pointer in any locals bitmap, including a later GC safe point', () => {

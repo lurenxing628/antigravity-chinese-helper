@@ -16,7 +16,8 @@ const configPath = join(stateDir, 'backend-context.json');
 const receiptPath = join(stateDir, 'backend-session.json');
 const appStoragePath = '/fixture/Antigravity/app_storage.json';
 const receipt = {appPid:101, backendPid:202, inspectorUrl:'ws://127.0.0.1:9229/fixture', officialBackendPath, helperBackendPath};
-const fixtureLayout = { format:1, profile:'fixture-layout' };
+const fixtureLayout = { format:1, profile:'fixture-layout',
+  sites:Object.fromEntries(['reset','observe','final','consume'].map((name,index) => [name,{rva:4096 + index * 256}])) };
 
 function deferred() {
   let resolve, reject;
@@ -26,7 +27,7 @@ function deferred() {
 
 // Execute the real manager with in-memory files and fake external boundaries.
 // No subprocess, application, inspector or instrumentation is started by these tests.
-function fixture({targetTokens = 400000, mainSettings, savedReceipt = null, running = [], connectError = null,
+function fixture({contextOverridesEnabled = true, targetTokens = 400000, mainSettings, savedReceipt = null, running = [], connectError = null,
   attachError = null, readyError = null, holdReady = false, files:existingFiles = null} = {}) {
   const source = readFileSync(moduleUrl, 'utf8').replace(/^import .*;\n/gm, '')
     .replace(/^export /gm, '').replaceAll('import.meta.url', JSON.stringify(moduleUrl.href));
@@ -46,6 +47,10 @@ function fixture({targetTokens = 400000, mainSettings, savedReceipt = null, runn
     let stdout = '';
     if (command === '/bin/ps') stdout = behavior.running.map(([pid, path]) => `${pid} ${path}`).join('\n');
     else if (command === '/usr/bin/plutil') stdout = JSON.stringify({LSEnvironment:{FROM_PLIST:'bundle', SHARED_ENV:'bundle'}});
+    else if (command.endsWith('/AntigravityBackendMach')) {
+      events.push({type:'mach', operation:args[0], args:[...args]});
+      stdout = JSON.stringify({descriptor:'0xabc000', initialized:false});
+    }
     else if (command !== '/usr/bin/open') return callback(new Error(`Unexpected command: ${command}`));
     callback(null, stdout, '');
   };
@@ -201,13 +206,19 @@ function fixture({targetTokens = 400000, mainSettings, savedReceipt = null, runn
     rm:async path => { for (const key of files.keys()) if (key === path || key.startsWith(`${path}/`)) files.delete(key); },
     prepareBackendCopy:async options => { events.push({type:'prepare', options}); return {binaryPath:helperBackendPath, buildCL:'1017595969', layout:fixtureLayout}; },
     inspectBackendBinary:async path => { events.push({type:'inspect', path}); return fixtureLayout; },
+    CONTEXT_OVERRIDES_ENABLED:false,
+    restoreBackendApp:async options => {
+      events.push({type:'restore-only', options});
+      if (behavior.restoreError) throw behavior.restoreError;
+      return {restored:true,resumed:false,wrapper:'removed'};
+    },
     createBackendRuntime,
     launchBackendApp:options => sessionFor('launch', options),
     connectBackendApp:options => sessionFor('connect', options),
     setTimeout, clearTimeout, AbortController, URL,
   });
   vm.runInContext(`${source}\nglobalThis.createManager = createBackendManager;`, context, {filename:'runtime/backend-manager.mjs'});
-  const manager = context.createManager({stateDir, runtimeDir, appPath, appStoragePath, onChange:status => statuses.push(status)});
+  const manager = context.createManager({stateDir, runtimeDir, appPath, appStoragePath, contextOverridesEnabled, onChange:status => statuses.push(status)});
   return {manager, behavior, events, writes, files, sessions, runtimes, statuses,
     count:type => events.filter(event => event.type === type).length,
     savedLimit:() => JSON.parse(files.get(configPath)).targetTokens};
@@ -786,4 +797,67 @@ test('主存储读取失败阻止误用默认启动，通知准确失败且不�
   assert.equal(recovered.mainMessage, '');
   assert.equal((await f.manager.launch()).launched, true);
   assert.equal(f.count('prepare'), 0, '没有有效主/子额度时仍走普通启动');
+});
+
+
+test('disabled context policy ignores old budgets and uses only the normal App launch', async t => {
+  const f = fixture({contextOverridesEnabled:false, mainSettings:{'antigravityChineseHelper.contextLimit.1437':'768000'}});
+  t.after(() => f.manager.dispose());
+  f.files.set(configPath, 'old settings need not be parsed while the feature is disabled');
+  await f.manager.ready;
+  await f.manager.setLimit(900000);
+  await f.manager.mainSettingsChanged();
+  const status = f.manager.getStatus();
+  assert.equal(status.contextOverridesEnabled, false);
+  assert.equal(status.targetTokens, null);
+  assert.equal(status.active, false);
+  assert.equal(status.nativeReady, false);
+  assert.equal(status.mainOverrides, false);
+  assert.equal(status.error, null);
+  assert.equal(status.mainMessage, '');
+  assert.equal(f.events.some(event => event.type === 'read' && [configPath,appStoragePath].includes(event.path)), false);
+  assert.equal(f.writes.length, 0, 'a hidden API call must not save or enable a custom budget');
+  assert.equal((await f.manager.launch()).launched, true);
+  assert.deepEqual(f.events.filter(event => event.command === '/usr/bin/open').map(event => event.args), [[appPath]]);
+  for (const type of ['prepare','inspect','connect','runtime-create','native-install','attach','launch','mach']) assert.equal(f.count(type), 0, type);
+});
+
+test('disabled context policy removes an existing installation without reattaching or interrupting its App', async t => {
+  for (const descriptor of ['0xabc000', undefined]) {
+    const savedReceipt = {...receipt,...(descriptor ? {nativeDescriptor:descriptor} : {})};
+    const f = fixture({contextOverridesEnabled:false, savedReceipt,
+      running:[[101,appExecutable],[202,helperBackendPath]]});
+    t.after(() => f.manager.dispose());
+    await f.manager.ready;
+    assert.equal(f.count('restore-only'), 1);
+    assert.deepEqual(f.events.filter(event => event.type === 'mach').map(event => event.operation),
+      descriptor ? ['remove'] : ['inspect','remove']);
+    assert.equal(f.files.has(receiptPath), false);
+    assert.equal(f.manager.getStatus().error, null);
+    assert.equal(f.manager.getStatus().active, false);
+    assert.equal(f.count('kill'), 0);
+    assert.equal(f.count('runtime-create'), 0);
+    assert.equal(f.count('connect'), 0);
+    assert.equal(f.count('attach'), 0);
+    assert.equal(f.count('prepare'), 0);
+    assert.equal((await f.manager.launch()).launched, false);
+    assert.equal(f.manager.getStatus().mainMessage, '');
+    assert.ok(f.behavior.running.some(([pid,path]) => pid === 101 && path === appExecutable));
+  }
+});
+
+test('disabled context policy restores the live App when its recorded backend has exited or its PID was reused', async t => {
+  for (const backend of [[], [[202, '/foreign/backend']]]) {
+    const f = fixture({contextOverridesEnabled:false, savedReceipt:{...receipt,nativeDescriptor:'0xabc000'},
+      running:[[101,appExecutable],...backend]});
+    t.after(() => f.manager.dispose());
+    await f.manager.ready;
+    assert.equal(f.count('restore-only'), 1, 'the wrapper must not launch another helper backend after restart');
+    assert.equal(f.count('mach'), 0, 'the missing or reused backend PID is not a native removal target');
+    assert.equal(f.count('kill'), 0);
+    assert.equal(f.files.has(receiptPath), false);
+    assert.equal(f.manager.getStatus().error, null);
+    assert.equal(f.count('attach'), 0);
+    assert.equal(f.count('connect'), 0);
+  }
 });

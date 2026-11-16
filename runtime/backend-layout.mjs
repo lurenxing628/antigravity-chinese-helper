@@ -184,17 +184,21 @@ export function deriveBackendLayout(buffer, metadata) {
     load(resetWords[2], 1, 31, frameSize + 16) && load(resetWords[3], 2, 31, frameSize + 24), 'configuration-call register preparation changed');
 
   const observeRva = getterCall + 4;
-  check(clampCall === observeRva + 44, 'model getter / official clamp sequence changed');
-  const observeWords = words(clamp, observeRva, 12), clampCfgSpill = memory(observeWords[0])?.offset;
+  // Go 1.28's clamp also receives the provider interface. Both layouts resolve
+  // the model in X0 first; their original argument preparation remains in place.
+  const providerClamp = clampCall === observeRva + 52;
+  check(providerClamp || clampCall === observeRva + 44, 'model getter / official clamp sequence changed');
+  const plannerRegister = providerClamp ? 5 : 3, outputRegister = providerClamp ? 4 : 2;
+  const observeWords = words(clamp, observeRva, providerClamp ? 14 : 12), clampCfgSpill = memory(observeWords[0])?.offset;
   check(Number.isSafeInteger(clampCfgSpill) && load(observeWords[0], 1, 31, clampCfgSpill) &&
     cbz(observeWords[1], observeRva + 4, 1, observeRva + 16) &&
-    load(observeWords[2], 3, 1, fields.CascadeConfig.PlannerConfig) && masked(observeWords[3], 0xfc000000, 0x14000000) && jump(observeWords[3], observeRva + 12)?.target === observeRva + 20 &&
-    moveZero(observeWords[4], 3) && cbz(observeWords[5], observeRva + 20, 3, observeRva + 32) &&
-    load(observeWords[6], 2, 3, fields.CascadePlannerConfig.MaxOutputTokens, 4) && masked(observeWords[7], 0xfc000000, 0x14000000) && jump(observeWords[7], observeRva + 28)?.target === observeRva + 36 &&
-    moveZero(observeWords[8], 2) && move(observeWords[9], 1, 0), 'model-info / planner selection block changed');
+    load(observeWords[2], plannerRegister, 1, fields.CascadeConfig.PlannerConfig) && masked(observeWords[3], 0xfc000000, 0x14000000) && jump(observeWords[3], observeRva + 12)?.target === observeRva + 20 &&
+    moveZero(observeWords[4], plannerRegister) && cbz(observeWords[5], observeRva + 20, plannerRegister, observeRva + 32) &&
+    load(observeWords[6], outputRegister, plannerRegister, fields.CascadePlannerConfig.MaxOutputTokens, 4) && masked(observeWords[7], 0xfc000000, 0x14000000) && jump(observeWords[7], observeRva + 28)?.target === observeRva + 36 &&
+    moveZero(observeWords[8], outputRegister), 'model-info / planner selection block changed');
   const cfgStore = unique(entries(clamp).filter(item => item.pc < getterCall && store(item.word, 2, 31, clampCfgSpill)), 'clamp configuration spill').pc;
   const checkpointSpill = memory(observeWords[10])?.offset;
-  check(Number.isSafeInteger(checkpointSpill) && load(observeWords[10], 0, 31, checkpointSpill) &&
+  check(Number.isSafeInteger(checkpointSpill) && load(observeWords[10], providerClamp ? 2 : 0, 31, checkpointSpill) &&
     entries(clamp).some(item => item.pc < getterCall && load(item.word, 3, 2, fields.CascadeConfig.CheckpointConfig)), 'official clamp checkpoint argument changed');
   check(getterCall === cfgStore + 32, 'model getter argument preparation changed');
   const prepare = words(clamp, cfgStore, 8), providerSpill = memory(prepare[6]);
@@ -203,6 +207,9 @@ export function deriveBackendLayout(buffer, metadata) {
     jump(prepare[4], cfgStore + 16)?.target === cfgStore + 24 && moveZero(prepare[5], 4) &&
     providerSpill && !providerSpill.vector && !providerSpill.load && providerSpill.rn === 31 && providerSpill.rt === 0 && providerSpill.rt2 === 1 &&
     providerSpill.width === 8 && !providerSpill.writeback && move(prepare[7], 2, 4), 'model getter argument preparation changed');
+  check(providerClamp ? load(observeWords[9], 1, 31, providerSpill.offset + 8) &&
+    move(observeWords[11], 3, 0) && load(observeWords[12], 0, 31, providerSpill.offset) :
+    move(observeWords[9], 1, 0), 'official clamp argument preparation changed');
 
   const finalRva = unique(entries(outer).filter(item => {
     if (item.pc > outer.rva + outer.size - 20) return false;

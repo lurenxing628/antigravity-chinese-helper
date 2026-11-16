@@ -5,7 +5,8 @@ import { homedir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { createBackendRuntime, inspectBackendBinary, prepareBackendCopy } from './backend-runtime.mjs';
-import { connectBackendApp, launchBackendApp } from './backend-launch.mjs';
+import { connectBackendApp, launchBackendApp, restoreBackendApp } from './backend-launch.mjs';
+import { CONTEXT_OVERRIDES_ENABLED } from './context-policy.mjs';
 
 const exec = promisify(execFile);
 export const antigravityDataDirectories = ['Antigravity', 'antigravity'].map(name =>
@@ -20,7 +21,7 @@ function validLimit(tokens) {
 }
 
 /** Own the shared native budget lifecycle; main preferences stay in nativeStorage. */
-export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applications/Antigravity.app', appStoragePath, onChange }) {
+export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applications/Antigravity.app', appStoragePath, onChange, contextOverridesEnabled = CONTEXT_OVERRIDES_ENABLED }) {
   const directory = resolve(stateDir);
   const settingsPath = join(directory, 'backend-context.json');
   const receiptPath = join(directory, 'backend-session.json');
@@ -36,10 +37,10 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
 
   const getStatus = () => {
     const native = owner?.runtime.getStatus();
-    const nativeReady = !disposed && Boolean(owner && !owner.appGone && !owner.ending &&
+    const nativeReady = contextOverridesEnabled && !disposed && Boolean(owner && !owner.appGone && !owner.ending &&
       owner.session?.getStatus().phase === 'running' && native.attached && !native.disposed && !native.lastError);
     const active = targetTokens !== null && nativeReady;
-    return { targetTokens, active, nativeReady, mainOverrides, error: error ?? mainSettingsError,
+    return { contextOverridesEnabled, targetTokens, active, nativeReady, mainOverrides, error: error ?? mainSettingsError,
       mainMessage: mainSettingsError ?? (mainOverrides && !nativeReady ? mainSavedMessage : ''),
       message: targetTokens === null ? '使用子代理默认上下文' : active ? '' : savedMessage };
   };
@@ -56,6 +57,7 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   }
   async function refreshMainSettings() {
+    if (!contextOverridesEnabled) { mainOverrides = false; mainSettingsError = null; return true; }
     try {
       let present = false;
       for (const path of mainSettingsPaths) {
@@ -114,8 +116,9 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
     const ownedPath = relative(backendFolder, helper).split(sep);
     if (receipt.officialBackendPath !== official || helper === official || ownedPath.length !== 2 ||
         !/^\d+$/.test(ownedPath[0]) || ownedPath[1] !== 'language_server') return null;
+    const appMatches = current.get(receipt.appPid) === app, backendMatches = current.get(receipt.backendPid) === helper;
     return { appPid: receipt.appPid, backendPid: receipt.backendPid, appExecutable: app, helperBackendPath: helper,
-      matches: current.get(receipt.appPid) === app && current.get(receipt.backendPid) === helper };
+      appMatches, backendMatches, matches: appMatches && backendMatches };
   }
 
   async function reapOrphanedBackend(owned) {
@@ -232,11 +235,41 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
       },
     };
   }
+  async function removeSavedBudget(receipt, candidate) {
+    let failure;
+    try {
+      if (candidate.appMatches) await restoreBackendApp({ appPid:receipt.appPid, inspectorUrl:receipt.inspectorUrl });
+    }
+    catch (error) { failure = error; }
+    // Removal validates the saved descriptor in the live helper copy. It never
+    // adopts, prepares or installs a budget hook while the feature is disabled.
+    try {
+      if (candidate.backendMatches) {
+        let descriptor = receipt.nativeDescriptor;
+        if (!descriptor) {
+          const layout = await inspectBackendBinary(candidate.helperBackendPath);
+          const { stdout } = await exec(machExecutablePath, ['inspect', String(receipt.backendPid), candidate.helperBackendPath,
+            ...['reset', 'observe', 'final', 'consume'].map(name => String(layout.sites[name].rva))],
+            { timeout:15000, killSignal:'SIGKILL', maxBuffer:1024 * 1024 });
+          descriptor = JSON.parse(stdout).descriptor;
+        }
+        if (descriptor) await exec(machExecutablePath, ['remove', String(receipt.backendPid), candidate.helperBackendPath, String(descriptor)],
+          { timeout:15000, killSignal:'SIGKILL', maxBuffer:1024 * 1024 });
+      }
+    } catch (error) {
+      if (!error.stderr?.includes('TARGET_EXITED')) failure ??= error;
+    }
+    await reapOrphanedBackend(candidate);
+    if (failure && !(candidate.appGone && candidate.backendGone)) throw failure;
+    await rm(receiptPath, { force:true });
+  }
   async function initialize() {
     try {
-      const saved = await readJson(settingsPath);
-      if (saved && !validLimit(saved.targetTokens)) throw new Error('已保存的子代理上下文设置无效');
-      targetTokens = saved?.targetTokens ?? null;
+      if (contextOverridesEnabled) {
+        const saved = await readJson(settingsPath);
+        if (saved && !validLimit(saved.targetTokens)) throw new Error('已保存的子代理上下文设置无效');
+        targetTokens = saved?.targetTokens ?? null;
+      }
       if (!await refreshMainSettings()) return publish();
       publish({ error: null });
       const receipt = await readJson(receiptPath);
@@ -244,6 +277,10 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
       let candidate;
       try { candidate = await inspectReceipt(receipt); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (!contextOverridesEnabled && candidate) {
+        await removeSavedBudget(receipt, candidate);
+        return publish({error:null});
+      }
       if (!candidate?.matches) {
         await reapOrphanedBackend(candidate);
         await rm(receiptPath, { force: true });
@@ -279,7 +316,7 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
     getStatus,
     mainSettingsChanged() {
       return serial(async () => {
-        if (disposed) return getStatus();
+        if (disposed || !contextOverridesEnabled) return getStatus();
         const refreshed = await refreshMainSettings();
         if (!refreshed) { publish(); throw new Error(mainSettingsError); }
         return publish();
@@ -312,7 +349,7 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
     },
     setLimit(tokens) {
       return serial(async () => {
-        if (disposed) return getStatus();
+        if (disposed || !contextOverridesEnabled) return getStatus();
         if (!validLimit(tokens)) return publish({ error: '子代理上下文上限必须为正整数 token，或恢复默认' });
         const previous = targetTokens, owned = owner && !owner.ending ? owner : null;
         try {

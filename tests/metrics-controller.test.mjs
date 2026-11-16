@@ -967,3 +967,35 @@ test('native notification failure preserves saved main limits and broadcasts ref
   f.controller.dispose();
   assert.equal(listeners.size, 0);
 });
+
+
+test('disabled context overrides ignore saved budgets and preserve native sends and usage', async t => {
+  let storageReads = 0, bridgeReads = 0;
+  const f = fixture(state('A', 1), {contextOverridesEnabled:false,
+    stored:{'antigravityChineseHelper.contextLimit.1417':'768000'},
+    load:() => { storageReads++; return {'antigravityChineseHelper.contextLimit.1417':'768000'}; },
+    windowGlobals:{__antigravitySubagentContext:{
+      getStatus() { bridgeReads++; }, subscribe() { bridgeReads++; }
+    }},
+    metadata:() => ({generatorMetadata:[record(0, {usage:usage(100, 20, 30)})]}),
+    config:() => ({cascadeConfig:{checkpointConfig:{enabled:true,maxTokenLimit:512000},plannerConfig:{maxOutputTokens:65536}}})
+  });
+  t.after(() => f.controller.dispose());
+  const originalMessage = f.client.sendUserCascadeMessage, originalQueued = f.client.sendAllQueuedMessages;
+  f.mount(); await settle();
+  assert.equal(f.client.sendUserCascadeMessage, originalMessage);
+  assert.equal(f.client.sendAllQueuedMessages, originalQueued);
+  assert.equal(storageReads, 0);
+  assert.equal(bridgeReads, 0);
+  assert.equal(f.snapshot().contextSetting, null);
+  assert.equal(f.snapshot().compactionReference, 512000);
+  assert.equal(f.snapshot().metrics.outputTokens, 20);
+  assert.equal(await f.setLimit(900000), false);
+  assert.equal(f.calls.saved.length, 0);
+  for (const method of ['sendUserCascadeMessage','sendAllQueuedMessages']) {
+    const request = {cascadeId:'A',cascadeConfig:{plannerConfig:{planModel:model}}};
+    await f.client[method](request);
+    assert.equal(f.calls.sent.at(-1).request, request);
+    assert.equal(request.cascadeConfig.checkpointConfig, undefined);
+  }
+});

@@ -4092,6 +4092,55 @@ test('native generated defaults preserve real Scratchpad files and Rule names, i
 });
 
 
+test('side-question default tabs, headers and new-tab actions preserve real names and callbacks', () => {
+  const f=nativeFixture();
+  f.evaluate(`
+    var sideTabs={sideQuestionView:{getTabTitle:a=>a.type!=="sideQuestionView"||a.sideQuestionView.cascadeId?"Side Question":"New Side Question"}};
+    var sideHeader=({name:a,id:d,onRename:g})=>{
+      var b=a?\`Side Question: \${a}\`:"Side Question";
+      return d?A.createElement("span",{"data-testid":"side-question-tab-header-title",title:b},
+        A.createElement("span",{"data-testid":"side-question-tab-header-prefix"},a?"Side Question: ":"Side Question"),
+        a&&A.createElement("span",{"data-testid":"side-question-tab-header-name",onDoubleClick:g},a))
+        :A.createElement("span",{"data-testid":"side-question-tab-header-title",title:"New Side Question"},"New Side Question");
+    };
+    var sideNewTab=({cards:a,results:b})=>A.createElement("div",{"data-testid":"side-panel-new-tab-view"},
+      A.createElement("input",{"data-testid":"new-tab-search-input"}),
+      a.map(c=>A.createElement("button",{"data-testid":\`new-tab-card-\${c.id}\`,onClick:c.onSelect},
+        A.createElement("span",null,c.icon),A.createElement("span",null,c.title))),
+      b.map(c=>A.createElement("button",{"data-testid":\`new-tab-result-\${c.key}\`,onClick:c.onSelect},
+        A.createElement("span",null,c.icon),A.createElement("span",{className:"truncate"},c.label))));
+  `);
+  const original={tab:f.window.sideTabs.sideQuestionView.getTabTitle,header:f.window.sideHeader,actions:f.window.sideNewTab};
+  const adapters=f.install(),tab=f.window.sideTabs.sideQuestionView.getTabTitle;
+  assert.ok(adapters.hooks.some(hook=>hook.kind==='native-side-question-tab-title'));
+  const empty={type:'sideQuestionView',sideQuestionView:{}},existing={type:'sideQuestionView',sideQuestionView:{cascadeId:'child'}};
+  assert.equal(tab(empty),'新建临时问题');assert.equal(tab(existing),'临时问题');
+  let renamed=0,selected=0;const onRename=()=>renamed++,onSelect=()=>selected++;
+  const header=f.window.sideHeader({name:'Side Question',id:'child',onRename});
+  assert.equal(header.props.title,'临时问题：Side Question');
+  assert.equal(header.props.children[0].props.children,'临时问题： ');
+  assert.equal(header.props.children[1].props.children,'Side Question');
+  assert.equal(header.props.children[1].props.onDoubleClick,onRename);
+  const defaultHeader=f.window.sideHeader({id:'child'});
+  assert.equal(defaultHeader.props.title,'临时问题');assert.equal(defaultHeader.props.children[0].props.children,'临时问题');
+  assert.equal(f.window.sideHeader({}).props.children,'新建临时问题');
+  const cards=[{id:'side-question',title:'Side Question',onSelect},{id:'custom',title:'Side Question',onSelect}];
+  const results=[{key:'action__side-question',label:'Side Question',onSelect},
+    {key:'tab__named',label:'Side Question',onSelect},{key:'side_question__named',label:'Side Question',onSelect}];
+  const actions=f.window.sideNewTab({cards,results});
+  assert.deepEqual(Array.from(actions.props.children[1],node=>node.props.children[1].props.children),['临时问题','Side Question']);
+  assert.deepEqual(Array.from(actions.props.children[2],node=>node.props.children[1].props.children),['临时问题','Side Question','Side Question']);
+  assert.equal(actions.props.children[1][0].props.onClick,onSelect);assert.equal(renamed,0);assert.equal(selected,0);
+  actions.props.children[1][0].props.onClick();assert.equal(selected,1);assert.equal(cards[0].title,'Side Question');
+  adapters.setStrings({'side-question:default-title':'临时提问','Side Question:':'临时提问：'});
+  assert.equal(tab(existing),'临时提问');assert.equal(f.window.sideHeader({name:'Side Question',id:'child'}).props.title,'临时提问：Side Question');
+  f.uninstall()();
+  assert.equal(f.window.sideTabs.sideQuestionView.getTabTitle,original.tab);
+  assert.equal(f.window.sideHeader,original.header);assert.equal(f.window.sideNewTab,original.actions);
+  assert.equal(tab(existing),'Side Question','cached display wrappers stop translating after uninstall');
+});
+
+
 test('native IWA instructions, harness defaults and cached Cider tips retain actions and supplied names', () => {
   const f=nativeFixture();
   f.evaluate(`var callbacks=0;

@@ -1,4 +1,4 @@
-(function installAntigravityChinese(dictionary) {
+(function installAntigravityChinese(dictionary, runtimeOptions) {
   'use strict';
   if (location.protocol !== 'https:' || location.hostname !== '127.0.0.1' || window.top !== window) return null;
   if (typeof window.electronNative?.getZoomLevel !== 'function' || typeof window.nativeStorage?.getItems !== 'function') return null;
@@ -7,7 +7,7 @@
   if (!document.documentElement || !document.body) return null;
   window.__antigravityChineseHelper?.uninstall?.();
 
-  const VERSION = '0.3.40';
+  const VERSION = '0.3.41';
   let strings, normalizedStrings;
   setStrings(dictionary);
   let stopped = false;
@@ -17,6 +17,7 @@
   const createContextRingView = (function createContextRingView(document, anchor, actions) {
   'use strict';
   actions ??= {};
+  const contextOverridesEnabled = actions.contextOverridesEnabled === true;
 
   const window = document.defaultView;
   // LGb is the app's own quota ring. Retain its React and global Tailwind styles.
@@ -227,7 +228,7 @@
     tooltip.id = `context-${key}-tooltip`; tooltip.setAttribute('role', key === 'context' ? 'dialog' : 'tooltip'); tooltip.hidden = true;
     if (key === 'context') {
       button.setAttribute('aria-haspopup', 'dialog'); button.setAttribute('aria-controls', tooltip.id);
-      button.removeAttribute('aria-describedby'); tooltip.setAttribute('aria-label', '上下文用量与设置');
+      button.removeAttribute('aria-describedby'); tooltip.setAttribute('aria-label', contextOverridesEnabled ? '上下文用量与设置' : '上下文用量');
     }
     const usePopover = typeof tooltip.showPopover === 'function';
     if (usePopover) tooltip.setAttribute('popover', 'manual');
@@ -307,8 +308,10 @@
   const settingStatus = document.createElement('p'); settingStatus.className = 'setting-status'; settingStatus.setAttribute('role', 'status'); settingStatus.setAttribute('data-testid', 'context-limit-status');
   settingForm.setAttribute('data-testid', 'context-limit-form');
   settingForm.append(settingTitle, settingControls, settingHint, settingStatus);
-  context.panel.prepend(createSubagentContextForm());
-  context.panel.prepend(settingForm);
+  if (contextOverridesEnabled) {
+    context.panel.prepend(createSubagentContextForm());
+    context.panel.prepend(settingForm);
+  }
   function clearApplyFeedback() {
     window.clearTimeout(applyFeedbackTimer); applyFeedbackTimer = null;
     writeText(settingApply, '应用');
@@ -587,8 +590,8 @@
     const metricsChanged = !currentMetrics || Boolean(currentSubagentMetrics) !== Boolean(nextSubagentMetrics) ||
       metrics.some(({key}) => currentMetrics[key] !== nextMetrics[key] || currentSubagentMetrics?.[key] !== nextSubagentMetrics?.[key]);
     const setting = snapshot?.contextSetting ?? null;
-    const settingChanged = !current || current.maxContext !== next.maxContext || ['modelKey', 'modelLabel', 'defaultLimit', 'customLimit', 'effectiveLimit', 'maxLimit', 'pending', 'error', 'supported', 'message', 'nativeReady']
-      .some(key => currentSetting?.[key] !== setting?.[key]);
+    const settingChanged = contextOverridesEnabled && (!current || current.maxContext !== next.maxContext || ['modelKey', 'modelLabel', 'defaultLimit', 'customLimit', 'effectiveLimit', 'maxLimit', 'pending', 'error', 'supported', 'message', 'nativeReady']
+      .some(key => currentSetting?.[key] !== setting?.[key]));
     if (!ringsChanged && !metricsChanged && !settingChanged) return false;
     if (settingChanged) updateSetting(setting, next.maxContext);
     if (ringsChanged) {
@@ -1099,8 +1102,9 @@
     }
   };
 });
-  const createContextRingController = (function createContextRingController(document, createView, createTitles) {
+  const createContextRingController = (function createContextRingController(document, createView, createTitles, runtimeOptions) {
   'use strict';
+  const contextOverridesEnabled = runtimeOptions?.contextOverridesEnabled === true;
   const selector = '[data-testid="model-selector-trigger"]';
   const instances = new Map();
   const clients = new WeakMap();
@@ -1111,7 +1115,7 @@
   let stopped = false;
   const quotaHubs = new Map();
   const appWindow = document.defaultView;
-  const mainBridge = appWindow.__antigravitySubagentContext;
+  const mainBridge = contextOverridesEnabled ? appWindow.__antigravitySubagentContext : null;
   let nativeStatus = null, nativeRevision = 0, mainRequestRevision = 0, mainSyncError = null;
   function acceptNativeStatus(next) {
     nativeStatus = next; mainSyncError = null; publishContextSettings();
@@ -1124,7 +1128,7 @@
     if (!stopped && nativeRevision === initialNativeRevision) acceptNativeStatus(next);
   }, () => {});
   async function mainSettingsChanged() {
-    if (stopped) return;
+    if (!contextOverridesEnabled || stopped) return;
     const revision = nativeRevision, requestRevision = ++mainRequestRevision;
     try {
       if (typeof mainBridge?.mainSettingsChanged !== 'function') throw new Error('原生上下文服务未连接');
@@ -1257,12 +1261,12 @@
     }
     return changed;
   }
-  const storageReady = Promise.resolve().then(() => {
+  const storageReady = (contextOverridesEnabled ? Promise.resolve().then(() => {
     if (typeof storage?.getItems !== 'function' || typeof storage?.updateItems !== 'function') throw new Error();
     return storage.getItems();
   }).then(readStoredLimits).catch(() => { storageError = '无法读取已保存设置，请重新加载助手后重试'; })
-    .finally(() => { storageLoaded = true; });
-  const storageSubscription = storage?.onChanged?.(changes => {
+    .finally(() => { storageLoaded = true; }) : Promise.resolve());
+  const storageSubscription = contextOverridesEnabled ? storage?.onChanged?.(changes => {
     storageReady.then(() => {
       if (stopped) return;
       let externalChange = false;
@@ -1277,7 +1281,7 @@
       }
       if (externalChange) void mainSettingsChanged();
     });
-  });
+  }) : null;
   const currentFiber = element => {
     const key = Object.keys(element).find(key => key.startsWith('__reactFiber$'));
     let fiber = key && element[key];
@@ -1311,7 +1315,7 @@
     if (!client) return;
     const cache = clientCache(client);
     cache.users.add(instance);
-    if (cache.users.size !== 1 || !createCheckpoint) return;
+    if (!contextOverridesEnabled || cache.users.size !== 1 || !createCheckpoint) return;
     for (const method of ['sendUserCascadeMessage', 'sendAllQueuedMessages']) {
       const descriptor = Object.getOwnPropertyDescriptor(client, method), original = descriptor?.value;
       if (!descriptor?.writable || typeof original !== 'function') continue;
@@ -1505,6 +1509,7 @@
     return ready;
   }
   function contextSetting(instance) {
+    if (!contextOverridesEnabled) return null;
     const model = instance.models?.get(String(selectedModel(instance)));
     if (!model || !instance.client) return null;
     let setting = contextSettings.get(model.key);
@@ -1533,6 +1538,7 @@
     return view;
   }
   async function setContextLimit(instance, tokens) {
+    if (!contextOverridesEnabled) return false;
     const current = contextSetting(instance), setting = current && contextSettings.get(current.modelKey);
     if (!setting || setting.applying || stopped || instance.disposed) return false;
     if (tokens !== null && (!Number.isSafeInteger(tokens) || tokens <= 0 || tokens > 4294967295)) {
@@ -1900,7 +1906,8 @@
   }
   function mount(anchor) {
     let instance;
-    const view = createView(document, anchor, {setContextLimit:tokens => setContextLimit(instance, tokens)});
+    const view = createView(document, anchor, {contextOverridesEnabled,
+      ...(contextOverridesEnabled ? {setContextLimit:tokens => setContextLimit(instance, tokens)} : {})});
     instance = {...createHistory(), anchor, view, provider:null, client:null, selected:null, subscription:null,
       summaryStore:null, summarySubscription:null, agentRegistry:null, subagents:new Map(),
       epoch:0, queued:false, models:null, config:null, lastError:null, snapshot:null};
@@ -3257,6 +3264,33 @@
   const uiDefinitions = [];
   function ui(id, markers, rules = [], settings = {}) { uiDefinitions.push({id, markers, rules, ...settings}); }
   const seq = sequence, C = anyChild;
+  ui('side-question-header', ['side-question-tab-header-prefix','side-question-tab-header-title'], [], {
+    text(node) {
+      const slot = node.props['data-testid'],text = node.props.children;
+      if (slot === 'side-question-tab-header-prefix') {
+        if (text === 'Side Question') return label('side-question:default-title','临时问题');
+        if (text === 'Side Question: ') return label('Side Question:','临时问题：')+' ';
+      }
+      return slot === 'side-question-tab-header-title' && text === 'New Side Question'
+        ? label(text,'新建临时问题') : null;
+    },
+    element(node,props,React) {
+      if (node.props['data-testid'] !== 'side-question-tab-header-title') return node;
+      const title = node.props.title;
+      const display = title === 'Side Question' ? label('side-question:default-title','临时问题')
+        : title === 'New Side Question' ? label(title,'新建临时问题')
+        : typeof title === 'string' && title.startsWith('Side Question: ')
+          ? label('Side Question:','临时问题：')+title.slice('Side Question: '.length) : title;
+      return display !== title ? React.cloneElement(node,{title:display}) : node;
+    }
+  });
+  ui('side-question-new-tab-action', ['side-panel-new-tab-view','new-tab-card-${','new-tab-search-input'], [], {
+    element(node,props,React) {
+      if (!['new-tab-card-side-question','new-tab-result-action__side-question'].includes(node.props['data-testid'])) return node;
+      return detailTree(node,React,child => child.type === 'span' && child.props.children === 'Side Question'
+        ? React.cloneElement(child,{children:label('side-question:default-title','临时问题')}) : child);
+    }
+  });
   function translateHomeGreeting(text, hasName) {
     if (typeof text !== 'string') return null;
     const legacy = /^Hi ([\s\S]+), what can we get done today\?$/.exec(text);
@@ -4546,23 +4580,32 @@
     }
   });
   const swarmPaneView = view => view?.type === 'sidecarView' && view.sidecarView?.sidecarId === swarmSidecarId && view.sidecarView.path === '/';
-  // Both side-pane layouts keep their title functions in writable registry
-  // slots. Adapt that display result while retaining the original tab state.
-  const swarmTabOwners = new WeakSet();
+  // Side-pane layouts keep display title functions in writable registry slots.
+  // Side-question live names are resolved before this fixed default function.
+  const nativeTabTitles = [
+    ['sidecarView',['sidecarView.title','"Sidecar View"'],(text,view) => swarmPaneView(view) ? swarmName(text) : text,'native-swarm-tab-title'],
+    ['sideQuestionView',['.type!=="sideQuestionView"','.sideQuestionView.cascadeId?','"Side Question":"New Side Question"'],(text,view) =>
+      view?.type !== 'sideQuestionView' ? text : text === 'Side Question' ? label('side-question:default-title','临时问题')
+        : text === 'New Side Question' ? label(text,'新建临时问题') : text,'native-side-question-tab-title']
+  ];
+  const nativeTabOwners = new WeakSet();
   for (const key of Object.getOwnPropertyNames(window)) {
     const value = Object.getOwnPropertyDescriptor(window,key)?.value;
     if (!value || typeof value !== 'object' || value.window === value) continue;
-    const owner = Object.getOwnPropertyDescriptor(value,'sidecarView')?.value;
-    if (!owner || typeof owner !== 'object' || swarmTabOwners.has(owner)) continue;
-    const descriptor = Object.getOwnPropertyDescriptor(owner,'getTabTitle'),original = descriptor?.value;
-    if (!descriptor?.writable || typeof original !== 'function') continue;
-    const source = sourceOf(original);
-    if (!source.includes('sidecarView.title') || !source.includes('"Sidecar View"')) continue;
-    swarmTabOwners.add(owner);
-    install('getTabTitle',original,function nativeSwarmTabTitle(view,...args) {
-      const text = Reflect.apply(original,this,[view,...args]);
-      return swarmPaneView(view) ? swarmName(text) : text;
-    },'native-swarm-tab-title',owner);
+    for (const [type,markers,display,kind] of nativeTabTitles) {
+      const owner = Object.getOwnPropertyDescriptor(value,type)?.value;
+      if (!owner || typeof owner !== 'object' || nativeTabOwners.has(owner)) continue;
+      const descriptor = Object.getOwnPropertyDescriptor(owner,'getTabTitle'),original = descriptor?.value;
+      if (!descriptor?.writable || typeof original !== 'function') continue;
+      const source = sourceOf(original);
+      if (!markers.every(marker => source.includes(marker))) continue;
+      nativeTabOwners.add(owner);
+      const wrapper = function nativeTabTitle(view,...args) {
+        const text = Reflect.apply(original,this,[view,...args]);
+        return owner.getTabTitle === wrapper ? display(text,view) : text;
+      };
+      install('getTabTitle',original,wrapper,kind,owner);
+    }
   }
   const swarmPaneTitleEntry = nativeFunctions.find(entry => entry.source.includes('.sidecarView;') &&
     entry.source.includes('.sidecarId===') && entry.source.includes('.path===') && entry.source.includes('?.title'));
@@ -6987,7 +7030,7 @@ const navigatorGroupEntry = nativeFunctions.find(entry => entry.source.includes(
     setStrings(next) { strings = next; }
   };
 });
-  const contextRings = createContextRingController(document, createContextRingView, createChineseTitleController);
+  const contextRings = createContextRingController(document, createContextRingView, createChineseTitleController, runtimeOptions);
   let statusFormatters = null;
   const texts = new Map();
   const attributes = new Map();
@@ -7531,6 +7574,7 @@ const navigatorGroupEntry = nativeFunctions.find(entry => entry.source.includes(
   }
   const api={
     version:VERSION,
+    contextOverridesEnabled:runtimeOptions?.contextOverridesEnabled === true,
     status:()=>({version:VERSION,active:!stopped,textNodes:texts.size,attributes:[...attributes.values()].reduce((n,m)=>n+m.size,0),batches,entries:Object.keys(strings).length,nativeMenuAdapters:nativeMenuHooks.filter(h=>h.kind==='menu').length,defaultPromptAdapters:nativeMenuHooks.filter(h=>h.kind==='default-prompt').length,statusAdapters:statusFormatters?.count??0,contextUsage:contextRings.status(),chineseTitles:contextRings.titleStatus()}),
     collectUnknown,
     refresh(next) { clearPending();restore();setStrings(next);statusFormatters?.setStrings(strings);pendingRoots.add(document.body);flush();return api.status(); },

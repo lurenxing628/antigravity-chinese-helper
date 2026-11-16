@@ -37,6 +37,7 @@ class FakeSocket extends EventTarget {
 
 function runner(connect = () => { throw new Error('Unexpected connection'); }, overrides = {}) {
   const context = vm.createContext({
+    CONTEXT_OVERRIDES_ENABLED:true,
     CdpClient: { connect }, dirname, join, fileURLToPath,
     homedir: () => '/mock-home',
     antigravityDataDirectories: ['Antigravity', 'antigravity'].map(name =>

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,16 +7,11 @@ import hook from './backend-hook.js';
 import { promisify } from 'node:util';
 import { parseBackendMetadata, prepareBackendMetadata } from './backend-metadata.mjs';
 import { deriveBackendLayout } from './backend-layout.mjs';
+import { prepareSignedNativeCopy } from './native-copy.mjs';
 
 const exec = promisify(execFile);
 const { emitStubs } = hook;
 export const defaultMachExecutablePath = fileURLToPath(new URL('../Antigravity汉化助手.app/Contents/MacOS/AntigravityBackendMach', import.meta.url));
-const entitlements = `<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0"><dict>
-  <key>com.apple.security.get-task-allow</key><true/>
-  <key>com.apple.security.cs.allow-jit</key><true/>
-</dict></plist>
-`;
 
 /** Symbols, the owned LC_NOTE slot and the Go instruction/GC contract travel together. */
 export async function inspectBackendBinary(binaryPath) {
@@ -32,29 +27,12 @@ export async function prepareBackendCopy({ officialBackendPath, stateDir }) {
   const { stdout } = await exec(official, ['--stamp'], { timeout: 10000, maxBuffer: 1024 * 1024 });
   const buildCL = stdout.match(/^Built at CL: (\d+)\r?$/m)?.[1];
   if (!buildCL) throw new Error('后台未返回有效的构建编号');
-  // 只解析实际将启动的副本，解析结果随副本交给连接流程复用。
-
   const folder = join(resolve(stateDir), 'backend', buildCL);
-  await mkdir(folder, { recursive: true, mode: 0o700 });
-  const temporary = await mkdtemp(join(folder, '.prepare-'));
-  const binaryPath = join(folder, 'language_server');
-  const temporaryBinary = join(temporary, 'language_server');
-  const entitlementsPath = join(temporary, 'entitlements.plist');
-  try {
-    await copyFile(official, temporaryBinary);
-    await chmod(temporaryBinary, 0o755);
-    const binary = await readFile(temporaryBinary);
-    const layout = deriveBackendLayout(binary, prepareBackendMetadata(binary));
-    await writeFile(temporaryBinary, binary);
-    await writeFile(entitlementsPath, entitlements, { mode: 0o600 });
-    await exec('/usr/bin/codesign', ['--force', '--sign', '-', '--timestamp=none', '--entitlements', entitlementsPath, temporaryBinary],
-      { timeout: 30000, maxBuffer: 1024 * 1024 });
-    await exec('/usr/bin/codesign', ['--verify', '--strict', temporaryBinary], { timeout: 30000, maxBuffer: 1024 * 1024 });
-    await rename(temporaryBinary, binaryPath);
-    return { binaryPath: await realpath(binaryPath), buildCL, layout };
-  } finally {
-    await rm(temporary, { recursive: true, force: true });
-  }
+  return { ...await prepareSignedNativeCopy({ sourcePath:official, destinationPath:join(folder, 'language_server'),
+    transform(binary) {
+      return { binary, layout:deriveBackendLayout(binary, prepareBackendMetadata(binary)) };
+    },
+  }), buildCL };
 }
 
 function contextLimit(tokens) {

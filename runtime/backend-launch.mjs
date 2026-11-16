@@ -508,3 +508,54 @@ export async function connectBackendApp({
     backendArgs, onBackendSpawn, onStateChange, timeoutMs });
   return controller.initialize(inspectorUrl, backendPid);
 }
+
+/** Remove a saved helper wrapper without installing or attaching any adapter. */
+export async function restoreBackendApp({ inspectorUrl, appPid, timeoutMs = 15000 }) {
+  if (!Number.isInteger(appPid) || appPid <= 0) throw new TypeError('Saved application PID is required');
+  if (typeof inspectorUrl !== 'string' || !/^ws:\/\/127\.0\.0\.1:\d+\/[a-zA-Z0-9-]+$/.test(inspectorUrl)) {
+    throw new TypeError('Saved main inspector must be a loopback WebSocket URL');
+  }
+  const client = await CdpClient.connect(inspectorUrl, timeoutMs);
+  const call = (method, params = {}) => client.call(method, params, timeoutMs);
+  const evaluate = async expression => {
+    const result = await call('Runtime.evaluate', { expression, returnByValue: true });
+    if (result.exceptionDetails) throw new Error('Main-process adapter restoration failed');
+    return result.result?.value;
+  };
+  try {
+    await call('Runtime.enable');
+    if (await evaluate('process.pid') !== appPid) {
+      throw new Error('Saved inspector does not belong to the expected application PID');
+    }
+    const state = await evaluate(`(() => {
+      const state = globalThis[${JSON.stringify(adapterKey)}];
+      if (!state) return {wrapper:'absent'};
+      if (typeof state.sourceURL !== 'string' || !state.sourceURL.startsWith(${JSON.stringify(`${adapterSource}/`)}) ||
+          typeof state.uninstall !== 'function') return {wrapper:'foreign'};
+      return {wrapper:'helper', sourceURL:state.sourceURL};
+    })()`);
+    if (state.wrapper !== 'helper') return { restored: false, resumed: false, wrapper: state.wrapper };
+
+    const scripts = new Map();
+    let pause = null;
+    client.on('Debugger.scriptParsed', event => scripts.set(event.scriptId, event.url));
+    client.on('Debugger.paused', event => {
+      const frame = event.callFrames?.[0];
+      if (frame) pause = { source: frame.url || scripts.get(frame.location.scriptId), name: frame.functionName };
+    });
+    client.on('Debugger.resumed', () => { pause = null; });
+    await call('Debugger.enable');
+    const wrapper = await evaluate(`(() => {
+      const state = globalThis[${JSON.stringify(adapterKey)}];
+      if (!state) return 'absent';
+      if (state.sourceURL !== ${JSON.stringify(state.sourceURL)} || typeof state.uninstall !== 'function') return 'foreign';
+      state.uninstall(); return 'removed';
+    })()`);
+    const resumed = wrapper === 'removed' && pause?.source === state.sourceURL &&
+      ['helperBackendReady', 'helperBackendSpawn'].includes(pause.name);
+    if (resumed) await call('Debugger.resume');
+    // This connection created no startup barrier. Disabling the debugger or
+    // running a foreign pause would alter state belonging to another client.
+    return { restored: wrapper === 'removed', resumed: Boolean(resumed), wrapper };
+  } finally { client.close(); }
+}

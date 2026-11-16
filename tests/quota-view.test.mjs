@@ -51,7 +51,7 @@ class Element {
   remove() { this.isConnected = false; }
 }
 
-function fixture(initialTime = new Date(2026, 9, 22, 12).getTime(), {windowGlobals = {}, actions = {}} = {}) {
+function fixture(initialTime = new Date(2026, 9, 22, 12).getTime(), {windowGlobals = {}, actions = {}, contextOverridesEnabled = true} = {}) {
   let now = initialTime, sequence = 0;
   const timers = new Map(), elements = [];
   const window = new Element('window');
@@ -68,7 +68,7 @@ function fixture(initialTime = new Date(2026, 9, 22, 12).getTime(), {windowGloba
     constructor(...args) { super(...(args.length ? args : [now])); }
     static now() { return now; }
   }
-  const view = vm.runInNewContext(viewSource, {Date:ClockDate})(document, {}, actions);
+  const view = vm.runInNewContext(viewSource, {Date:ClockDate})(document, {}, {contextOverridesEnabled, ...actions});
   const button = key => elements.find(element => element.dataset.ring === key);
   const row = (key, label) => {
     const tooltip = elements.find(element => element.id === `context-${key}-tooltip`);
@@ -76,7 +76,7 @@ function fixture(initialTime = new Date(2026, 9, 22, 12).getTime(), {windowGloba
     return details.children[details.children.findIndex(element => element.textContent === label) + 1].textContent;
   };
   return {
-    view, timers, row, now:() => now,
+    view, timers, row, elements, now:() => now,
     element:testId => {
       const element = elements.find(element => element.getAttribute('data-testid') === testId);
       assert.ok(element, `view contains ${testId}`);
@@ -319,4 +319,22 @@ test('main budget feedback confirms persistence and keeps native readiness separ
   assert.equal(status.getAttribute('data-error'),'false');
   f.view.update({contextSetting:{...setting,customLimit:512000,effectiveLimit:512000,nativeReady:true,message:'后端已接入'}});
   assert.equal(status.textContent,'后端已接入','readiness-only broadcasts must update the visible message');
+});
+
+
+test('disabled context controls leave only native usage and quota displays', t => {
+  let bridgeReads = 0;
+  const f = fixture(undefined, {contextOverridesEnabled:false, windowGlobals:{
+    __antigravitySubagentContext:{getStatus() { bridgeReads++; }, subscribe() { bridgeReads++; }}
+  }});
+  t.after(() => f.view.dispose());
+  const attached = element => element.parentElement && (element.parentElement.tagName === 'SHADOW' || attached(element.parentElement));
+  for (const id of ['context-limit-form','subagent-context-form']) {
+    assert.equal(f.elements.some(element => element.getAttribute('data-testid') === id && attached(element)), false);
+  }
+  assert.equal(bridgeReads, 0);
+  f.view.update({used:128000, maxContext:512000, compactionReference:512000, modelCapacity:1048576});
+  assert.equal(f.row('context','当前已用上下文'), '128.00K');
+  assert.equal(f.row('context','压缩阈值'), '512.00K');
+  assert.equal(f.row('context','使用比例'), '25%');
 });

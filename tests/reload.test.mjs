@@ -22,11 +22,11 @@ function page() {
   return context;
 }
 
-async function fixture() {
+async function fixture(preparePage) {
   const files = {
-    source: `(dictionary) => {
+    source: `(dictionary, options) => {
       installs++;
-      return { version: 'fixture-1', dictionary, history: new Map([[1, 'cached']]),
+      return { version: 'fixture-1', dictionary, contextOverridesEnabled:options.contextOverridesEnabled, history: new Map([[1, 'cached']]),
         refresh(next) { this.dictionary = next; },
         uninstall() { uninstalls++; }
       };
@@ -34,6 +34,7 @@ async function fixture() {
     dictionary: '{"strings":{"Hello":"你好"}}', sourceMtime: 1, dictionaryMtime: 1,
   };
   const current = page(), scripts = new Map();
+  preparePage?.(current);
   let scriptId = 0;
   const client = {
     connected: true,
@@ -52,6 +53,7 @@ async function fixture() {
     },
   };
   const context = vm.createContext({
+    CONTEXT_OVERRIDES_ENABLED:false,
     dirname, join, fileURLToPath, homedir: () => '/mock-home',
     process: { env: {}, pid: 123 },
     readFile: async path => path.endsWith('renderer.js') ? files.source : files.dictionary,
@@ -66,12 +68,37 @@ async function fixture() {
   const session = { client, scriptId: null, operation: Promise.resolve(), closing: false };
   runner.sessions.set('window', session);
   await runner.install(session);
-  return { files, current, scripts, session, reload: runner.reload };
+  return { files, current, scripts, session, reload: runner.reload, ensure: () => runner.install(session) };
 }
+
+test('disabled startup replaces a leftover legacy helper and removes its send hook', async () => {
+  let restored = false, bridgeDisposed = false;
+  const send = request => request;
+  const client = { sendUserCascadeMessage: request => send({...request, maxTokens:900000}) };
+  const f = await fixture(current => {
+    current.__antigravityChineseHelper = {version:'legacy', uninstall() {
+      restored = true; client.sendUserCascadeMessage = send;
+    }};
+    current.__antigravitySubagentContext = {dispose() {
+      bridgeDisposed = true; delete current.__antigravitySubagentContext;
+    }};
+  });
+  assert.equal(restored, true);
+  assert.equal(bridgeDisposed, true);
+  assert.strictEqual(client.sendUserCascadeMessage, send);
+  assert.deepEqual(client.sendUserCascadeMessage({message:'native'}), {message:'native'});
+  const helper = f.current.__antigravityChineseHelper;
+  assert.equal(helper.contextOverridesEnabled, false);
+  await f.ensure();
+  assert.strictEqual(f.current.__antigravityChineseHelper, helper, 'matching policy keeps the current helper');
+  assert.equal(f.current.installs, 1);
+});
 
 test('dictionary reload preserves the live helper and updates the next-document script', async () => {
   const f = await fixture();
   const helper = f.current.__antigravityChineseHelper;
+  assert.equal(helper.contextOverridesEnabled, false);
+  assert.equal(f.current.__antigravitySubagentContext, undefined, 'disabled customization installs no writable bridge');
   const history = helper.history;
   f.files.dictionary = '{"strings":{"Hello":"您好"}}';
   f.files.dictionaryMtime++;

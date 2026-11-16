@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { CdpClient } from './cdp.mjs';
 import { antigravityDataDirectories, createBackendManager } from './backend-manager.mjs';
+import { CONTEXT_OVERRIDES_ENABLED } from './context-policy.mjs';
 
 const runtimeDir = dirname(fileURLToPath(import.meta.url));
 const stateDir = join(homedir(), 'Library/Application Support/AntigravityChineseHelper');
@@ -87,13 +88,13 @@ async function publishBackendStatus() {
   if (!status || stopping) return;
   await Promise.allSettled([
     saveStatus(),
-    ...[...sessions.values()].filter(session => session.kind !== 'swarm').map(session => evaluate(session.client,
+    ...[...sessions.values()].filter(session => CONTEXT_OVERRIDES_ENABLED && session.kind !== 'swarm').map(session => evaluate(session.client,
       `(() => { if (${knownApp}) globalThis.${backendBridgeKey}?.update(${JSON.stringify(status)}); })()`)),
   ]);
 }
 
 async function handleBackendRequest(session, event) {
-  if (event.name !== backendBinding || stopping) return;
+  if (!CONTEXT_OVERRIDES_ENABLED || event.name !== backendBinding || stopping) return;
   let request;
   try { request = JSON.parse(event.payload); } catch { return; }
   if (!Number.isSafeInteger(request?.id) || request.id < 1 || !['status','set-limit','main-settings-changed'].includes(request.method)) return;
@@ -176,9 +177,12 @@ async function loadBundle() {
   const expression = `(() => {
     const install = () => {
       if (!(${knownApp})) return;
-      (${installBackendBridge.toString()})();
-      if (globalThis.${helperKey}) return;
-      globalThis.${helperKey} = (${source.trim().replace(/;\s*$/, '')})(${JSON.stringify(dictionary)});
+      if (${CONTEXT_OVERRIDES_ENABLED}) (${installBackendBridge.toString()})();
+      else globalThis.${backendBridgeKey}?.dispose();
+      const existing = globalThis.${helperKey};
+      if (existing?.contextOverridesEnabled === ${CONTEXT_OVERRIDES_ENABLED}) return;
+      if (existing) { existing.uninstall?.(); delete globalThis.${helperKey}; }
+      globalThis.${helperKey} = (${source.trim().replace(/;\s*$/, '')})(${JSON.stringify(dictionary)}, {contextOverridesEnabled:${CONTEXT_OVERRIDES_ENABLED}});
     };
     if (location.protocol !== 'https:' || location.hostname !== '127.0.0.1' || globalThis.top !== globalThis) return;
     install();
@@ -344,7 +348,7 @@ async function discover() {
           continue;
         }
         session = { client, kind, scriptId: null, version: null, navigationTimer: null, closing: false, operation: Promise.resolve() };
-        if (kind === 'app') {
+        if (CONTEXT_OVERRIDES_ENABLED && kind === 'app') {
           await client.call('Runtime.addBinding', {name:backendBinding});
           client.on('Runtime.bindingCalled', event => { void handleBackendRequest(session, event).catch(() => {}); });
         }
@@ -533,7 +537,8 @@ async function main() {
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
   bundle = await loadBundle();
   if (!(await startServer())) return;
-  backend = createBackendManager({stateDir, runtimeDir, onChange:() => { void publishBackendStatus(); }});
+  backend = createBackendManager({stateDir, runtimeDir, contextOverridesEnabled:CONTEXT_OVERRIDES_ENABLED,
+    onChange:() => { void publishBackendStatus(); }});
   await backend.ready;
   await writeFile(pidPath, `${process.pid}\n`, { mode: 0o600 });
   process.once('SIGTERM', () => stop().catch(() => { process.exitCode = 1; }));

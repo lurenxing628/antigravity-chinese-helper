@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
 import { spawn, execFileSync } from 'node:child_process';
-import { launchBackendApp, connectBackendApp } from '../runtime/backend-launch.mjs';
+import { launchBackendApp, connectBackendApp, restoreBackendApp } from '../runtime/backend-launch.mjs';
 import { CdpClient } from '../runtime/cdp.mjs';
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -324,6 +324,97 @@ test('a mismatched saved PID is rejected without debugger control or restore com
   assert.equal(launched.process.exitCode, null);
   await f.requestExit(1);
   await until(async () => (await f.events()).some(event => event.event === 'exit'));
+});
+
+test('restore-only rejects a mismatched PID before enabling the debugger', async t => {
+  const f = await fixture(t, 1, true);
+  const launched = await f.start(async () => {});
+  await launched.ready;
+  const receipt = launched.getConnectionInfo();
+  const originalConnect = CdpClient.connect, calls = [];
+  CdpClient.connect = async (...args) => {
+    const client = await originalConnect(...args), call = client.call.bind(client);
+    client.call = (method, ...params) => { calls.push(method); return call(method, ...params); };
+    return client;
+  };
+  try {
+    await assert.rejects(restoreBackendApp({ ...receipt, appPid: receipt.appPid + 1 }), /expected application PID/);
+    assert.deepEqual(calls, ['Runtime.enable', 'Runtime.evaluate']);
+  } finally { CdpClient.connect = originalConnect; }
+  assert.equal(launched.process.exitCode, null);
+  await f.requestExit(1);
+});
+
+test('restore-only leaves non-helper state untouched without debugger commands', async t => {
+  const f = await fixture(t, 1, true);
+  const launched = await f.start(async () => {});
+  await launched.ready;
+  const receipt = launched.getConnectionInfo();
+  await launched.restore();
+  const check = await CdpClient.connect(receipt.inspectorUrl);
+  const originalConnect = CdpClient.connect, calls = [];
+  try {
+    await check.call('Runtime.evaluate', { expression: `globalThis.__antigravityChineseBackendAdapter={
+      sourceURL:'another-client://backend',uninstall(){globalThis.foreignUninstalled=true;}}` });
+    CdpClient.connect = async (...args) => {
+      const client = await originalConnect(...args), call = client.call.bind(client);
+      client.call = (method, ...params) => { calls.push(method); return call(method, ...params); };
+      return client;
+    };
+    assert.deepEqual(await restoreBackendApp(receipt), { restored: false, resumed: false, wrapper: 'foreign' });
+    assert.equal(calls.some(method => method.startsWith('Debugger.') || method === 'Runtime.runIfWaitingForDebugger'), false);
+    const result = await check.call('Runtime.evaluate', { expression: 'globalThis.foreignUninstalled===undefined', returnByValue: true });
+    assert.equal(result.result.value, true);
+  } finally { CdpClient.connect = originalConnect; check.close(); }
+  await f.requestExit(1);
+});
+
+test('restore-only removes a helper wrapper and resumes its existing readiness pause without reattaching', async t => {
+  const f = await fixture(t, 2);
+  const pending = gate();
+  t.after(() => pending.release());
+  let attachments = 0;
+  const launched = await f.start(async () => { attachments++; await pending.promise; });
+  await until(() => attachments === 1);
+  const result = await restoreBackendApp(launched.getConnectionInfo());
+  assert.deepEqual(result, { restored: true, resumed: true, wrapper: 'removed' });
+  pending.release();
+  await until(async () => (await f.events()).filter(event => event.event === 'exit').length === 2);
+  assert.equal(attachments, 1, 'restoration must not install another attachment callback');
+  assert.deepEqual((await f.events()).filter(event => event.event === 'backend').map(event => event.name), ['helper', 'official']);
+});
+
+test('restore-only removes its helper wrapper without resuming a foreign pause', async t => {
+  const f = await fixture(t, 1, true);
+  const launched = await f.start(async () => {});
+  await launched.ready;
+  const receipt = launched.getConnectionInfo();
+  const check = await CdpClient.connect(receipt.inspectorUrl);
+  const originalConnect = CdpClient.connect, calls = [];
+  let paused = false, resumed = false, evaluation;
+  check.on('Debugger.paused', event => { if (event.callFrames?.[0]?.functionName === 'foreignPause') paused = true; });
+  check.on('Debugger.resumed', () => { resumed = true; });
+  try {
+    await check.call('Debugger.enable');
+    evaluation = check.call('Runtime.evaluate', {
+      expression: 'function foreignPause(){debugger;}foreignPause();\n//# sourceURL=fixture://foreign-pause',
+    });
+    await until(() => paused);
+    CdpClient.connect = async (...args) => {
+      const client = await originalConnect(...args), call = client.call.bind(client);
+      client.call = (method, ...params) => { calls.push(method); return call(method, ...params); };
+      return client;
+    };
+    assert.deepEqual(await restoreBackendApp(receipt), { restored: true, resumed: false, wrapper: 'removed' });
+    assert.equal(resumed, false);
+    assert.equal(calls.some(method => ['Debugger.resume', 'Debugger.disable', 'Runtime.runIfWaitingForDebugger'].includes(method)), false);
+  } finally {
+    CdpClient.connect = originalConnect;
+    await check.call('Debugger.resume').catch(() => {});
+    await evaluation?.catch(() => {});
+    check.close();
+  }
+  await f.requestExit(1);
 });
 
 test('助手持续运行时，首次启动和重连的应用都能正常退出再启动', { timeout:20000 }, async t => {

@@ -40,7 +40,7 @@ function state(id, generation, {stepUsage, costSummary} = {}) {
 }
 
 function fixture(initial, {metadata = () => ({generatorMetadata:[]}), catalog, config, stored = {}, save, load, windowGlobals = {}, client: suppliedClient,
-  childStates = {}, byParent = {}, summaries = {}} = {}) {
+  childStates = {}, byParent = {}, summaries = {}, contextOverridesEnabled = true} = {}) {
   let current = initial;
   let viewId = initial?.conversationId;
   const listeners = new Set();
@@ -158,7 +158,7 @@ function fixture(initial, {metadata = () => ({generatorMetadata:[]}), catalog, c
     actions = callbacks;
     if (view.disposed) view = createView();
     return view;
-  });
+  }, undefined, {contextOverridesEnabled});
   return {
     controller, calls, get view() { return view; }, listeners, storeListeners, childListeners, registryActive, client, storage, nativeStorage,
     mount:() => controller.discover(anchor),
@@ -171,7 +171,7 @@ function fixture(initial, {metadata = () => ({generatorMetadata:[]}), catalog, c
       anchor.__reactFiber$fixture.return.return.return.memoizedProps.services.core.authService._lsClient = value;
       controller.discover(anchor);
     },
-    setLimit:tokens => actions.setContextLimit(tokens),
+    setLimit:tokens => actions.setContextLimit?.(tokens) ?? false,
     select(value, label = String(value)) { selected.value = value; selected.label = label; controller.discover(anchor); },
     emit(next = current, id = next.conversationId ?? viewId) { current = next; viewId = id; for (const listener of listeners) listener(); },
     emitChild(id, next = childStates[id]) {

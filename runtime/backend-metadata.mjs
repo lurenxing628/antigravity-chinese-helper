@@ -161,7 +161,7 @@ const nativePageSize = 16384;
 
 // Admission belongs to the copied file's one Mach-O reader. The note names a
 // structural, file-backed RX padding range; it does not own budget semantics.
-function budgetReservation(mach) {
+function budgetReservation(mach, { trailingBytes = 0 } = {}) {
   const { bytes, range, u32, u64, fixedName, segments, allSections, commands, commandEnd, imageBase } = mach;
   const textSegments = segments.filter(segment => segment.name === '__TEXT');
   if (textSegments.length !== 1) throw unsupported('budget reservation needs one __TEXT segment');
@@ -173,10 +173,15 @@ function budgetReservation(mach) {
   const occupiedEnd = Math.max(text.address + commandEnd - text.fileOffset,
     ...text.sections.map(section => section.address + section.size));
   const address = Math.ceil(Math.max(occupiedEnd, Math.floor((end - 1) / nativePageSize) * nativePageSize) / 16) * 16;
-  const size = end - address, offset = text.fileOffset + address - text.address;
+  if (!Number.isSafeInteger(trailingBytes) || trailingBytes < 0 || trailingBytes % 16) {
+    throw unsupported('native RX resources must use an aligned trailing size');
+  }
+  const available = end - address;
+  const size = mach.budgetSlot?.size ?? available - trailingBytes, offset = text.fileOffset + address - text.address;
   if (size < 36) throw unsupported('RX text has insufficient single-page tail padding for a budget reservation');
   const slot = describeBudgetSlot(address - imageBase, size);
-  if (mach.budgetSlot && (slot.rva !== mach.budgetSlot.rva || slot.size !== mach.budgetSlot.size)) {
+  if (mach.budgetSlot && (slot.rva !== mach.budgetSlot.rva || size > available || size % 16 ||
+      trailingBytes && size !== available - trailingBytes)) {
     throw unsupported('AGHBudget note does not identify the structural RX tail reservation');
   }
   const fileRange = (start, length, label) => {
@@ -347,8 +352,8 @@ function declareBudgetReservation(mach, { slot, offset }) {
 }
 
 /** Declare a code reservation when only Mach-O metadata is needed. */
-export function reserveBackendBudget(buffer) {
-  const mach = readMachO(buffer), reservation = budgetReservation(mach);
+export function reserveBackendBudget(buffer, options) {
+  const mach = readMachO(buffer), reservation = budgetReservation(mach, options);
   declareBudgetReservation(mach, reservation);
   return reservation.slot;
 }
@@ -367,7 +372,7 @@ export function parseBackendMetadata(input) {
 }
 
 // Go 1.20+ pclntab, rtype and GC contracts share the caller's Mach-O facts.
-function decodeGoMetadata(mach, budgetSlot) {
+function decodeGoFunctions(mach) {
   const { bytes, range, u32, i32, u64, cstring, segments, sections, imageBase } = mach;
   const section = name => {
     const result = sections.get(name);
@@ -398,8 +403,7 @@ function decodeGoMetadata(mach, budgetSlot) {
   const tableSize = (count * 2 + 1) * 4;
   if (!count) throw unsupported('empty Go function table');
   range(table, tableSize, pclnEnd);
-  const wanted = new Map(Object.entries(functionNames).map(([key, name]) => [name, key]));
-  const functions = {};
+  const functions = new Map(), ambiguousFunctions = new Set();
   for (let index = 0; index < count; index++) {
     const entry = u32(table + index * 8), next = u32(table + (index + 1) * 8);
     const infoOffset = u32(table + index * 8 + 4);
@@ -409,14 +413,79 @@ function decodeGoMetadata(mach, budgetSlot) {
     if (u32(info) !== entry) throw unsupported('Go function descriptor does not match its table entry');
     const namePosition = names + i32(info + 4);
     if (namePosition < names) throw unsupported('invalid Go function name offset');
-    const name = cstring(namePosition, namesEnd), key = wanted.get(name);
-    if (!key) continue;
-    if (functions[key]) throw unsupported(`ambiguous function ${name}`);
+    const name = cstring(namePosition, namesEnd);
+    if (functions.has(name)) ambiguousFunctions.add(name);
     if (next === entry) throw unsupported(`empty function ${name}`);
-    functions[key] = { name, rva: text.address + entry - imageBase, size: next - entry,
+    functions.set(name, { name, rva: text.address + entry - imageBase, size: next - entry,
       fileOffset: fileOffset(text.address + entry, next - entry),
-      funcDataRva: pcln.address + info - h - imageBase, funcDataFileOffset: info };
+      funcDataRva: pcln.address + info - h - imageBase, funcDataFileOffset: info });
   }
+  return { functions, ambiguousFunctions, section, text, pcln, goType, h, pclnEnd, fileOffset };
+}
+
+/** One Mach-O and Go function reader for native budgets and CLI display fields. */
+export function inspectNativeBinary(input) {
+  const mach = readMachO(input);
+  const { functions, ambiguousFunctions } = decodeGoFunctions(mach);
+  return { imageBase:mach.imageBase, segments:mach.segments, sections:mach.sections, allSections:mach.allSections,
+    functions, ambiguousFunctions };
+}
+
+/** Append immutable CLI text before re-signing, retaining every existing address. */
+export function appendNativeResources(input, resources) {
+  if (!Buffer.isBuffer(resources)) throw new TypeError('Native resources must be a Buffer');
+  const mach = readMachO(input);
+  const linkCommands = mach.commands.filter(item => item.command === 0x19 && mach.fixedName(item.position + 8) === '__LINKEDIT');
+  if (linkCommands.length !== 1) throw unsupported('native resources need one __LINKEDIT segment');
+  const linkCommand = linkCommands[0], link = mach.segments.find(item => item.name === '__LINKEDIT');
+  const signatures = mach.commands.filter(item => item.command === 0x1d);
+  if (signatures.length !== 1 || signatures[0].size !== 16) throw unsupported('native resources need one code signature');
+  const signature = signatures[0], signatureOffset = mach.u32(signature.position + 8), signatureSize = mach.u32(signature.position + 12);
+  if (signatureOffset < link.fileOffset || signatureOffset + signatureSize !== input.length ||
+      link.fileOffset + link.fileSize !== input.length || link.protection !== 1) {
+    throw unsupported('code signature is not the final read-only link-edit data');
+  }
+  const poolOffset = Math.ceil(signatureOffset / 16) * 16;
+  const buffer = Buffer.alloc(Math.ceil((poolOffset + resources.length) / 16) * 16);
+  input.copy(buffer, 0, 0, signatureOffset);
+  resources.copy(buffer, poolOffset);
+
+  // Preserve the UUID required by dyld. Only the build tool's informational
+  // version list is optional; the platform, minimum OS and SDK stay intact.
+  let commands = mach.commands.filter(item => item !== signature);
+  const firstSection = Math.min(...mach.allSections.filter(item => !item.zeroFill && item.size).map(item => item.fileOffset));
+  const requiredHeader = () => 32 + commands.reduce((sum, item) => sum + item.size, 0) + 40 + 16;
+  if (requiredHeader() > firstSection) commands = commands.map(item => {
+    if (item.command !== 0x32 || item.size < 24 || mach.u32(item.position + 20) === 0) return item;
+    const count = mach.u32(item.position + 20);
+    if (24 + count * 8 !== item.size) throw unsupported('invalid Mach-O build tool versions');
+    const payload = Buffer.from(input.subarray(item.position, item.position + 24));
+    payload.writeUInt32LE(24, 4); payload.writeUInt32LE(0, 20);
+    return { ...item, size:24, payload };
+  });
+  if (requiredHeader() > firstSection) throw unsupported('native resources leave insufficient header space for budget and signing');
+  buffer.fill(0, 32, mach.commandEnd);
+  let position = 32;
+  for (const item of commands) {
+    if (item.payload) item.payload.copy(buffer, position);
+    else input.copy(buffer, position, item.position, item.position + item.size);
+    if (item === linkCommand) {
+      const size = buffer.length - link.fileOffset;
+      buffer.writeBigUInt64LE(BigInt(Math.ceil(size / nativePageSize) * nativePageSize), position + 32);
+      buffer.writeBigUInt64LE(BigInt(size), position + 48);
+    }
+    position += item.size;
+  }
+  buffer.writeUInt32LE(commands.length, 16);
+  buffer.writeUInt32LE(position - 32, 20);
+  return { binary:buffer, address:link.address + poolOffset - link.fileOffset, fileOffset:poolOffset };
+}
+
+function decodeGoMetadata(mach, budgetSlot) {
+  const { bytes, range, u32, i32, u64, cstring, segments, imageBase } = mach;
+  const { functions:allFunctions, ambiguousFunctions, section, text, pcln, goType, h, pclnEnd, fileOffset } = decodeGoFunctions(mach);
+  for (const name of Object.values(functionNames)) if (ambiguousFunctions.has(name)) throw unsupported(`ambiguous function ${name}`);
+  const functions = Object.fromEntries(Object.entries(functionNames).map(([key, name]) => [key, allFunctions.get(name)]));
   for (const [key, name] of Object.entries(functionNames)) if (!functions[key]) throw unsupported(`missing function ${name}`);
 
   const typesStart = goType.fileOffset, typesEnd = typesStart + goType.size;
