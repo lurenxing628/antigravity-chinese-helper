@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join } from 'node:path/posix';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import vm from 'node:vm';
@@ -88,7 +88,7 @@ function fixture({existing = false, targetTokens = 400000, retainedCode = genera
     } else assert.fail(`Unexpected executor command: ${operation}`);
     return {stdout:JSON.stringify(result)};
   };
-  const source = readFileSync(moduleUrl, 'utf8').replace(/^import .*;\n/gm, '')
+  const source = readFileSync(moduleUrl, 'utf8').replace(/\r\n/g, '\n').replace(/^import .*;\n/gm, '')
     .replace(/^export /gm, '').replaceAll('import.meta.url', JSON.stringify(moduleUrl.href));
   const context = vm.createContext({execFile, promisify, dirname, join, fileURLToPath, URL, Buffer,
     tmpdir:() => '/fixture/tmp',

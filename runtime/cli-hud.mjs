@@ -7,11 +7,14 @@ import { renderCliHud } from './cli-hud-render.mjs';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
-const shellQuote = value => `'${value.replaceAll("'", "'\\''")}'`;
+const shellQuote = (value, platform = process.platform) => {
+  const isWindowsStyle = (platform === 'win32' && !value.startsWith('/')) || /^[a-zA-Z]:[\\/]/.test(value) || value.startsWith('\\\\');
+  return isWindowsStyle ? `"${value.replaceAll('"', '\\"')}"` : `'${value.replaceAll("'", "'\\''")}'`;
+};
 
 /** The official statusLine interface owns drawing, resizing and refreshes. */
-export function cliHudSettings({ nodePath = process.execPath, hudPath = scriptPath } = {}) {
-  return { type:'command', command:`${shellQuote(nodePath)} --experimental-sqlite --disable-warning=ExperimentalWarning ${shellQuote(hudPath)}`,
+export function cliHudSettings({ nodePath = process.execPath, hudPath = scriptPath, platform = process.platform } = {}) {
+  return { type:'command', command:`${shellQuote(nodePath, platform)} --experimental-sqlite --disable-warning=ExperimentalWarning ${shellQuote(hudPath, platform)}`,
     enabled:true, padding:0, stack_with_default:false };
 }
 
@@ -34,7 +37,7 @@ export async function withCliHud(args, { valueFlags = new Set(), ...options } = 
   for (const value of settingsValues) {
     let parsed;
     try {
-      const text = value.trim().startsWith('{') ? value : await readFile(value.startsWith('~/') ? join(homedir(),value.slice(2)) : resolve(value),'utf8');
+      const text = value.trim().startsWith('{') ? value : await readFile(/^~[\\/]/.test(value) ? join(homedir(),value.slice(2)) : resolve(value),'utf8');
       parsed = JSON.parse(text);
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
     } catch { throw new Error('无法读取 --settings：请提供 JSON 对象或有效的设置文件'); }
@@ -106,9 +109,16 @@ async function gitBranch(cwd) {
   }
 }
 
+export function helperStateRoot({ platform = process.platform, env = process.env, home = homedir() } = {}) {
+  if (env?.ANTIGRAVITY_HELPER_STATE_DIR) return resolve(env.ANTIGRAVITY_HELPER_STATE_DIR);
+  return platform === 'win32'
+    ? join(env?.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'AntigravityChineseHelper')
+    : join(home, 'Library', 'Application Support', 'AntigravityChineseHelper');
+}
+
 export async function runCliHud(input) {
   const data = JSON.parse(input);
-  const cacheDir = join(homedir(),'Library','Application Support','AntigravityChineseHelper','cli','hud-cache');
+  const cacheDir = join(helperStateRoot(),'cli','hud-cache');
   let metrics = {};
   const databasePath = cliHudDatabasePath(data);
   if (databasePath) {

@@ -1,5 +1,7 @@
 .DS_Store
 *.app/
+Antigravity汉化助手.exe
+HelperIcon.ico
 node_modules/
 *.log
 .env

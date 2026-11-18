@@ -3,7 +3,7 @@ import { execFile, spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
@@ -16,7 +16,7 @@ import { collectCliMainContextPatch, applyCliMainContextPatch } from './cli-cont
 import { collectCliTitleLocalizationPatch, applyCliTitleLocalizationPatch } from './cli-title-localization.mjs';
 import { collectCliDisplayStrings, applyCliDisplayStrings,
   collectCliSettingsDisplayStrings, applyCliContentDisplayStrings } from './cli-display.mjs';
-import { withCliHud } from './cli-hud.mjs';
+import { helperStateRoot, withCliHud } from './cli-hud.mjs';
 import { collectCliNoticeDisplayStrings, applyCliNoticeDisplayStrings } from './cli-notice-localization.mjs';
 import { collectCliStatusLocalizationPatches, applyCliStatusLocalizationPatches,
   collectCliSummaryNounDisplayStrings, collectCliUsageDisplayStrings } from './cli-status-localization.mjs';
@@ -25,7 +25,7 @@ import { CONTEXT_OVERRIDES_ENABLED } from './context-policy.mjs';
 
 const exec = promisify(execFile);
 const runtimeDir = dirname(fileURLToPath(import.meta.url));
-export const defaultCliStateDir = join(homedir(), 'Library', 'Application Support', 'AntigravityChineseHelper', 'cli');
+export const defaultCliStateDir = join(helperStateRoot(), 'cli');
 const dictionaryPath = join(runtimeDir, 'translations.json');
 const valueFlags = new Set(['--add-dir', '--agent', '--conversation', '--effort', '--input-format', '--json-schema',
   '--log-file', '--mode', '--model', '--output-format', '--print', '--prompt', '-p', '--print-timeout', '--project',
@@ -114,12 +114,27 @@ export async function readCliContext(stateDir, { contextOverridesEnabled = CONTE
   return result;
 }
 
-export async function findCliExecutable(candidate = process.env.ANTIGRAVITY_HELPER_CLI) {
-  const candidates = candidate ? [candidate] : [...(process.env.PATH ?? '').split(':').filter(Boolean).map(path => join(path, 'agy')),
-    join(homedir(), '.local', 'bin', 'agy'), '/opt/homebrew/bin/agy', '/usr/local/bin/agy'];
+export async function findCliExecutable(candidate = process.env.ANTIGRAVITY_HELPER_CLI, {
+  platform = process.platform, env = process.env, home = homedir(), pathDelimiter = delimiter,
+} = {}) {
+  const isWin = platform === 'win32';
+  const names = isWin ? ['agy.exe', 'agy.cmd', 'agy'] : ['agy'];
+  const pathDirs = (env?.PATH ?? '').split(pathDelimiter).filter(Boolean);
+  const extraDirs = isWin
+    ? [
+        join(env?.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'Programs', 'Antigravity', 'bin'),
+        join(env?.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'Antigravity', 'bin'),
+        env?.APPDATA ? join(env.APPDATA, 'npm') : null,
+        join(home, '.local', 'bin'),
+      ].filter(Boolean)
+    : [join(home, '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'];
+  const candidates = candidate
+    ? [candidate]
+    : [...pathDirs, ...extraDirs].flatMap(dir => names.map(name => join(dir, name)));
+  const mode = isWin ? constants.F_OK : constants.X_OK;
   for (const path of new Set(candidates)) {
-    try { await access(path, constants.X_OK); return await realpath(path); }
-    catch (error) { if (candidate) throw new Error(`无法运行 Antigravity CLI：${candidate}`); }
+    try { await access(path, mode); return await realpath(path); }
+    catch { if (candidate) throw new Error(`无法运行 Antigravity CLI：${candidate}`); }
   }
   throw new Error('未找到 agy；请先安装官方 Antigravity CLI，或用 ANTIGRAVITY_HELPER_CLI 指定路径');
 }
@@ -250,9 +265,11 @@ export async function launchCliSession({ binaryPath, args, layout, subagentToken
   launchExecutablePath, env = process.env, stdio = ['inherit', 'inherit', 'inherit'], onReady,
   contextOverridesEnabled = CONTEXT_OVERRIDES_ENABLED }) {
   if (!contextOverridesEnabled) {
-    const child = spawn(binaryPath, args, { env, stdio });
+    const useShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(binaryPath);
+    const child = spawn(binaryPath, args, { env, stdio, ...(useShell ? { shell:true } : {}) });
     const interrupt = () => {}, term = () => child.kill('SIGTERM'), hup = () => child.kill('SIGHUP');
-    process.on('SIGINT', interrupt); process.on('SIGTERM', term); process.on('SIGHUP', hup);
+    process.on('SIGINT', interrupt); process.on('SIGTERM', term);
+    if (process.platform !== 'win32') process.on('SIGHUP', hup);
     try {
       const exit = new Promise((resolve, reject) => {
         child.once('error', reject);
@@ -261,7 +278,8 @@ export async function launchCliSession({ binaryPath, args, layout, subagentToken
       await onReady?.({ pid:child.pid, runtime:null, child });
       return await exit;
     } finally {
-      process.off('SIGINT', interrupt); process.off('SIGTERM', term); process.off('SIGHUP', hup);
+      process.off('SIGINT', interrupt); process.off('SIGTERM', term);
+      if (process.platform !== 'win32') process.off('SIGHUP', hup);
     }
   }
   const child = spawn(launchExecutablePath, [binaryPath, ...args], { env, stdio:[...stdio, 'pipe', 'pipe'] });
@@ -334,6 +352,9 @@ export async function main(argv = process.argv.slice(2), { stateDir = defaultCli
   if (parsed.help) { console.log(cliHelp(contextOverridesEnabled)); return 0; }
   const officialCliPath = await findCliExecutable();
   if (parsed.collect) {
+    if (process.platform !== 'darwin' || process.arch !== 'arm64') {
+      throw new Error('--collect-cli 仅支持 macOS arm64 原生 CLI 二进制扫描');
+    }
     const [binary, dictionary] = await Promise.all([readFile(officialCliPath), readObject(dictionaryPath)]);
     const metadata = inspectNativeBinary(binary);
     const plan = collectCliLocalizationPatches(binary, dictionary, metadata);
@@ -347,17 +368,21 @@ export async function main(argv = process.argv.slice(2), { stateDir = defaultCli
   // Commands that install/update the executable or own a background service
   // must retain the official program path and lifecycle.
   if (['install', 'update', 'remote-control', 'mic-serve'].includes(parsed.command) || parsed.version) {
-    const child = spawn(officialCliPath, parsed.args, { stdio:'inherit' });
+    const useShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(officialCliPath);
+    const child = spawn(officialCliPath, parsed.args, { stdio:'inherit', ...(useShell ? { shell:true } : {}) });
     return await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', code => resolve(code ?? 1)); });
   }
-  if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('CLI 汉化目前支持 macOS arm64');
-  const context = { ...await readCliContext(stateDir, { contextOverridesEnabled }), ...parsed.overrides };
-  const prepared = await prepareCliCopy({ officialCliPath, stateDir, mainTokens:context.mainTokens, contextOverridesEnabled });
-  const tools = contextOverridesEnabled ? await ensureCliTools(stateDir) : {};
   const printMode = nativeTokens(parsed.args).some(arg => /^(?:-p|--print|--prompt)(?:=|$)/.test(arg));
   const interactive = parsed.command === null && !printMode;
   const args = interactive ? await withCliHud(parsed.args,{valueFlags}) : parsed.args;
   const env = interactive ? {...process.env,ANTIGRAVITY_HELPER_CLI_HUD_RUN:`${process.pid}-${Date.now()}`} : process.env;
+  if (process.platform === 'win32') {
+    return await launchCliSession({ binaryPath:officialCliPath, args, env, subagentTokens:null, contextOverridesEnabled:false });
+  }
+  if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('CLI 原生副本汉化目前支持 macOS arm64；Windows 支持两行中文状态栏');
+  const context = { ...await readCliContext(stateDir, { contextOverridesEnabled }), ...parsed.overrides };
+  const prepared = await prepareCliCopy({ officialCliPath, stateDir, mainTokens:context.mainTokens, contextOverridesEnabled });
+  const tools = contextOverridesEnabled ? await ensureCliTools(stateDir) : {};
   return await launchCliSession({ ...prepared, ...tools, args, env, subagentTokens:context.subagentTokens, contextOverridesEnabled });
 }
 

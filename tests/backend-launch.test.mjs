@@ -1,5 +1,9 @@
-import test from 'node:test';
+import baseTest from 'node:test';
 import assert from 'node:assert/strict';
+
+const test = (name, options, fn) => typeof options === 'function'
+  ? baseTest(name, { skip: process.platform !== 'darwin' }, options)
+  : baseTest(name, { ...options, skip: process.platform !== 'darwin' }, fn);
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

@@ -10,6 +10,7 @@ import { CdpClient } from '../runtime/cdp.mjs';
 const runnerUrl = new URL('../runtime/runner.mjs', import.meta.url);
 // Run the real runner functions without invoking main or opening a local socket.
 const runnerSource = readFileSync(runnerUrl, 'utf8')
+  .replace(/\r\n/g, '\n')
   .replace(/^#!.*\n/, '')
   .replace(/^import .*;\n/gm, '')
   .replaceAll('import.meta.url', JSON.stringify(runnerUrl.href))
@@ -134,7 +135,7 @@ test('Swarm frames use their own renderer lifecycle without receiving the main A
     on(name,handler) { handlers.set(name,handler); },cancelPending() {},
     close() { this.connected=false;handlers.get('close')?.(); },
   };
-  const basename = path => String(path).split('/').at(-1);
+  const basename = path => String(path).split(/[/\\]/).at(-1);
   const helper = runner(async () => client, {
     readFile:async path => files[basename(path)] ?? '9222\n',
     stat:async path => ({mtimeMs:mtimes[basename(path)]}),
