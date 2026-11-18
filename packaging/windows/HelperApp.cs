@@ -30,6 +30,7 @@ namespace AntigravityChineseHelper
         private readonly object _logLock = new object();
 
         private Process _runner;
+        private int _externalRunnerPid;
         private FileStream _runnerLogStream;
         private StreamWriter _runnerLogWriter;
         private bool _wantsTranslation = true;
@@ -138,15 +139,48 @@ namespace AntigravityChineseHelper
 
         private bool IsRunnerAlive()
         {
-            if (_runner == null) return false;
+            if (_runner != null)
+            {
+                try
+                {
+                    if (!_runner.HasExited) return true;
+                }
+                catch { }
+            }
+            if (_externalRunnerPid > 0)
+            {
+                try
+                {
+                    using (Process ext = Process.GetProcessById(_externalRunnerPid))
+                    {
+                        if (!ext.HasExited) return true;
+                    }
+                }
+                catch { }
+                _externalRunnerPid = 0;
+            }
+            return false;
+        }
+
+        private int TryDetectExistingRunnerPid()
+        {
             try
             {
-                return !_runner.HasExited;
+                string pidFile = Path.Combine(SupportFolder, "runner.pid");
+                if (File.Exists(pidFile))
+                {
+                    int pid;
+                    if (int.TryParse(File.ReadAllText(pidFile, Encoding.UTF8).Trim(), out pid) && pid > 0)
+                    {
+                        using (Process p = Process.GetProcessById(pid))
+                        {
+                            if (!p.HasExited) return pid;
+                        }
+                    }
+                }
             }
-            catch
-            {
-                return false;
-            }
+            catch { }
+            return 0;
         }
 
         private void OnNotifyIconMouseUp(object sender, MouseEventArgs e)
@@ -315,7 +349,16 @@ namespace AntigravityChineseHelper
                         CloseLog();
                         if (_wantsTranslation && !_isQuitting && !_stopping)
                         {
-                            _lastError = "运行已结束（" + exitCode + "），点“重新加载词库”重试";
+                            int adoptedPid = exitCode == 0 ? TryDetectExistingRunnerPid() : 0;
+                            if (adoptedPid > 0)
+                            {
+                                _externalRunnerPid = adoptedPid;
+                                _lastError = null;
+                            }
+                            else
+                            {
+                                _lastError = "运行已结束（" + exitCode + "），点“重新加载词库”重试";
+                            }
                         }
                         RefreshStatus();
                     }, null);
@@ -344,9 +387,11 @@ namespace AntigravityChineseHelper
         private void StopRunner(Action completion)
         {
             Process process = _runner;
-            if (process == null || !IsRunnerAlive())
+            int externalPid = _externalRunnerPid;
+            if (!IsRunnerAlive())
             {
                 _runner = null;
+                _externalRunnerPid = 0;
                 CloseLog();
                 if (completion != null) completion();
                 return;
@@ -358,8 +403,11 @@ namespace AntigravityChineseHelper
 
             string nodePath = NodeRuntime.FindExecutable(RuntimeFolder);
             string scriptPath = Path.Combine(RuntimeFolder, "runner.mjs");
-            int runnerPid = 0;
-            try { runnerPid = process.Id; } catch { }
+            int runnerPid = externalPid;
+            if (process != null)
+            {
+                try { runnerPid = process.Id; } catch { }
+            }
 
             ThreadPool.QueueUserWorkItem(delegate
             {
@@ -376,11 +424,24 @@ namespace AntigravityChineseHelper
 
                 try
                 {
-                    if (!process.WaitForExit(ShutdownGraceSeconds * 1000))
+                    if (process != null)
                     {
-                        AppendLog("恢复英文的等待时间已结束，结束汉化助手进程。");
-                        NodeRuntime.KillProcessTree(runnerPid);
-                        process.WaitForExit(2000);
+                        if (!process.WaitForExit(ShutdownGraceSeconds * 1000))
+                        {
+                            AppendLog("恢复英文的等待时间已结束，结束汉化助手进程。");
+                            NodeRuntime.KillProcessTree(runnerPid);
+                            process.WaitForExit(2000);
+                        }
+                    }
+                    else if (runnerPid > 0)
+                    {
+                        using (Process ext = Process.GetProcessById(runnerPid))
+                        {
+                            if (!ext.WaitForExit(ShutdownGraceSeconds * 1000))
+                            {
+                                NodeRuntime.KillProcessTree(runnerPid);
+                            }
+                        }
                     }
                 }
                 catch { }
@@ -391,7 +452,8 @@ namespace AntigravityChineseHelper
                     {
                         _runner = null;
                     }
-                    try { process.Dispose(); } catch { }
+                    _externalRunnerPid = 0;
+                    if (process != null) { try { process.Dispose(); } catch { } }
                     _stopping = false;
                     CloseLog();
                     if (completion != null) completion();

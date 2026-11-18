@@ -122,6 +122,7 @@ if (-not $NoAutoStart) {
     $watcherCommand = "`"$installedExe`" --watch-antigravity"
     Set-ItemProperty -LiteralPath $runKey -Name 'AntigravityChineseHelperWatcher' -Value $watcherCommand -Type String
 
+    Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
     Start-Process -FilePath $installedExe -ArgumentList '--watch-antigravity' -WindowStyle Hidden
 }
 

@@ -140,9 +140,13 @@ function createWindowsBackendManager({ stateDir, appPath, onChange, env = proces
   }
   async function focusExistingWindow() {
     try {
+      const focusScript = [
+        'Add-Type -Name WinApi -Namespace Agh -MemberDefinition "[DllImport(\"user32.dll\")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow); [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd); [DllImport(\"user32.dll\")] public static extern bool IsIconic(IntPtr hWnd);" -ErrorAction SilentlyContinue',
+        '$p = Get-Process -Name "Antigravity" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1',
+        'if ($p) { if ([Agh.WinApi]::IsIconic($p.MainWindowHandle)) { [Agh.WinApi]::ShowWindowAsync($p.MainWindowHandle, 9) | Out-Null }; [Agh.WinApi]::SetForegroundWindow($p.MainWindowHandle) | Out-Null } else { (New-Object -ComObject WScript.Shell).AppActivate("Antigravity") | Out-Null }',
+      ].join('; ');
       await exec('powershell.exe', [
-        '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command',
-        '(New-Object -ComObject WScript.Shell).AppActivate("Antigravity") | Out-Null',
+        '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', focusScript,
       ], { timeout: 5000, windowsHide: true });
     } catch { /* Focusing is best effort when minimized to tray. */ }
   }
@@ -185,12 +189,16 @@ function createWindowsBackendManager({ stateDir, appPath, onChange, env = proces
           const executable = await findWindowsAntigravityExecutable({ appPath, env, home });
           cachedExecutable = executable;
           await syncAsarBridge({ force: true, executablePath: executable });
+          const cleanEnv = { ...env };
+          delete cleanEnv.ELECTRON_RUN_AS_NODE;
+          delete cleanEnv.ELECTRON_NO_ATTACH_CONSOLE;
           await new Promise((yes, no) => {
             const child = spawn(executable, ['--remote-debugging-port=0'], {
               detached: true,
               stdio: 'ignore',
               windowsHide: false,
               cwd: resolve(executable, '..'),
+              env: cleanEnv,
             });
             child.once('error', no);
             child.once('spawn', () => {
