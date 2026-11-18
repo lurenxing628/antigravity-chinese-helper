@@ -1,9 +1,10 @@
 import { execFile, spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { access, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
+import { ensureAntigravityCdpBridge, resolveAsarPath } from './asar-bridge.mjs';
 import { createBackendRuntime, inspectBackendBinary, prepareBackendCopy } from './backend-runtime.mjs';
 import { connectBackendApp, launchBackendApp, restoreBackendApp } from './backend-launch.mjs';
 import { CONTEXT_OVERRIDES_ENABLED } from './context-policy.mjs';
@@ -37,14 +38,59 @@ function validLimit(tokens) {
   return tokens === null || Number.isSafeInteger(tokens) && tokens > 0 && tokens <= 4294967295;
 }
 
-function createWindowsBackendManager({ appPath, onChange, env = process.env, home = homedir() }) {
+async function pathExists(candidate) {
+  if (!candidate) return null;
+  try { await access(candidate, constants.F_OK); return await realpath(candidate); }
+  catch { return null; }
+}
+
+export async function findWindowsAntigravityExecutable({ appPath, env = process.env, home = homedir() } = {}) {
+  const explicit = (appPath && appPath !== '/Applications/Antigravity.app' ? appPath : null) || env?.ANTIGRAVITY_APP_PATH;
+  if (explicit) {
+    const direct = /\.exe$/i.test(explicit) ? await pathExists(explicit) : (await pathExists(join(explicit, 'Antigravity.exe')) ?? await pathExists(explicit));
+    if (direct) return direct;
+    throw new Error(`未找到指定的 Antigravity 程序：${explicit}`);
+  }
+  const local = env?.LOCALAPPDATA || join(home, 'AppData', 'Local');
+  const candidates = [
+    join(local, 'Programs', 'antigravity', 'Antigravity.exe'),
+    join(local, 'Programs', 'Antigravity', 'Antigravity.exe'),
+    join(local, 'Antigravity', 'Antigravity.exe'),
+    env?.ProgramFiles ? join(env.ProgramFiles, 'Antigravity', 'Antigravity.exe') : null,
+    env?.['ProgramFiles(x86)'] ? join(env['ProgramFiles(x86)'], 'Antigravity', 'Antigravity.exe') : null,
+  ];
+  for (const candidate of candidates) {
+    const resolved = await pathExists(candidate);
+    if (resolved) return resolved;
+  }
+  try {
+    const lookup = "$roots = @(\"HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*\",\"HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*\",\"HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*\"); foreach ($r in $roots) {;   Get-ItemProperty $r -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like \"*Antigravity*\" } | ForEach-Object {;     if ($_.InstallLocation) { $p = Join-Path $_.InstallLocation \"Antigravity.exe\"; if (Test-Path $p) { Write-Output $p; exit 0 } };     if ($_.DisplayIcon) { $i = ($_.DisplayIcon -replace \",\\d+$\",\"\").Trim([char]34); if ($i -like \"*.exe\" -and (Test-Path $i)) { Write-Output $i; exit 0 } };   }; }";
+    const { stdout } = await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', lookup],
+      { timeout: 6000, windowsHide: true, maxBuffer: 256 * 1024 });
+    const line = stdout.split(/\r?\n/).map(item => item.trim()).find(Boolean);
+    const fromRegistry = await pathExists(line);
+    if (fromRegistry) return fromRegistry;
+  } catch { /* Fall through to user-facing guidance. */ }
+  throw new Error('未找到 Antigravity.exe，请确认已安装 Antigravity 或设置环境变量 ANTIGRAVITY_APP_PATH。');
+}
+
+function createWindowsBackendManager({ stateDir, appPath, onChange, env = process.env, home = homedir() }) {
   let disposed = false, error = null, pending = Promise.resolve();
+  let lastBridgeCheckAt = 0;
+  let lastAsarStamp = '';
+  let cachedExecutable = null;
+  let justAutoPatched = false;
+  let guiRunning = false;
+  let lastGuiCheckAt = 0;
+
   const getStatus = () => ({
     contextOverridesEnabled: false,
     targetTokens: null,
     active: false,
     nativeReady: false,
     mainOverrides: false,
+    asarPatchedNow: justAutoPatched,
+    guiRunning,
     error,
     mainMessage: '',
     message: '使用子代理默认上下文',
@@ -56,51 +102,41 @@ function createWindowsBackendManager({ appPath, onChange, env = process.env, hom
     }
     return getStatus();
   }
-  async function exists(candidate) {
-    if (!candidate) return null;
-    try { await access(candidate, constants.F_OK); return await realpath(candidate); }
-    catch { return null; }
-  }
-  async function findExecutable() {
-    const explicit = (appPath && appPath !== '/Applications/Antigravity.app' ? appPath : null) || env?.ANTIGRAVITY_APP_PATH;
-    if (explicit) {
-      const direct = /\.exe$/i.test(explicit) ? await exists(explicit) : (await exists(join(explicit, 'Antigravity.exe')) ?? await exists(explicit));
-      if (direct) return direct;
-      throw new Error(`未找到指定的 Antigravity 程序：${explicit}`);
-    }
-    const local = env?.LOCALAPPDATA || join(home, 'AppData', 'Local');
-    const candidates = [
-      join(local, 'Programs', 'Antigravity', 'Antigravity.exe'),
-      join(local, 'Antigravity', 'Antigravity.exe'),
-      env?.ProgramFiles ? join(env.ProgramFiles, 'Antigravity', 'Antigravity.exe') : null,
-      env?.['ProgramFiles(x86)'] ? join(env['ProgramFiles(x86)'], 'Antigravity', 'Antigravity.exe') : null,
-    ];
-    for (const candidate of candidates) {
-      const resolved = await exists(candidate);
-      if (resolved) return resolved;
-    }
+  async function syncAsarBridge({ force = false, executablePath = cachedExecutable } = {}) {
+    const now = Date.now();
+    if (!force && now - lastBridgeCheckAt < 10000) return;
+    lastBridgeCheckAt = now;
     try {
-      const lookup = [
-        '$roots = @("HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*","HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*","HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*")',
-        'foreach ($r in $roots) {',
-        '  Get-ItemProperty $r -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like "*Antigravity*" } | ForEach-Object {',
-        '    if ($_.InstallLocation) { $p = Join-Path $_.InstallLocation "Antigravity.exe"; if (Test-Path $p) { Write-Output $p; exit 0 } }',
-        '    if ($_.DisplayIcon) { $i = ($_.DisplayIcon -replace ",\\d+$","").Trim(\'"\'); if ($i -like "*.exe" -and (Test-Path $i)) { Write-Output $i; exit 0 } }',
-        '  }',
-        '}',
-      ].join('; ');
-      const { stdout } = await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', lookup],
-        { timeout: 6000, windowsHide: true, maxBuffer: 256 * 1024 });
-      const line = stdout.split(/\r?\n/).map(item => item.trim()).find(Boolean);
-      const fromRegistry = await exists(line);
-      if (fromRegistry) return fromRegistry;
-    } catch { /* Fall through to user-facing guidance. */ }
-    throw new Error('未找到 Antigravity.exe，请确认已安装 Antigravity 或设置环境变量 ANTIGRAVITY_APP_PATH。');
+      const asarPath = await resolveAsarPath({ executablePath, appPath, env, home });
+      if (!asarPath) return;
+      const info = await stat(asarPath);
+      const stamp = `${asarPath}|${info.mtimeMs}|${info.size}`;
+      if (!force && stamp === lastAsarStamp) return;
+      const result = await ensureAntigravityCdpBridge({ executablePath, appPath, stateDir, env, home, platform: 'win32' });
+      if (result.mtimeMs !== undefined && result.size !== undefined) {
+        lastAsarStamp = `${result.asarPath || asarPath}|${result.mtimeMs}|${result.size}`;
+      } else {
+        lastAsarStamp = stamp;
+      }
+      if (result.patched) {
+        justAutoPatched = true;
+      }
+    } catch { /* Keep refresh resilient when Antigravity installer is mid-write. */ }
   }
   async function isRunning() {
     const { stdout } = await exec('tasklist.exe', ['/FO', 'CSV', '/NH', '/FI', 'IMAGENAME eq Antigravity.exe'],
       { timeout: 5000, windowsHide: true, maxBuffer: 1024 * 1024 });
-    return stdout.split(/\r?\n/).some(line => /^"Antigravity\.exe",/i.test(line.trim()));
+    const hasProcess = stdout.split(/\r?\n/).some(line => /^"Antigravity\.exe",/i.test(line.trim()));
+    if (!hasProcess) return false;
+    try {
+      const checkCmd = "$procs = @(Get-CimInstance Win32_Process -Filter \"Name='Antigravity.exe'\" -ErrorAction SilentlyContinue); if ($procs.Count -eq 0) { Write-Output \"NONE\"; exit 0 }; $gui = $procs | Where-Object { $c = $_.CommandLine; -not [string]::IsNullOrWhiteSpace($c) -and $c -notmatch \"sidecar_sdk\" -and $c -notmatch \"--type=\" } | Select-Object -First 1; if ($gui) { Write-Output \"GUI\" } else { Write-Output \"NON_GUI\" }";
+      const { stdout: psOut } = await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', checkCmd],
+        { timeout: 5000, windowsHide: true, maxBuffer: 256 * 1024 });
+      const marker = psOut.trim().toUpperCase();
+      if (marker === 'GUI') return true;
+      if (marker === 'NON_GUI' || marker === 'NONE') return false;
+    } catch { /* Fall back to tasklist result when CIM is unavailable. */ }
+    return true;
   }
   async function focusExistingWindow() {
     try {
@@ -115,12 +151,27 @@ function createWindowsBackendManager({ appPath, onChange, env = process.env, hom
     pending = result.catch(() => {});
     return result;
   }
-  const ready = Promise.resolve(publish({ error: null }));
+  async function refreshGuiRunning(force = false) {
+    if (!justAutoPatched) return;
+    const now = Date.now();
+    if (!force && now - lastGuiCheckAt < 10000) return;
+    lastGuiCheckAt = now;
+    try { guiRunning = await isRunning(); } catch { guiRunning = false; }
+  }
+  const ready = serial(async () => {
+    await syncAsarBridge({ force: true });
+    await refreshGuiRunning(true);
+    return publish({ error: null });
+  });
   return {
     ready,
     getStatus,
     mainSettingsChanged: () => serial(async () => getStatus()),
-    refresh: () => serial(async () => getStatus()),
+    refresh: () => serial(async () => {
+      await syncAsarBridge();
+      await refreshGuiRunning();
+      return getStatus();
+    }),
     setLimit: () => serial(async () => getStatus()),
     launch() {
       return serial(async () => {
@@ -131,9 +182,11 @@ function createWindowsBackendManager({ appPath, onChange, env = process.env, hom
             publish({ error: null });
             return { launched: false, message: '' };
           }
-          const executable = await findExecutable();
+          const executable = await findWindowsAntigravityExecutable({ appPath, env, home });
+          cachedExecutable = executable;
+          await syncAsarBridge({ force: true, executablePath: executable });
           await new Promise((yes, no) => {
-            const child = spawn(executable, [], {
+            const child = spawn(executable, ['--remote-debugging-port=0'], {
               detached: true,
               stdio: 'ignore',
               windowsHide: false,
@@ -163,7 +216,7 @@ function createWindowsBackendManager({ appPath, onChange, env = process.env, hom
 /** Own the shared native budget lifecycle; main preferences stay in nativeStorage. */
 export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applications/Antigravity.app', appStoragePath, onChange, contextOverridesEnabled = CONTEXT_OVERRIDES_ENABLED, platform = process.platform, env = process.env, home = homedir() }) {
   if (platform === 'win32') {
-    return createWindowsBackendManager({ appPath, onChange, env, home });
+    return createWindowsBackendManager({ stateDir, appPath, onChange, env, home });
   }
   const directory = resolve(stateDir);
   const settingsPath = join(directory, 'backend-context.json');

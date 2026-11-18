@@ -90,20 +90,7 @@ namespace AntigravityChineseHelper
 
         private string SupportFolder
         {
-            get
-            {
-                string explicitDir = Environment.GetEnvironmentVariable("ANTIGRAVITY_HELPER_STATE_DIR");
-                if (!string.IsNullOrWhiteSpace(explicitDir))
-                {
-                    return Path.GetFullPath(explicitDir);
-                }
-                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                if (string.IsNullOrEmpty(localAppData))
-                {
-                    localAppData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "AppData", "Local");
-                }
-                return Path.Combine(localAppData, "AntigravityChineseHelper");
-            }
+            get { return NodeRuntime.ResolveSupportFolder(); }
         }
 
         private string HomeFolder
@@ -351,28 +338,7 @@ namespace AntigravityChineseHelper
 
         private ProcessStartInfo BuildNodeProcessInfo(string nodePath, string scriptArguments)
         {
-            ProcessStartInfo info = new ProcessStartInfo();
-            bool isCmd = nodePath.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
-                || nodePath.EndsWith(".bat", StringComparison.OrdinalIgnoreCase);
-            if (isCmd)
-            {
-                info.FileName = "cmd.exe";
-                info.Arguments = "/d /s /c \"\"" + nodePath + "\" " + scriptArguments + "\"";
-            }
-            else
-            {
-                info.FileName = nodePath;
-                info.Arguments = scriptArguments;
-            }
-            info.WorkingDirectory = RuntimeFolder;
-            info.UseShellExecute = false;
-            info.CreateNoWindow = true;
-            info.RedirectStandardOutput = true;
-            info.RedirectStandardError = true;
-            info.StandardOutputEncoding = Encoding.UTF8;
-            info.StandardErrorEncoding = Encoding.UTF8;
-            info.EnvironmentVariables["ANTIGRAVITY_HELPER_STATE_DIR"] = SupportFolder;
-            return info;
+            return NodeRuntime.BuildNodeCommandInfo(nodePath, RuntimeFolder, SupportFolder, scriptArguments);
         }
 
         private void StopRunner(Action completion)

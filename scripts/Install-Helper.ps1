@@ -26,8 +26,13 @@ if (-not $needsBuild) {
         $needsBuild = $true
     }
 }
-if ($needsBuild) {
-    & (Join-Path $sourceDir 'build-windows.ps1') -OutputDir $sourceDir
+$buildScript = Join-Path $sourceDir 'build-windows.ps1'
+if (-not (Test-Path -LiteralPath $buildScript)) {
+    $altBuild = Join-Path $sourceDir 'scripts\build-windows.ps1'
+    if (Test-Path -LiteralPath $altBuild) { $buildScript = $altBuild }
+}
+if ($needsBuild -and (Test-Path -LiteralPath $buildScript)) {
+    & $buildScript -OutputDir $sourceDir
 }
 
 $installDir = Join-Path $InstallRoot 'application'
@@ -82,8 +87,31 @@ if (-not $SkipShortcuts) {
             $shortcut.Description = (U "Antigravity \u6c49\u5316\u52a9\u624b")
             $shortcut.IconLocation = "$installedExe,0"
             $shortcut.Save()
+
+            # Dual-insurance: ensure official Antigravity.lnk carries --remote-debugging-port=0 if present.
+            $agLnk = Join-Path $folder 'Antigravity.lnk'
+            if (Test-Path -LiteralPath $agLnk) {
+                try {
+                    $agSc = $shell.CreateShortcut($agLnk)
+                    if ($agSc.TargetPath -like '*Antigravity.exe' -and ($agSc.Arguments -notmatch '--remote-debugging-port')) {
+                        $existingArgs = if ([string]::IsNullOrWhiteSpace($agSc.Arguments)) { '' } else { $agSc.Arguments.Trim() + ' ' }
+                        $agSc.Arguments = $existingArgs + '--remote-debugging-port=0'
+                        $agSc.Save()
+                    }
+                } catch { }
+            }
         }
     }
+}
+
+# Pre-patch Antigravity app.asar during installation so existing or updated installs expose CDP immediately on next launch.
+$installedBridge = Join-Path $installDir 'runtime\asar-bridge.mjs'
+$nodeForPatch = Get-Command node.exe -ErrorAction SilentlyContinue
+if ($nodeForPatch -and (Test-Path -LiteralPath $installedBridge)) {
+    try {
+        $env:ANTIGRAVITY_HELPER_STATE_DIR = $InstallRoot
+        & $nodeForPatch.Source $installedBridge '--patch' *> $null
+    } catch { }
 }
 
 if (-not $NoAutoStart) {

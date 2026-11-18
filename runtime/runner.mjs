@@ -289,13 +289,35 @@ function scheduleInstall(session) {
   }, 100);
 }
 
-async function portFromApp() {
-  for (const directory of antigravityDataDirectories) {
+const NO_CDP_RESTART_HINT = '已自动适配新版 Antigravity，请重启 Antigravity 一次使汉化生效';
+
+async function discoverTargetsFromActivePorts() {
+  const candidates = [];
+  for (let index = 0; index < antigravityDataDirectories.length; index++) {
+    const portFile = join(antigravityDataDirectories[index], 'DevToolsActivePort');
     try {
-      const contents = await readFile(join(directory, 'DevToolsActivePort'), 'utf8');
+      const contents = await readFile(portFile, 'utf8');
       const port = Number(contents.split(/\r?\n/, 1)[0]);
-      if (Number.isInteger(port) && port > 0 && port <= 65535) return port;
+      if (Number.isInteger(port) && port > 0 && port <= 65535) {
+        let mtimeMs = -index;
+        if (typeof stat === 'function') {
+          try { mtimeMs = (await stat(portFile)).mtimeMs; } catch {}
+        }
+        candidates.push({ port, mtimeMs });
+      }
     } catch { /* App is closed or has not created the endpoint yet. */ }
+  }
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const seenPorts = new Set();
+  for (const candidate of candidates) {
+    if (seenPorts.has(candidate.port)) continue;
+    seenPorts.add(candidate.port);
+    try {
+      const response = await fetch(`http://127.0.0.1:${candidate.port}/json/list`, { signal: AbortSignal.timeout(2500) });
+      if (!response.ok) continue;
+      const targets = await response.json();
+      if (Array.isArray(targets)) return { port: candidate.port, targets };
+    } catch { /* Stale DevToolsActivePort from an earlier run; try next candidate. */ }
   }
   return null;
 }
@@ -303,7 +325,7 @@ async function portFromApp() {
 function targetKind(target) {
   try {
     const page = new URL(target.url);
-    if (target.type === 'page' && page.protocol === 'https:' && page.hostname === '127.0.0.1') return 'app';
+    if (['page', 'other', 'webview'].includes(target.type) && page.protocol === 'https:' && page.hostname === '127.0.0.1') return 'app';
     if (target.type === 'iframe' && page.protocol === 'plugin:' && /^swarm--swarm_board-\d+$/.test(page.hostname) && page.pathname === '/') return 'swarm';
   } catch { /* Ignore unrelated or invalid targets. */ }
   return null;
@@ -323,18 +345,25 @@ async function discover() {
   let resolveDiscovery;
   discoverySettled = new Promise((resolve) => { resolveDiscovery = resolve; });
   try {
-    const port = await portFromApp();
+    const activeEndpoint = await discoverTargetsFromActivePorts();
+    const port = activeEndpoint?.port ?? null;
     if (port !== currentPort) {
       await Promise.all([...sessions.values()].map((session) => disconnect(session, true)));
       sessions.clear();
       rejectedTargets.clear();
       currentPort = port;
     }
-    if (!port) { appReachable = false; return; }
-    const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2500) });
-    if (!response.ok) throw new Error('CDP discovery unavailable');
-    const targets = await response.json();
-    if (!Array.isArray(targets)) throw new Error('CDP target list invalid');
+    if (!activeEndpoint) {
+      appReachable = false;
+      const backendStatus = backend?.getStatus();
+      if (isWindows && backendStatus?.asarPatchedNow && backendStatus?.guiRunning) {
+        lastError = NO_CDP_RESTART_HINT;
+      } else if (lastError === NO_CDP_RESTART_HINT) {
+        lastError = null;
+      }
+      return;
+    }
+    const targets = activeEndpoint.targets;
     appReachable = true;
     const eligible = targets.filter((target) => eligibleTarget(target, port));
     const activeIds = new Set(eligible.map((target) => target.id));

@@ -86,7 +86,7 @@ test('Windows backend manager launches detached executable when closed and focus
       execFileMock(...a, (err, stdout, stderr) => err ? no(err) : yes({ stdout, stderr }));
     });
 
-    const { access, mkdir, mkdtemp: mkd, readFile: rf, realpath, rename, rm: rmFn, writeFile: wf } = await import('node:fs/promises');
+    const { access, mkdir, mkdtemp: mkd, readFile: rf, realpath, rename, rm: rmFn, stat, writeFile: wf } = await import('node:fs/promises');
     const { constants } = await import('node:fs');
     const { homedir } = await import('node:os');
     const { join: pJoin, relative, resolve, sep } = await import('node:path');
@@ -103,13 +103,15 @@ test('Windows backend manager launches detached executable when closed and focus
       },
       promisify,
       constants,
-      access, mkdir, mkdtemp: mkd, readFile: rf, realpath, rename, rm: rmFn, writeFile: wf,
+      access, mkdir, mkdtemp: mkd, readFile: rf, realpath, rename, rm: rmFn, stat, writeFile: wf,
+      ensureAntigravityCdpBridge: async () => ({ patched: false }),
+      resolveAsarPath: async () => null,
       homedir, join: pJoin, relative, resolve, sep,
       createBackendRuntime: () => {}, inspectBackendBinary: () => {}, prepareBackendCopy: () => {},
       connectBackendApp: () => {}, launchBackendApp: () => {}, restoreBackendApp: () => {},
       CONTEXT_OVERRIDES_ENABLED: false,
       process: { platform: 'win32', env: { ANTIGRAVITY_APP_PATH: fakeExe } },
-      setTimeout, clearTimeout, URL,
+      Date, setTimeout, clearTimeout, URL,
     });
     vm.runInContext(`${source}\nglobalThis.createManager = createBackendManager;`, ctx);
 
@@ -142,7 +144,7 @@ test('Windows backend manager launches detached executable when closed and focus
 });
 
 /** Minimal RFC 6455 WebSocket upgrade server for isolated mock CDP testing. */
-function startMockCdpServer(pageContext) {
+function startMockCdpServer(pageContext, targetType = 'page') {
   const scripts = new Map();
   let nextScriptId = 0;
   const sockets = new Set();
@@ -172,7 +174,7 @@ function startMockCdpServer(pageContext) {
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify([{
         id: 'mock-win-1',
-        type: 'page',
+        type: targetType,
         url: 'https://127.0.0.1/',
         webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/mock-win-1`,
       }]));
@@ -275,7 +277,7 @@ test('Windows runner connects over Named Pipe IPC, translates mock CDP window, d
   await mkdir(runtimeCopy, { recursive: true });
 
   // Copy minimal runtime modules with a lightweight test renderer so the runner executes end-to-end in isolation.
-  for (const name of ['runner.mjs', 'cdp.mjs', 'backend-manager.mjs', 'context-policy.mjs', 'backend-runtime.mjs', 'backend-launch.mjs', 'backend-hook.js', 'backend-metadata.mjs', 'backend-layout.mjs', 'native-copy.mjs']) {
+  for (const name of ['runner.mjs', 'cdp.mjs', 'asar-bridge.mjs', 'backend-manager.mjs', 'context-policy.mjs', 'backend-runtime.mjs', 'backend-launch.mjs', 'backend-hook.js', 'backend-metadata.mjs', 'backend-layout.mjs', 'native-copy.mjs']) {
     const content = await readFile(new URL(`../runtime/${name}`, import.meta.url), 'utf8');
     await writeFile(join(runtimeCopy, name), content);
   }
@@ -299,7 +301,7 @@ test('Windows runner connects over Named Pipe IPC, translates mock CDP window, d
   });
   vm.runInContext('globalThis.top = globalThis', page);
 
-  const cdp = startMockCdpServer(page);
+  const cdp = startMockCdpServer(page, 'other');
   const port = await cdp.listen();
   await writeFile(join(dataDir, 'DevToolsActivePort'), `${port}\n/devtools/browser/mock\n`);
 
@@ -356,6 +358,88 @@ test('Windows runner connects over Named Pipe IPC, translates mock CDP window, d
   } finally {
     if (child && child.exitCode === null) child.kill();
     await cdp.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('asar-bridge patches Electron main entry, preserves unpacked/non-contiguous files, recomputes SHA256 integrity, and re-patches on version update', async () => {
+  const { CDP_BRIDGE_MARKER, ensureAntigravityCdpBridge, patchAsarBuffer, readAsarHeader } = await import('../runtime/asar-bridge.mjs');
+  const root = await mkdtemp(join(tmpdir(), 'agh-asar-test-'));
+  try {
+    function buildSyntheticAsar(version, mainCode) {
+      const pkgBytes = Buffer.from(JSON.stringify({ name: 'antigravity', version, main: './dist/main.js' }), 'utf8');
+      const mainBytes = Buffer.from(mainCode, 'utf8');
+      const extraBytes = Buffer.from('hello-antigravity', 'utf8');
+      const hashHex = (buf) => createHash('sha256').update(buf).digest('hex');
+      const headerObj = {
+        files: {
+          'package.json': { size: pkgBytes.length, offset: '0', integrity: { algorithm: 'SHA256', hash: hashHex(pkgBytes), blockSize: 4194304, blocks: [hashHex(pkgBytes)] } },
+          native: { files: { 'addon.node': { size: 128, unpacked: true } } },
+          dist: {
+            files: {
+              'main.js': { size: mainBytes.length, offset: String(pkgBytes.length), integrity: { algorithm: 'SHA256', hash: hashHex(mainBytes), blockSize: 4194304, blocks: [hashHex(mainBytes)] } },
+              'extra.txt': { size: extraBytes.length, offset: String(pkgBytes.length + mainBytes.length), integrity: { algorithm: 'SHA256', hash: hashHex(extraBytes), blockSize: 4194304, blocks: [hashHex(extraBytes)] } },
+            },
+          },
+        },
+      };
+      const jsonBytes = Buffer.from(JSON.stringify(headerObj), 'utf8');
+      const aligned = Math.ceil(jsonBytes.length / 4) * 4;
+      const prefix = Buffer.alloc(16 + aligned);
+      prefix.writeUInt32LE(4, 0);
+      prefix.writeUInt32LE(8 + aligned, 4);
+      prefix.writeUInt32LE(4 + aligned, 8);
+      prefix.writeUInt32LE(jsonBytes.length, 12);
+      jsonBytes.copy(prefix, 16);
+      return Buffer.concat([prefix, pkgBytes, mainBytes, extraBytes]);
+    }
+
+    const v1Raw = buildSyntheticAsar('2.32.0', '"use strict";\nconst { app } = require("electron");\napp.whenReady();\n');
+    const first = patchAsarBuffer(v1Raw);
+    assert.equal(first.patched, true);
+    assert.equal(first.version, '2.32.0');
+
+    const { header, dataOffset } = readAsarHeader(first.buffer);
+    const patchedMainEntry = header.files.dist.files['main.js'];
+    const patchedMainText = first.buffer.subarray(dataOffset + Number(patchedMainEntry.offset), dataOffset + Number(patchedMainEntry.offset) + patchedMainEntry.size).toString('utf8');
+    assert.ok(patchedMainText.includes(CDP_BRIDGE_MARKER));
+    assert.equal(patchedMainEntry.integrity.hash, createHash('sha256').update(Buffer.from(patchedMainText, 'utf8')).digest('hex'));
+
+    const extraEntry = header.files.dist.files['extra.txt'];
+    const extraText = first.buffer.subarray(dataOffset + Number(extraEntry.offset), dataOffset + Number(extraEntry.offset) + extraEntry.size).toString('utf8');
+    assert.equal(extraText, 'hello-antigravity');
+    assert.equal(header.files.native.files['addon.node'].unpacked, true);
+
+    const idempotent = patchAsarBuffer(first.buffer);
+    assert.equal(idempotent.patched, false);
+    assert.equal(idempotent.alreadyPatched, true);
+
+    // End-to-end auto-migration across simulated Antigravity overwrite update (2.32.0 -> 2.33.0)
+    const appDir = join(root, 'app');
+    const resDir = join(appDir, 'resources');
+    const stateDir = join(root, 'state');
+    const { mkdir, readdir } = await import('node:fs/promises');
+    await mkdir(resDir, { recursive: true });
+    await mkdir(stateDir, { recursive: true });
+    const fakeExe = join(appDir, 'Antigravity.exe');
+    const asarFile = join(resDir, 'app.asar');
+    await writeFile(fakeExe, 'stub');
+    await writeFile(asarFile, v1Raw);
+
+    const mig1 = await ensureAntigravityCdpBridge({ executablePath: fakeExe, stateDir, platform: 'win32' });
+    assert.equal(mig1.patched, true);
+    assert.ok((await readdir(stateDir)).includes('app.asar.2.32.0.bak'));
+
+    // Simulate official installer overwriting app.asar with unpatched v2.33.0
+    const v2Raw = buildSyntheticAsar('2.33.0', 'import { app } from "electron";\nconsole.log("v2.33.0");\n');
+    await writeFile(asarFile, v2Raw);
+    const mig2 = await ensureAntigravityCdpBridge({ executablePath: fakeExe, stateDir, platform: 'win32' });
+    assert.equal(mig2.patched, true);
+    assert.equal(mig2.version, '2.33.0');
+    const stateFiles = await readdir(stateDir);
+    assert.ok(stateFiles.includes('app.asar.2.33.0.bak'));
+    assert.ok(!stateFiles.includes('app.asar.2.32.0.bak'), 'old backup cleaned up so only latest version backup remains');
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });

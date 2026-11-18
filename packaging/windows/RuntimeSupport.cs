@@ -298,6 +298,73 @@ namespace AntigravityChineseHelper
             }
         }
 
+        public static ProcessStartInfo BuildNodeCommandInfo(string nodePath, string workingDirectory, string stateDir, string scriptArguments)
+        {
+            ProcessStartInfo info = new ProcessStartInfo();
+            bool isCmd = nodePath.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
+                || nodePath.EndsWith(".bat", StringComparison.OrdinalIgnoreCase);
+            if (isCmd)
+            {
+                info.FileName = "cmd.exe";
+                info.Arguments = "/d /s /c \"\"" + nodePath + "\" " + scriptArguments + "\"";
+            }
+            else
+            {
+                info.FileName = nodePath;
+                info.Arguments = scriptArguments;
+            }
+            info.WorkingDirectory = workingDirectory;
+            info.UseShellExecute = false;
+            info.CreateNoWindow = true;
+            info.RedirectStandardOutput = true;
+            info.RedirectStandardError = true;
+            info.StandardOutputEncoding = Encoding.UTF8;
+            info.StandardErrorEncoding = Encoding.UTF8;
+            if (!string.IsNullOrEmpty(stateDir))
+            {
+                info.EnvironmentVariables["ANTIGRAVITY_HELPER_STATE_DIR"] = stateDir;
+            }
+            return info;
+        }
+
+        public static string ResolveSupportFolder()
+        {
+            string explicitDir = Environment.GetEnvironmentVariable("ANTIGRAVITY_HELPER_STATE_DIR");
+            if (!string.IsNullOrWhiteSpace(explicitDir))
+            {
+                return Path.GetFullPath(explicitDir);
+            }
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            if (string.IsNullOrEmpty(localAppData))
+            {
+                localAppData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "AppData", "Local");
+            }
+            return Path.Combine(localAppData, "AntigravityChineseHelper");
+        }
+
+        public static string ResolveRuntimeFolder(string executablePath)
+        {
+            string supportFolder = ResolveSupportFolder();
+            string installedRuntime = Path.Combine(supportFolder, "application", "runtime");
+            if (File.Exists(Path.Combine(installedRuntime, "runner.mjs")))
+            {
+                return installedRuntime;
+            }
+            if (!string.IsNullOrEmpty(executablePath))
+            {
+                string exeDir = Path.GetDirectoryName(executablePath);
+                if (!string.IsNullOrEmpty(exeDir))
+                {
+                    string siblingRuntime = Path.Combine(exeDir, "runtime");
+                    if (File.Exists(Path.Combine(siblingRuntime, "runner.mjs")))
+                    {
+                        return siblingRuntime;
+                    }
+                }
+            }
+            return installedRuntime;
+        }
+
         public static NodeCommandResult RunCommand(ProcessStartInfo info, int timeoutMs)
         {
             StringBuilder stdout = new StringBuilder();

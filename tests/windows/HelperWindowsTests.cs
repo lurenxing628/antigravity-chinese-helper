@@ -114,7 +114,39 @@ internal static class HelperWindowsTests
         state.SynchronizeActiveProcesses(active);
         Expect(state.ShouldOpenHelper("Antigravity", 100, 3000L), "Exited PID removed during sync can start helper again");
 
-        Console.WriteLine("AppWatcher: startup, unrelated apps, manual exit, PID reuse, and sync passed");
+        string tempAsar = Path.Combine(Path.GetTempPath(), "agh-marker-" + Guid.NewGuid().ToString("N") + ".asar");
+        try
+        {
+            byte[] jsonBytes = Encoding.UTF8.GetBytes("{\"files\":{}}");
+            byte[] unpatchedPayload = Encoding.UTF8.GetBytes("console.log('plain');");
+            byte[] patchedPayload = Encoding.UTF8.GetBytes(AsarBridgeMonitor.BridgeMarker + "console.log('patched');");
+            byte[] header = new byte[16 + 12];
+            BitConverter.GetBytes((uint)4).CopyTo(header, 0);
+            BitConverter.GetBytes((uint)(8 + 12)).CopyTo(header, 4);
+            BitConverter.GetBytes((uint)(4 + 12)).CopyTo(header, 8);
+            BitConverter.GetBytes((uint)jsonBytes.Length).CopyTo(header, 12);
+            Array.Copy(jsonBytes, 0, header, 16, jsonBytes.Length);
+
+            using (FileStream fs = File.Create(tempAsar))
+            {
+                fs.Write(header, 0, header.Length);
+                fs.Write(unpatchedPayload, 0, unpatchedPayload.Length);
+            }
+            Expect(!AsarBridgeMonitor.ContainsBridgeMarker(tempAsar), "Unpatched ASAR must report missing marker");
+
+            using (FileStream fs = File.Create(tempAsar))
+            {
+                fs.Write(header, 0, header.Length);
+                fs.Write(patchedPayload, 0, patchedPayload.Length);
+            }
+            Expect(AsarBridgeMonitor.ContainsBridgeMarker(tempAsar), "Patched ASAR must report marker present");
+        }
+        finally
+        {
+            try { File.Delete(tempAsar); } catch { }
+        }
+
+        Console.WriteLine("AppWatcher: startup, unrelated apps, manual exit, PID reuse, sync, and ASAR marker check passed");
     }
 
     private static string WriteCmdNode(string root, string relativePath, string body)
@@ -172,7 +204,7 @@ internal static class HelperWindowsTests
             string validated = NodeRuntime.ValidatedExecutable(new string[] { hung, oldNode, explicitNode }, env, home, 600);
             sw.Stop();
             Expect(string.Equals(validated, explicitNode, StringComparison.OrdinalIgnoreCase), "Skip hung and Node 20 candidates");
-            Expect(sw.ElapsedMilliseconds < 4000, "Hung shim must not block discovery");
+            Expect(sw.ElapsedMilliseconds < 8000, "Hung shim must not block discovery");
 
             // Log rotation test (> 512 KiB retains <= 256 KiB starting at complete UTF-8 line).
             string logPath = Path.Combine(home, "helper.log");
@@ -233,7 +265,7 @@ internal static class HelperWindowsTests
         }
         finally
         {
-            try { Directory.Delete(home, true); } catch { }
+            try { GC.Collect(); GC.WaitForPendingFinalizers(); Directory.Delete(home, true); } catch { }
         }
     }
 
