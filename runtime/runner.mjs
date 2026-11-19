@@ -8,9 +8,23 @@ import { CdpClient } from './cdp.mjs';
 import { antigravityDataDirectories, createBackendManager } from './backend-manager.mjs';
 import { CONTEXT_OVERRIDES_ENABLED } from './context-policy.mjs';
 
+const isWindows = process.platform === 'win32';
 const runtimeDir = dirname(fileURLToPath(import.meta.url));
-const stateDir = join(homedir(), 'Library/Application Support/AntigravityChineseHelper');
-const socketPath = join(stateDir, 'helper.sock');
+const stateDir = process.env.ANTIGRAVITY_HELPER_STATE_DIR
+  || (isWindows
+    ? join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'AntigravityChineseHelper')
+    : join(homedir(), 'Library/Application Support/AntigravityChineseHelper'));
+
+function windowsPipePath(directory) {
+  let hash = 0xcbf29ce484222325n;
+  for (const ch of directory.toLowerCase()) {
+    hash ^= BigInt(ch.codePointAt(0));
+    hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
+  }
+  return `\\\\.\\pipe\\antigravity-chinese-helper-${hash.toString(16).padStart(16, '0')}`;
+}
+
+const socketPath = isWindows ? windowsPipePath(stateDir) : join(stateDir, 'helper.sock');
 const pidPath = join(stateDir, 'runner.pid');
 const statusPath = join(stateDir, 'status.json');
 const sourcePath = join(runtimeDir, 'renderer.js');
@@ -275,13 +289,35 @@ function scheduleInstall(session) {
   }, 100);
 }
 
-async function portFromApp() {
-  for (const directory of antigravityDataDirectories) {
+const NO_CDP_RESTART_HINT = '已自动适配新版 Antigravity，请重启 Antigravity 一次使汉化生效';
+
+async function discoverTargetsFromActivePorts() {
+  const candidates = [];
+  for (let index = 0; index < antigravityDataDirectories.length; index++) {
+    const portFile = join(antigravityDataDirectories[index], 'DevToolsActivePort');
     try {
-      const contents = await readFile(join(directory, 'DevToolsActivePort'), 'utf8');
+      const contents = await readFile(portFile, 'utf8');
       const port = Number(contents.split(/\r?\n/, 1)[0]);
-      if (Number.isInteger(port) && port > 0 && port <= 65535) return port;
+      if (Number.isInteger(port) && port > 0 && port <= 65535) {
+        let mtimeMs = -index;
+        if (typeof stat === 'function') {
+          try { mtimeMs = (await stat(portFile)).mtimeMs; } catch {}
+        }
+        candidates.push({ port, mtimeMs });
+      }
     } catch { /* App is closed or has not created the endpoint yet. */ }
+  }
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const seenPorts = new Set();
+  for (const candidate of candidates) {
+    if (seenPorts.has(candidate.port)) continue;
+    seenPorts.add(candidate.port);
+    try {
+      const response = await fetch(`http://127.0.0.1:${candidate.port}/json/list`, { signal: AbortSignal.timeout(2500) });
+      if (!response.ok) continue;
+      const targets = await response.json();
+      if (Array.isArray(targets)) return { port: candidate.port, targets };
+    } catch { /* Stale DevToolsActivePort from an earlier run; try next candidate. */ }
   }
   return null;
 }
@@ -289,7 +325,7 @@ async function portFromApp() {
 function targetKind(target) {
   try {
     const page = new URL(target.url);
-    if (target.type === 'page' && page.protocol === 'https:' && page.hostname === '127.0.0.1') return 'app';
+    if (['page', 'other', 'webview'].includes(target.type) && page.protocol === 'https:' && page.hostname === '127.0.0.1') return 'app';
     if (target.type === 'iframe' && page.protocol === 'plugin:' && /^swarm--swarm_board-\d+$/.test(page.hostname) && page.pathname === '/') return 'swarm';
   } catch { /* Ignore unrelated or invalid targets. */ }
   return null;
@@ -309,18 +345,25 @@ async function discover() {
   let resolveDiscovery;
   discoverySettled = new Promise((resolve) => { resolveDiscovery = resolve; });
   try {
-    const port = await portFromApp();
+    const activeEndpoint = await discoverTargetsFromActivePorts();
+    const port = activeEndpoint?.port ?? null;
     if (port !== currentPort) {
       await Promise.all([...sessions.values()].map((session) => disconnect(session, true)));
       sessions.clear();
       rejectedTargets.clear();
       currentPort = port;
     }
-    if (!port) { appReachable = false; return; }
-    const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2500) });
-    if (!response.ok) throw new Error('CDP discovery unavailable');
-    const targets = await response.json();
-    if (!Array.isArray(targets)) throw new Error('CDP target list invalid');
+    if (!activeEndpoint) {
+      appReachable = false;
+      const backendStatus = backend?.getStatus();
+      if (isWindows && backendStatus?.asarPatchedNow && backendStatus?.guiRunning) {
+        lastError = NO_CDP_RESTART_HINT;
+      } else if (lastError === NO_CDP_RESTART_HINT) {
+        lastError = null;
+      }
+      return;
+    }
+    const targets = activeEndpoint.targets;
     appReachable = true;
     const eligible = targets.filter((target) => eligibleTarget(target, port));
     const activeIds = new Set(eligible.map((target) => target.id));
@@ -483,6 +526,7 @@ async function startServer() {
       else if (req.method === 'POST' && req.url === '/collect') result = await collect();
       else if (req.method === 'POST' && req.url === '/launch') { await backend.ready; result = await backend.launch(); }
       else if (req.method === 'POST' && req.url === '/stop') {
+        res.setHeader('Connection', 'close');
         await stop();
         res.end(JSON.stringify(snapshot()));
         return;
@@ -502,18 +546,18 @@ async function startServer() {
   });
   try { await listen(); }
   catch (error) {
-    if (error.code !== 'EADDRINUSE') throw error;
+    if (error.code !== 'EADDRINUSE' && !(isWindows && error.code === 'EACCES')) throw error;
     try {
       const existing = await ipc('status');
       process.stdout.write(`${JSON.stringify(existing, null, 2)}\n`);
       return false;
     } catch (probeError) {
       if (!['ENOENT', 'ECONNREFUSED'].includes(probeError.code)) throw probeError;
-      await unlink(socketPath).catch(() => {});
+      if (!isWindows) await unlink(socketPath).catch(() => {});
       await listen();
     }
   }
-  await chmod(socketPath, 0o600);
+  if (!isWindows) await chmod(socketPath, 0o600);
   return true;
 }
 
@@ -543,6 +587,7 @@ async function main() {
   await writeFile(pidPath, `${process.pid}\n`, { mode: 0o600 });
   process.once('SIGTERM', () => stop().catch(() => { process.exitCode = 1; }));
   process.once('SIGINT', () => stop().catch(() => { process.exitCode = 1; }));
+  if (isWindows) process.once('SIGBREAK', () => stop().catch(() => { process.exitCode = 1; }));
   await discover();
   if (stopping) return;
   interval = setInterval(() => tick().catch(() => { lastError = 'helper-refresh-failed'; }), 2000);

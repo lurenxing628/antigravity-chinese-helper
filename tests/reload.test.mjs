@@ -7,6 +7,7 @@ import test from 'node:test';
 
 const runnerUrl = new URL('../runtime/runner.mjs', import.meta.url);
 const runnerSource = readFileSync(runnerUrl, 'utf8')
+  .replace(/\r\n/g, '\n')
   .replace(/^#!.*\n/, '')
   .replace(/^import .*;\n/gm, '')
   .replaceAll('import.meta.url', JSON.stringify(runnerUrl.href))

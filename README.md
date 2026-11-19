@@ -1,8 +1,8 @@
 # Antigravity 汉化助手
 
-macOS 菜单栏汉化助手，通过 Antigravity 的本机调试接口加载中文界面，支持图标一键启动、随应用自动连接、轻量词库热更新、自动中文会话标题、额度重置倒计时、上下文用量显示，以及主代理与子代理的用量统计。运行时版本 **0.3.41**。
+支持 **macOS 菜单栏** 与 **Windows 系统托盘** 的 Antigravity 汉化助手，通过 Antigravity 的本机调试接口加载中文界面，支持图标一键启动、随应用自动连接、轻量词库热更新、自动中文会话标题、额度重置倒计时、上下文用量显示，以及主代理与子代理的用量统计。运行时版本 **0.3.41**。
 
-界面汉化已验证环境：**Antigravity App 2.29.0、2.31.1、2.31.2 / macOS arm64 / Node.js 24.15.0**。上下文预算使用 Antigravity 官方配置，助手保留用量和额度显示。
+界面汉化已验证环境：**Antigravity App 2.29.0、2.31.1、2.31.2 / macOS arm64 & Windows x64 / Node.js 22+**。上下文预算使用 Antigravity 官方配置，助手保留用量和额度显示。
 
 ## 功能一览
 
@@ -47,6 +47,24 @@ CLI 的运行文件和汉化副本保存在 `~/Library/Application Support/Antig
 `agy-zh` 新主会话的自动标题使用简体中文，保留文件名、产品名及原有缩写。助手直接修改原生标题请求的语言要求，沿用官方标题模型、媒体处理和保存流程，不新增命名请求。生成前及保存前的原生标题检查继续保护已有标题和手动改名；打开历史或恢复会话本身不会重命名。CLI 临时问题沿用官方不自动命名的行为。
 
 ## 从源码构建和安装
+
+### Windows 10 / 11
+
+需要 Windows 10 或更新版本与 **Node.js 22 或更新版本**。Windows 版直接使用系统自带的 `.NET Framework 4.x C#` 编译器（`csc.exe`）构建原生无黑框系统托盘程序 `Antigravity汉化助手.exe`，无需额外安装 Visual Studio 或其他编译工具。支持官方安装包、nvm-windows、fnm、Volta、mise 和 Scoop 安装的 Node.js。
+
+```powershell
+git clone https://github.com/lurenxing628/antigravity-chinese-helper.git
+cd antigravity-chinese-helper
+.\build-windows.ps1
+# 或直接双击“安装汉化助手.cmd”（未构建时会自动完成构建）
+.\安装汉化助手.cmd
+```
+
+- **桌面汉化安装（`安装汉化助手.cmd`）**：将运行文件与 `Antigravity汉化助手.exe` 部署到 `%LOCALAPPDATA%\AntigravityChineseHelper\application\`，创建桌面与开始菜单快捷方式，并在当前用户注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 注册随 Antigravity 启动的轻量监听进程（双击 `关闭自动启动.cmd` 可随时注销）。
+- **自定义路径环境变量（可选）**：若 Antigravity 安装在非默认目录，可设置 `ANTIGRAVITY_APP_PATH` 指向 `Antigravity.exe`；若用户数据目录自定义，可设置 `ANTIGRAVITY_DATA_DIR`。
+- **CLI 两行中文状态栏安装（`安装CLI汉化.cmd`）**：在 `%USERPROFILE%\.local\bin` 生成 `agy-zh.cmd`、`agyzh.cmd`、`agyz.cmd` 并自动加入用户 `PATH`（Windows 下通过官方 `statusLine` 接口提供完整的两行中文会话统计与额度状态栏，不修改 `agy.exe` 二进制文件）。
+
+### macOS
 
 需要 macOS 12 或更新版本、Xcode Command Line Tools 和 Node.js 22 或更新版本。助手支持 Homebrew、nvm、fnm、Volta 和 mise 安装的 Node.js，会验证版本并跳过低于 22 的候选。
 
@@ -196,14 +214,10 @@ node runtime/runner.mjs --reload
 - `runtime/backend-runtime.mjs`、`runtime/backend-hook.js`：保留的原生预算适配，供内部显式启用的开发验证使用。
 - `runtime/backend-metadata.mjs`、`runtime/backend-layout.mjs`：统一解析 Mach-O 及 Go 元数据，声明和读取 `LC_NOTE` 预算预留区，验证原生指令与栈契约。
 - `runtime/backend-mach.c`：短命 Mach 执行器，负责读取目标预留区、RX 页发布、停止窗口和安装描述；预算算法由 `backend-hook.js` 唯一生成。
-- `packaging/Helper.swift`：图标启动入口与菜单栏程序。
-- `packaging/AppWatcher.swift`：应用启动监听与当前会话去重。
-- `packaging/RuntimeSupport.swift`：Node.js 探测、版本验证和启动日志整理。
-- `packaging/RunnerStatus.swift`：后台状态解码和菜单标题。
-- `packaging/GenerateIcon.swift`：构建时生成原创助手图标。
-- `build-app.sh`：使用本机 Swift 和 Clang 编译器构建菜单栏 `.app` 和 Mach 执行器；若直接运行了待重建的这份应用，需先退出。
-- `安装汉化助手.command`：部署应用与运行文件，创建用户 Applications 图标入口，并注册自动启动监听器。
-- `关闭自动启动.command`：注销自动启动监听器。
+- `packaging/Helper.swift`、`AppWatcher.swift`、`RuntimeSupport.swift`、`RunnerStatus.swift`、`GenerateIcon.swift`：macOS 菜单栏程序、启动监听、Node.js 探测与图标生成。
+- `packaging/windows/HelperApp.cs`、`AppWatcher.cs`、`RuntimeSupport.cs`、`RunnerStatus.cs`、`IconGenerator.cs`：Windows 原生系统托盘程序、进程监听、Node.js 探测、日志轮转与多尺寸 `.ico` 图标生成。
+- `build-app.sh`、`安装汉化助手.command`、`关闭自动启动.command`、`安装CLI汉化.command`：macOS 构建与安装脚本。
+- `build-windows.ps1`（`构建Windows版.cmd`）、`安装汉化助手.cmd`、`关闭自动启动.cmd`、`安装CLI汉化.cmd`、`scripts/*.ps1`：Windows 构建、安装与自启动管理脚本。
 
 ## 验证
 

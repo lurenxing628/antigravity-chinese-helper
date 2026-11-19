@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { constants, readFileSync } from 'node:fs';
-import { join, relative, resolve, sep } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path/posix';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import vm from 'node:vm';
@@ -29,7 +29,7 @@ function deferred() {
 // No subprocess, application, inspector or instrumentation is started by these tests.
 function fixture({contextOverridesEnabled = true, targetTokens = 400000, mainSettings, savedReceipt = null, running = [], connectError = null,
   attachError = null, readyError = null, holdReady = false, files:existingFiles = null} = {}) {
-  const source = readFileSync(moduleUrl, 'utf8').replace(/^import .*;\n/gm, '')
+  const source = readFileSync(moduleUrl, 'utf8').replace(/\r\n/g, '\n').replace(/^import .*;\n/gm, '')
     .replace(/^export /gm, '').replaceAll('import.meta.url', JSON.stringify(moduleUrl.href));
   const files = existingFiles ?? new Map([[configPath, JSON.stringify({targetTokens})]]);
   if (savedReceipt) files.set(receiptPath, JSON.stringify(savedReceipt));
