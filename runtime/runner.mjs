@@ -14,6 +14,7 @@ const socketPath = join(stateDir, 'helper.sock');
 const pidPath = join(stateDir, 'runner.pid');
 const statusPath = join(stateDir, 'status.json');
 const sourcePath = join(runtimeDir, 'renderer.js');
+const auxiliarySourcePath = join(runtimeDir, 'auxiliary-renderer.js');
 const swarmSourcePath = join(runtimeDir, 'swarm-renderer.js');
 const dictionaryPath = join(runtimeDir, 'translations.json');
 const helperKey = '__antigravityChineseHelper';
@@ -26,6 +27,19 @@ const shutdownPreservedMethods = ['Page.addScriptToEvaluateOnNewDocument'];
 const knownApp = `location.protocol === 'https:' && location.hostname === '127.0.0.1' && globalThis.top === globalThis && typeof globalThis.electronNative?.getZoomLevel === 'function' && typeof globalThis.nativeStorage?.getItems === 'function'`;
 const swarmLocation = `location.protocol === 'plugin:' && /^swarm--swarm_board-\\d+$/.test(location.hostname) && location.pathname === '/'`;
 const knownSwarm = `(${swarmLocation}) && typeof globalThis.sidecar === 'object' && globalThis.sidecar !== null && Boolean(document.querySelector('[data-testid="swarm-loading"],[data-testid="swarm-board"],[data-testid="swarm-empty-state"]'))`;
+// Electron auxiliary windows embed their own HTML in a data URL. Match the
+// official page template before connecting, including on subsequent navigation.
+function auxiliaryPageKind(url) {
+  if (!url.startsWith('data:text/html;charset=utf-8,')) return null;
+  const contains = (...parts) => parts.every(part => url.includes(encodeURIComponent(part)));
+  if (contains('<title>Welcome to Antigravity</title>', 'id="step-setup"', 'window.wizardAPI.completeWizard')) return 'wizard';
+  if (contains('<title>AGY Desktop HUD</title>', 'window.__agyHudSetAgents', 'agy-hud:stop-agent:')) return 'hud';
+  if (contains('<p class="context">Connecting to <span id="label"></span>', 'id="retry" class="note"', 'id="answer" type="password" maxlength="1023"')) return 'ssh';
+  if (contains('https://agy-ssh.invalid/close?page=', '<div class="buttons">', "default-src 'none'; style-src 'unsafe-inline'")) return 'disconnected';
+  if (contains('<title>Passkeys</title>', 'id="sheet-card" class="sheet-card"', '<div class="qr-centered-view">')) return 'passkeys';
+  return null;
+}
+const auxiliaryIdentity = `globalThis.top === globalThis && location.protocol === 'data:' && (${auxiliaryPageKind.toString()})(location.href)`;
 const sessions = new Map();
 const rejectedTargets = new Map();
 let bundle;
@@ -40,6 +54,7 @@ let reloadPromise = null;
 let tickPromise = null;
 let bundleError = null;
 let currentPort;
+let lastDiscovery = null;
 let lastError = null;
 let appReachable = false;
 let lastRendererHealth = 0;
@@ -88,7 +103,8 @@ async function publishBackendStatus() {
   if (!status || stopping) return;
   await Promise.allSettled([
     saveStatus(),
-    ...[...sessions.values()].filter(session => CONTEXT_OVERRIDES_ENABLED && session.kind !== 'swarm').map(session => evaluate(session.client,
+    ...[...sessions.values()].filter(session => session.kind === 'app').map(session => install(session, 'titles')),
+    ...[...sessions.values()].filter(session => CONTEXT_OVERRIDES_ENABLED && session.kind === 'app').map(session => evaluate(session.client,
       `(() => { if (${knownApp}) globalThis.${backendBridgeKey}?.update(${JSON.stringify(status)}); })()`)),
   ]);
 }
@@ -117,21 +133,25 @@ async function handleBackendRequest(session, event) {
 
 function snapshot() {
   const connected = [...sessions.values()].filter((session) => session.client.connected);
-  const windows = connected.filter(session => session.kind !== 'swarm');
+  const windows = connected.filter(session => session.kind === 'app');
   const error = bundleError ?? lastError;
+  const backendStatus = backend?.getStatus();
   return {
     running: !stopping,
     pid: process.pid,
     startedAt,
     status: stopping ? 'stopped' : error ? 'error' : connected.length ? 'running' : 'waiting',
     state: stopping ? 'stopped' : connected.length ? 'connected' : appReachable ? 'waiting-for-window' : 'waiting-for-app',
+    debugPortPresent: lastDiscovery?.debugPortPresent ?? null,
+    discoveredAt: lastDiscovery?.startedAt ?? null,
     translatedWindows: windows.length,
     connectedWindows: windows.length,
     translatedSidecars: connected.filter(session => session.kind === 'swarm' && session.version).length,
-    rendererVersion: windows.map((session) => session.version).find(Boolean) ?? connected.map(session => session.version).find(Boolean) ?? null,
+    rendererVersion: windows.map((session) => session.version).find(Boolean) ?? connected.find(session => session.kind === 'swarm' && session.version)?.version ?? null,
     dictionaryLoadedAt: bundle?.loadedAt ?? null,
     lastError: error,
-    subagentContext: backend?.getStatus() ?? null,
+    nativeChineseTitles: backendStatus?.nativeChineseTitles ?? null,
+    subagentContext: backendStatus ?? null,
   };
 }
 
@@ -167,46 +187,59 @@ async function evaluate(client, expression, timeoutMs) {
 }
 
 async function loadBundle() {
-  const [source, swarmSource, dictionaryText, sourceStat, swarmSourceStat, dictionaryStat] = await Promise.all([
-    readFile(sourcePath, 'utf8'), readFile(swarmSourcePath, 'utf8'), readFile(dictionaryPath, 'utf8'),
-    stat(sourcePath), stat(swarmSourcePath), stat(dictionaryPath),
+  const [source, swarmSource, auxiliarySource, dictionaryText, sourceStat, swarmSourceStat, auxiliarySourceStat, dictionaryStat] = await Promise.all([
+    readFile(sourcePath, 'utf8'), readFile(swarmSourcePath, 'utf8'), readFile(auxiliarySourcePath, 'utf8'), readFile(dictionaryPath, 'utf8'),
+    stat(sourcePath), stat(swarmSourcePath), stat(auxiliarySourcePath), stat(dictionaryPath),
   ]);
   // Parse before replacing a working bundle so a half-written dictionary leaves it active.
   const dictionary = JSON.parse(dictionaryText);
   if (!dictionary || typeof dictionary !== 'object') throw new Error('Dictionary must be an object or array');
-  const expression = `(() => {
+  const rendererVersion = source.match(/\bconst VERSION = '([^']+)';/)?.[1];
+  const expression = `(fallbackTitles => {
     const install = () => {
       if (!(${knownApp})) return;
       if (${CONTEXT_OVERRIDES_ENABLED}) (${installBackendBridge.toString()})();
       else globalThis.${backendBridgeKey}?.dispose();
       const existing = globalThis.${helperKey};
-      if (existing?.contextOverridesEnabled === ${CONTEXT_OVERRIDES_ENABLED}) return;
+      if (existing?.version === ${JSON.stringify(rendererVersion)} && existing?.contextOverridesEnabled === ${CONTEXT_OVERRIDES_ENABLED}) {
+        existing.setFallbackTitles(fallbackTitles);
+        return;
+      }
       if (existing) { existing.uninstall?.(); delete globalThis.${helperKey}; }
-      globalThis.${helperKey} = (${source.trim().replace(/;\s*$/, '')})(${JSON.stringify(dictionary)}, {contextOverridesEnabled:${CONTEXT_OVERRIDES_ENABLED}});
+      globalThis.${helperKey} = (${source.trim().replace(/;\s*$/, '')})(${JSON.stringify(dictionary)}, {contextOverridesEnabled:${CONTEXT_OVERRIDES_ENABLED}, fallbackTitles});
     };
     if (location.protocol !== 'https:' || location.hostname !== '127.0.0.1' || globalThis.top !== globalThis) return;
     install();
     // Page.domContentEventFired retries after the native preload bridge is ready.
     // Keeping the retry in the runner lets --stop cancel it completely.
-  })()`;
+  })`;
   const swarmExpression = `(() => {
     if (!(${knownSwarm}) || globalThis.${helperKey}) return;
     globalThis.${helperKey} = (${swarmSource.trim().replace(/;\s*$/, '')})(${JSON.stringify(dictionary)});
   })()`;
+  const auxiliaryDictionary = Object.fromEntries(Object.entries(dictionary.strings || dictionary).filter(([key]) => key.startsWith('aux-ui:')));
+  const auxiliaryExpression = `(() => {
+    const kind = ${auxiliaryIdentity};
+    if (!kind || !document.body || globalThis.${helperKey}) return;
+    globalThis.${helperKey} = (${auxiliarySource.trim().replace(/;\s*$/, '')})(kind, ${JSON.stringify(auxiliaryDictionary)});
+  })()`;
+  new Function(auxiliaryExpression);
   // Syntax validation never executes the renderer in Node.
   new Function(expression);
   new Function(swarmExpression);
   return {
     expression, dictionary, sourceMtime: sourceStat.mtimeMs, dictionaryMtime: dictionaryStat.mtimeMs,
+    auxiliary: {expression:auxiliaryExpression, sourceMtime:auxiliarySourceStat.mtimeMs, dictionary:auxiliaryDictionary},
     swarm: {expression:swarmExpression, sourceMtime:swarmSourceStat.mtimeMs}, loadedAt:new Date().toISOString(),
   };
 }
 
 function sessionRenderer(session, activeBundle = bundle) {
-  return session.kind === 'swarm' ? activeBundle.swarm : activeBundle;
+  return activeBundle[session.kind] || activeBundle;
 }
 
 function sessionIdentity(session) {
+  if (session.kind === 'auxiliary') return auxiliaryIdentity;
   return session.kind === 'swarm' ? swarmLocation : knownApp;
 }
 
@@ -216,8 +249,14 @@ async function installNow(session, mode) {
   const activeBundle = bundle;
   const renderer = sessionRenderer(session, activeBundle);
   const identity = sessionIdentity(session);
+  const mainWindow = session.kind === 'app';
+  const fallbackTitles = mainWindow && backend?.getStatus().nativeChineseTitles === false;
+  const titleModeChanged = mainWindow && session.fallbackTitles !== fallbackTitles;
+  if (mode === 'titles' && !titleModeChanged) return true;
+  const expression = mainWindow ? `${renderer.expression}(${fallbackTitles})` : renderer.expression;
   if (!(await evaluate(client, `Boolean(${identity})`))) return false;
-  if (mode !== 'ensure') {
+  if (mainWindow) session.fallbackTitles = undefined;
+  if (mode !== 'ensure' || titleModeChanged) {
     if (session.scriptId) await client.call('Page.removeScriptToEvaluateOnNewDocument', { identifier: session.scriptId });
     session.scriptId = null;
   }
@@ -225,18 +264,21 @@ async function installNow(session, mode) {
     await evaluate(client, `(() => { if (${identity}) { globalThis.${helperKey}?.uninstall?.(); delete globalThis.${helperKey}; } })()`);
   }
   if (!session.scriptId) {
-    const result = await client.call('Page.addScriptToEvaluateOnNewDocument', { source: renderer.expression });
+    const result = await client.call('Page.addScriptToEvaluateOnNewDocument', { source: expression });
     session.scriptId = result.identifier;
   }
   if (session.closing || stopping) return false;
   if (mode === 'refresh') {
-    await evaluate(client, `(() => { if (${identity}) globalThis.${helperKey}?.refresh(${JSON.stringify(activeBundle.dictionary)}); })()`);
+    await evaluate(client, `(() => { if (${identity}) globalThis.${helperKey}?.refresh(${JSON.stringify(renderer.dictionary || activeBundle.dictionary)}); })()`);
   }
   // Also installs into a document that navigated while the script was replaced.
-  await evaluate(client, renderer.expression);
+  await evaluate(client, expression);
   const info = await evaluate(client, `(() => { const helper = globalThis.${helperKey}; return { active: Boolean(helper), version: typeof helper?.version === 'string' ? helper.version : null }; })()`);
   session.version = info?.version ?? null;
-  if (info?.active) session.sourceMtime = renderer.sourceMtime;
+  if (info?.active) {
+    session.sourceMtime = renderer.sourceMtime;
+    if (mainWindow) session.fallbackTitles = fallbackTitles;
+  }
   return Boolean(info?.active);
 }
 
@@ -276,19 +318,24 @@ function scheduleInstall(session) {
 }
 
 async function portFromApp() {
+  let missing = true;
   for (const directory of antigravityDataDirectories) {
     try {
       const contents = await readFile(join(directory, 'DevToolsActivePort'), 'utf8');
       const port = Number(contents.split(/\r?\n/, 1)[0]);
       if (Number.isInteger(port) && port > 0 && port <= 65535) return port;
-    } catch { /* App is closed or has not created the endpoint yet. */ }
+      missing = false;
+    } catch (error) {
+      if (error.code !== 'ENOENT') missing = false;
+    }
   }
-  return null;
+  return missing ? null : undefined;
 }
 
 function targetKind(target) {
   try {
     const page = new URL(target.url);
+    if (target.type === 'page' && page.protocol === 'data:' && auxiliaryPageKind(target.url)) return 'auxiliary';
     if (target.type === 'page' && page.protocol === 'https:' && page.hostname === '127.0.0.1') return 'app';
     if (target.type === 'iframe' && page.protocol === 'plugin:' && /^swarm--swarm_board-\d+$/.test(page.hostname) && page.pathname === '/') return 'swarm';
   } catch { /* Ignore unrelated or invalid targets. */ }
@@ -306,6 +353,7 @@ function eligibleTarget(target, port) {
 async function discover() {
   if (discovering || stopping || reloading) return;
   discovering = true;
+  const discoveryStartedAt = new Date().toISOString();
   let resolveDiscovery;
   discoverySettled = new Promise((resolve) => { resolveDiscovery = resolve; });
   try {
@@ -314,6 +362,7 @@ async function discover() {
       await Promise.all([...sessions.values()].map((session) => disconnect(session, true)));
       sessions.clear();
       rejectedTargets.clear();
+      lastError = null;
       currentPort = port;
     }
     if (!port) { appReachable = false; return; }
@@ -323,9 +372,9 @@ async function discover() {
     if (!Array.isArray(targets)) throw new Error('CDP target list invalid');
     appReachable = true;
     const eligible = targets.filter((target) => eligibleTarget(target, port));
-    const activeIds = new Set(eligible.map((target) => target.id));
+    const activeKinds = new Map(eligible.map(target => [target.id, targetKind(target)]));
     for (const [id, session] of sessions) {
-      if (!activeIds.has(id) || !session.client.connected) {
+      if (activeKinds.get(id) !== session.kind || !session.client.connected) {
         await disconnect(session, true);
         sessions.delete(id);
       }
@@ -341,12 +390,14 @@ async function discover() {
         const kind = targetKind(target);
         // The native bridge identifies the main App. Swarm's exact plugin
         // address also admits a loading document so its DOM-ready event can install.
-        const identity = kind === 'swarm' ? swarmLocation : knownApp;
+        const identity = sessionIdentity({kind});
         if (!(await evaluate(client, `Boolean(${identity})`))) {
           rejectedTargets.set(target.id, Date.now() + 10000);
           client.close();
           continue;
         }
+        if (kind === 'app') await backend?.refresh({hasDesktopWindow:true, verifyDesktop:true});
+        if (stopping) { client.close(); break; }
         session = { client, kind, scriptId: null, version: null, navigationTimer: null, closing: false, operation: Promise.resolve() };
         if (CONTEXT_OVERRIDES_ENABLED && kind === 'app') {
           await client.call('Runtime.addBinding', {name:backendBinding});
@@ -359,7 +410,7 @@ async function discover() {
           clearTimeout(session.navigationTimer);
           if (sessions.get(target.id) === session) sessions.delete(target.id);
         });
-        if (!(await install(session)) && !(kind === 'swarm' && await evaluate(client, `Boolean((${swarmLocation}) && document.readyState === 'loading')`)))
+        if (!(await install(session)) && !(kind !== 'app' && await evaluate(client, `Boolean((${identity}) && document.readyState === 'loading')`)))
           throw new Error('Renderer did not initialize');
         if (stopping) { await disconnect(session, true); break; }
         sessions.set(target.id, session);
@@ -373,6 +424,12 @@ async function discover() {
       }
     }
     if (stopping) return;
+    // A backend change can arrive while a new window is still being registered.
+    // Read the current policy again after admission, including failed updates.
+    const fallbackTitles = backend?.getStatus().nativeChineseTitles === false;
+    for (const session of sessions.values()) {
+      if (session.kind === 'app' && session.fallbackTitles !== fallbackTitles) await install(session, 'titles');
+    }
     if (Date.now() - lastRendererHealth >= 10000) {
       lastRendererHealth = Date.now();
       for (const [id, session] of sessions) {
@@ -391,6 +448,7 @@ async function discover() {
     // Closing Antigravity is an expected waiting state, not an error to report.
   } finally {
     discovering = false;
+    lastDiscovery = { startedAt: discoveryStartedAt, debugPortPresent: currentPort === undefined ? null : currentPort !== null };
     if (!stopping) await saveStatus().catch(() => {});
     resolveDiscovery();
   }
@@ -429,10 +487,11 @@ function tick() {
   if (stopping) return Promise.resolve();
   tickPromise = (async () => {
     try {
-      const [sourceStat, swarmSourceStat, dictionaryStat] = await Promise.all([stat(sourcePath), stat(swarmSourcePath), stat(dictionaryPath)]);
-      if (sourceStat.mtimeMs !== bundle.sourceMtime || swarmSourceStat.mtimeMs !== bundle.swarm.sourceMtime || dictionaryStat.mtimeMs !== bundle.dictionaryMtime) await reload();
+      const [sourceStat, swarmSourceStat, auxiliarySourceStat, dictionaryStat] = await Promise.all([stat(sourcePath), stat(swarmSourcePath), stat(auxiliarySourcePath), stat(dictionaryPath)]);
+      if (sourceStat.mtimeMs !== bundle.sourceMtime || swarmSourceStat.mtimeMs !== bundle.swarm.sourceMtime || auxiliarySourceStat.mtimeMs !== bundle.auxiliary.sourceMtime || dictionaryStat.mtimeMs !== bundle.dictionaryMtime) await reload();
     } catch { bundleError = 'dictionary-reload-failed'; }
-    await Promise.all([backend?.refresh(), discover()]);
+    const hasDesktopWindow = appReachable || [...sessions.values()].some(session => session.kind === 'app' && session.client.connected);
+    await Promise.all([backend?.refresh({hasDesktopWindow}), discover()]);
   })().finally(() => { tickPromise = null; });
   return tickPromise;
 }
@@ -463,7 +522,7 @@ function stop() {
 async function collect() {
   const windows = [];
   for (const session of sessions.values()) {
-    if (session.kind === 'swarm') continue;
+    if (session.kind !== 'app') continue;
     try {
       const unknown = await evaluate(session.client, `(() => { if (!(${knownApp})) return []; return globalThis.${helperKey}?.collectUnknown?.() ?? []; })()`);
       // Renderer owns the UI-only selection: no DOM scan or conversation capture here.

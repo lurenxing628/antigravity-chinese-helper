@@ -1,16 +1,35 @@
+import { cliNoticeLiteralProfiles } from './cli-notice-localization.mjs';
+import { releaseNoteProfiles } from './cli-release-notes.mjs';
+import { authInstructionProfiles, relocateStatusLiteralGroup, resolvePanelStatusProfile } from './cli-panel-status-profiles.mjs';
+import { inspectTaskStatusWidths, resolveTaskStatusProfile } from './cli-task-status-profiles.mjs';
+import { toolStatusProfiles, transcriptStatusProfiles } from './cli-tool-status-profiles.mjs';
+import { modelLiteralProfiles } from './cli-model-literals.mjs';
+import { cliPanelLiteralProfiles, collectCliPanelTables } from './cli-panel-literals.mjs';
+import { cloudLoginLiteralProfiles } from './cli-cloud-login-literals.mjs';
+import { cliOnboardingLiteralProfiles } from './cli-onboarding-literals.mjs';
+import { feedbackLiteralProfiles } from './cli-ui-literals.mjs';
+import { cliSubagentLiteralProfiles } from './cli-subagent-literals.mjs';
+import { subagentRunStatusProfiles } from './cli-subagent-run-status-profiles.mjs';
+import { cliSwarmLiteralProfiles, collectCliSwarmPluginFieldSlots } from './cli-swarm-localization.mjs';
+import { cliSwarmToolLiteralProfiles } from './cli-swarm-tool-literals.mjs';
+import { CliCompatibilityError } from './cli-compatibility.mjs';
+import { cliSiteReachesCodeSpace } from './cli-code-space.mjs';
 import { inspectNativeBinary } from './backend-metadata.mjs';
 import { stringLengthImmediate, pageAddress, fileOffsetFor, addressInstructions } from './cli-localization.mjs';
-import { collectCliLiteralEntries } from './cli-display.mjs';
+import { cliTipProfile, collectCliLiteralEntries } from './cli-display.mjs';
 
 const render = 'google3/third_party/jetski/cli/render/render.';
 const stateLabel = 'google3/third_party/jetski/cli/model/model.AgentState.Label';
-const store = 'google3/third_party/jetski/cli/store/store.';
+const taskListView = 'google3/third_party/jetski/cli/model/model.TasksModel.View';
+const compactionMarker = render + 'renderCompactionMarker';
 const decoder = new TextDecoder('utf-8', { fatal:true });
 
-// Verified agy 1.5.9 display producers. Pointer and length may be separated by
-// CSEL or a Go write barrier; changing both producers preserves those paths.
+// Named display producers. Simple formats follow fmt.Sprintf at any offset.
+// Coupled references retain their register, literal and consumer checks.
 // buildFoldLine's reads/searches/commands are classification IDs, not labels.
 const literalProfiles = [
+  ...releaseNoteProfiles,
+  ...cliNoticeLiteralProfiles,
   {name:render + 'compactionStatsParts', size:1328,
     guards:[[0x130,0x9a820021],[0x144,0x9a830040]],
     verifiedCalls:[[0x314,'runtime.concatstring2'],[0x438,'runtime.concatstring2']],
@@ -21,7 +40,7 @@ const literalProfiles = [
       [0x300,0x308,3,4,'-token summary'], [0x430,0x420,1,2,'took '],
     ],
   },
-  {name:render + 'renderCompactionMarker', size:512,
+  {name:compactionMarker, size:512,
     verifiedCalls:[[0x9c,'runtime.concatstring3'],[0x120,'runtime.concatstring3']],
     literals:[
       [0x20,0x28,7,8,'Conversation compacted'], [0x34,0x3c,7,8,'Compacted'],
@@ -31,7 +50,7 @@ const literalProfiles = [
     [0x1c8,0x1d0,0,1,'2 files'], [0x244,0x24c,0,1,'2 files'],
     [0x26c,0x274,0,1,'1 file'], [0x438,0x440,0,1,'%d files',0x450],
   ]},
-  {name:render + 'summarizeThinkingSteps', size:944, literals:[
+  {name:render + 'summarizeThinkingSteps', resolve:relocateStatusLiteralGroup, literals:[
     [0x2b8,0x2c0,0,1,'Thought for %.1fs',0x2d0], [0x2e8,0x2f0,0,1,'Thought'],
     [0x320,0x328,0,1,'Thought for %s',0x338], [0x350,0x358,0,1,'Thinking...'],
   ]},
@@ -205,14 +224,14 @@ const literalProfiles = [
       [0xa0,0x90,1,2,"in "],
     ],
   },
-  {name:render + 'toolStepInfo', size:4912,
+  {name:render + 'toolStepInfo', resolve:resolveTaskStatusProfile, size:4912,
     verifiedCalls:[[0x1a4,"runtime.concatstring3"],[0xc30,"runtime.concatstring2"]],
     literals:[
       [0x184,0x18c,1,2,"Agent("],
       [0xc24,0xc2c,1,2,"Requested Permission: "],
     ],
   },
-  {name:"google3/third_party/jetski/cli/model/model.taskStatus",size:1088,
+  {name:"google3/third_party/jetski/cli/model/model.taskStatus", resolve:resolveTaskStatusProfile,size:1088,
     verifiedCalls:[[0x8c,"google3/third_party/jetski/cli/render/render.StatusMarker"],[0x1ac,"runtime.concatstring2"],[0x26c,"runtime.concatstring2"]],
     literals:[
       [0xb0,0xac,3,2,"running"],
@@ -223,7 +242,7 @@ const literalProfiles = [
       [0x25c,0x268,1,2,"completed"],
     ],
   },
-  {name:"google3/third_party/jetski/cli/model/model.TasksModel.View",size:4544,
+  {name:taskListView, resolve:resolveTaskStatusProfile,size:4544,
     verifiedCalls:[[0x76c,"fmt.Sprintf"],[0x78c,"runtime.concatstring2"],[0x82c,"fmt.Sprintf"],[0x84c,"runtime.concatstring2"],[0xe88,"fmt.Sprintf"]],
     literals:[
       [0x690,0x68c,5,4,"running"],
@@ -234,7 +253,7 @@ const literalProfiles = [
       [0x83c,0x844,1,2,"completed"],
     ],
   },
-  {name:"google3/third_party/jetski/cli/model/model.TaskDetailModel.buildTaskDetailLines",size:4752,
+  {name:"google3/third_party/jetski/cli/model/model.TaskDetailModel.buildTaskDetailLines", resolve:resolveTaskStatusProfile,size:4752,
     guards:[[0x6a8,0x9a841064],[0x6bc,0x9a851063]],
     literals:[
       [0x2a8,0x2b0,3,4,"Command: "],
@@ -273,11 +292,7 @@ const literalProfiles = [
       [0x194,0x19c,0,1,"cron (%s)",0x1ac],
     ],
   },
-  {name:"google3/third_party/oneharness/internal/tools/tools.scheduleRenderInfo",size:1024,
-    literals:[
-      [0x1a8,0x1b0,0,1,"> %s\n\n**Status**: %s",0x1c0],
-    ],
-  },
+  {name:"google3/third_party/oneharness/internal/tools/tools.scheduleRenderInfo", formats:["> %s\n\n**Status**: %s"]},
   {name:"google3/third_party/oneharness/internal/tools/tools.timerRenderInfo",size:144,
     lengthAliases:[[0x60,5,0x44]],
     verifiedCalls:[[0x64,"google3/third_party/oneharness/internal/tools/tools.scheduleRenderInfo"]],
@@ -292,35 +307,8 @@ const literalProfiles = [
       [0x54,0x5c,0,1,"Scheduled"],
     ],
   },
-  {name:"google3/third_party/oneharness/internal/tools/tools.(*ScheduleTool).startTimer",size:2288,
-    verifiedCalls:[[0x11c,"google3/third_party/oneharness/internal/tools/tools.timerRenderInfo"],[0x3f0,"google3/third_party/oneharness/internal/tools/tools.timerRenderInfo"],[0x634,"google3/third_party/oneharness/internal/tools/tools.timerRenderInfo"]],
-    literals:[
-      [0x110,0x118,1,2,"Cancelled (task already finished)"],
-      [0x3e4,0x3ec,1,2,"Cancelled (pre-existing undelivered messages)"],
-      [0x628,0x630,1,2,"Pending"],
-      [0x72c,0x734,0,1,"%s timer",0x744],
-    ],
-  },
-  {name:"google3/third_party/oneharness/internal/tools/tools.(*ScheduleTool).continueTimer",size:1440,
-    sharedLengths:[0x434],
-    verifiedCalls:[[0x180,"google3/third_party/oneharness/internal/tools/tools.timerRenderInfo"],[0x448,"google3/third_party/oneharness/internal/tools/tools.timerRenderInfo"]],
-    literals:[
-      [0x158,0x160,0,1,"Cancelled (early-termination condition met by a message from %s)",0x170],
-      [0x440,0x434,1,2,"Cancelled"],
-    ],
-  },
-  {name:"google3/third_party/oneharness/internal/tools/tools.(*ScheduleTool).continueCron",size:2016,
-    verifiedCalls:[[0x33c,"google3/third_party/oneharness/internal/tools/tools.cronRenderInfo"],[0x3e4,"google3/third_party/oneharness/internal/tools/tools.cronRenderInfo"],[0x684,"google3/third_party/oneharness/internal/tools/tools.cronRenderInfo"]],
-    literals:[
-      [0x314,0x31c,0,1,"Completed (%d iterations)",0x32c],
-      [0x3bc,0x3c4,0,1,"Active (Triggered %d times)",0x3d4],
-      [0x65c,0x664,0,1,"Cancelled after %d iterations",0x674],
-    ],
-  },
-  {name:stateLabel, size:288, literals:[[0xc0,0xc8,0,1,'Creating workspaces... (%ds)',0xd8]]},
-  {name:render + 'fmtDuration', size:240, literals:[
-    [0x78,0x80,0,1,'%dm %ds',0x90], [0xb4,0xbc,0,1,'%ds',0xcc],
-  ]},
+  {name:stateLabel, formats:["Creating workspaces... (%ds)"]},
+  {name:render + 'fmtDuration', formats:["%dm %ds", "%ds"]},
   {name:'google3/third_party/jetski/cli/model/model.compactingLabel', size:416,
     verifiedCalls:[[0x104,render + 'fmtDuration']],
     literals:[
@@ -328,54 +316,35 @@ const literalProfiles = [
       [0x14c,0x154,0,1,'%s… (%s · esc to cancel)',0x164],
     ],
   },
-  {name:store + '(*Manager).GetTip', size:1376, literals:[[0x340,0x348,1,2,'└ Tip: ']]},
-  {name:render + 'EscHint', size:384, literals:[[0xdc,0xe4,0,1,'%s to cancel',0xf8]]},
-  {name:render + 'CollapsedSummaryToolGroup', size:448, literals:[[0xfc,0x104,1,2,'ctrl+o to expand']]},
+  {name:'google3/third_party/jetski/cli/model/model.(*PromptModel).interruptedLine', size:320,
+    verifiedCalls:[[0x30,'google3/third_party/jetski/cli/model/model.isCompactCancelled']],
+    literals:[
+      [0xe0,0xe8,0,1,'  ⎿  Interrupted · What should %s do instead?',0xf8],
+      [0x108,0x110,0,1,'  ⎿  Compaction cancelled. Conversation was not compacted.'],
+    ],
+  },
+  cliTipProfile,
+  {name:render + 'EscHint', formats:["%s to cancel"]},
   {name:render + 'RenderRecitations', size:2208, guards:[[0x4a4,0x9a831041],[0x4b8,0x9a831040]], literals:[
     [0x4a8,0x49c,2,2,'ctrl+o to collapse'], [0x4b0,0x4a0,3,3,'ctrl+o to expand'],
   ]},
-  {name:render + 'renderCommandOutput', size:3536, literals:[[0xd08,0xd10,1,2,'ctrl+o to expand']]},
-  {name:render + 'CollapsedToolGroup', size:1552, literals:[
-    [0x360,0x368,1,2,'ctrl+o to expand'], [0x550,0x558,1,2,'ctrl+o to expand'],
-  ]},
-  {name:render + 'CollapsedLowVerbosityGroup', size:1184, literals:[
-    [0x19c,0x198,1,2,'Thinking'], [0x230,0x238,2,3,'Thinking...'],
-    [0x3a8,0x3b0,1,2,'ctrl+o to expand'],
-  ]},
-  {name:render + 'expandedToolGroup', size:896,
-    verifiedCalls:[[0x1a8,render + 'addHint'],[0x218,render + 'addHint'],[0x270,render + 'appendHintToLastLine']],
-    literals:[
-      [0x19c,0x1a4,5,6,'ctrl+o to collapse'],
-      [0x20c,0x214,5,6,'ctrl+o to collapse'],
-      [0x264,0x26c,1,2,'ctrl+o to collapse'],
-    ],
-  },
   {name:'google3/third_party/jetski/cli/model/model.HelpModel.renderGeneralTab', size:3968, literals:[
     [0xe4,0xec,3,4,' understands your codebase, makes edits with your permission,\nand executes commands — right from your terminal.'],
     [0x1cc,0x1d4,0,1,'Version %s',0x1e4], [0x8f4,0x8fc,0,1,'Workspace:      %s',0x90c],
     [0xa3c,0xa44,0,1,'Project Config: %s',0xa54], [0xbcc,0xbd4,0,1,'Log File:       %s',0xbe4],
     [0xcb0,0xcb8,0,1,'Conversation:   %s',0xcc8], [0xdec,0xdf4,0,1,'Trajectory:     %s',0xe04],
   ]},
-  {name:'google3/third_party/jetski/cli/model/model.HelpModel.renderTabBar', size:2768, literals:[
-    [0x88c,0x894,0,1,'  (%s/%s or %s to cycle)',0x8a8],
-  ]},
-  {name:'google3/third_party/jetski/cli/model/model.WorkspaceTrustModel.View', size:5040, literals:[
-    [0x58c,0x594,0,1,'Do you trust the contents of this project?\n\n',0x5a4],
-    [0x6d8,0x6e0,0,1,'%s requires permission to read, edit, and execute files here.\n\n',0x6f4],
+  {name:'google3/third_party/jetski/cli/model/model.HelpModel.renderTabBar', formats:["  (%s/%s or %s to cycle)"]},
+  {name:'google3/third_party/jetski/cli/model/model.WorkspaceTrustModel.View', formats:[
+    "Do you trust the contents of this project?\n\n",
+    "%s requires permission to read, edit, and execute files here.\n\n",
   ]},
   {name:'google3/third_party/jetski/cli/model/model.HelpModel.Update.func1', size:176, literals:[
     [0x68,0x70,2,3,'Exited /help command'],
   ]},
-  {name:'google3/third_party/jetski/cli/model/model.StatusLineModel.renderHint', size:1456, literals:[
-    [0x468,0x470,0,1,'press %s again to exit',0x484],
-  ]},
-  {name:'google3/third_party/jetski/cli/messages/messages.ResumeHint', size:208, literals:[
-    [0x8c,0x94,0,1,'\nResume with -c (or command below):\nagy --conversation=%s\n',0xa4],
-  ]},
-  {name:"google3/third_party/jetski/cli/model/model.SettingsModel.renderTabBar", size:2192,
-    literals:[
-      [0x74c,0x754,0,1,"  (%s to cycle)",0x768],
-  ]},
+  {name:'google3/third_party/jetski/cli/model/model.StatusLineModel.renderHint', formats:["press %s again to exit"]},
+  {name:'google3/third_party/jetski/cli/messages/messages.ResumeHint', formats:["\nResume with -c (or command below):\nagy --conversation=%s\n"]},
+  {name:"google3/third_party/jetski/cli/model/model.SettingsModel.renderTabBar", formats:["  (%s to cycle)"]},
   {name:"google3/third_party/jetski/cli/model/model.SettingsModel.renderFieldLines", size:5056,
     verifiedCalls:[[0x964,"runtime.concatstring2"],[0xcf8,"runtime.concatstring2"],[0xdcc,"runtime.concatstring2"]],
     literals:[
@@ -399,26 +368,11 @@ const literalProfiles = [
     literals:[
       [0x29c,0x2a4,3,4,"  Search: "],
   ]},
-  {name:"google3/third_party/jetski/cli/model/model.SelectorModel.View", size:4128,
-    literals:[
-      [0x414,0x41c,0,1,"No models match %q",0x430],
-  ]},
-  {name:"google3/third_party/jetski/cli/model/model.ConversationPickerModel.renderTabBar", size:2016,
-    literals:[
-      [0x680,0x688,0,1,"  (%s to cycle)",0x69c],
-  ]},
-  {name:"google3/third_party/jetski/cli/model/model.ConversationPickerModel.RenderHeader", size:480,
-    literals:[
-      [0x124,0x12c,0,1,"(Error: %v)",0x13c],
-  ]},
-  {name:"google3/third_party/jetski/cli/model/model.AgentsModel.renderSubagentTipFooter", size:608,
-    literals:[
-      [0x170,0x178,0,1,"Tip: Press %s on a subagent to view details.",0x188],
-  ]},
-  {name:"google3/third_party/jetski/cli/render/render.AltScreenHint", size:192,
-    literals:[
-      [0x70,0x78,0,1,"⚠ terminal %q does not support alt screen",0x88],
-  ]},
+  {name:"google3/third_party/jetski/cli/model/model.SelectorModel.View", formats:["No models match %q"]},
+  {name:"google3/third_party/jetski/cli/model/model.ConversationPickerModel.renderTabBar", formats:["  (%s to cycle)"]},
+  {name:"google3/third_party/jetski/cli/model/model.ConversationPickerModel.RenderHeader", formats:["(Error: %v)"]},
+  {name:"google3/third_party/jetski/cli/model/model.AgentsModel.renderSubagentTipFooter", formats:["Tip: Press %s on a subagent to view details."]},
+  {name:"google3/third_party/jetski/cli/render/render.AltScreenHint", formats:["⚠ terminal %q does not support alt screen"]},
   {name:"google3/third_party/jetski/cli/model/model.settingFields.func1.10", size:192,
     verifiedCalls:[[0x90,"runtime.concatstring3"]],
     literals:[
@@ -440,44 +394,15 @@ const literalProfiles = [
       [0x228,0x230,0,1,"When toggled on, %s collects usage data to help Google enhance performance and features",0x240],
       [0x2b8,0x2c0,3,4,". Note that this setting only controls CLI-level telemetry. It does not affect data logging, content retention, or privacy settings for your Gemini API key, which are governed by your GCP/API project settings."],
   ]},
-  {name:"google3/third_party/jetski/cli/layout/layout.Column.Apply", size:528,
-    literals:[
-      [0x104,0x10c,0,1,"  [%d-%d of %d items]",0x11c],
-  ]},
-  {name:"google3/third_party/jetski/cli/model/model.SuggestionModel.View", size:3072,
-    literals:[
-      [0x34c,0x354,0,1,"   ↑ %d more",0x368],
-      [0xa00,0xa08,0,1,"   ↓ %d more",0xa1c],
-  ]},
-  {name:"google3/third_party/jetski/cli/model/model.ArgSuggestionModel.View", size:2976,
-    literals:[
-      [0x320,0x328,0,1,"   ↑ %d more",0x33c],
-      [0x9ac,0x9b4,0,1,"   ↓ %d more",0x9c8],
-  ]},
-  {name:"google3/third_party/jetski/cli/model/model.AtSuggestionModel.View", size:5584,
-    literals:[
-      [0x430,0x438,0,1,"   ↑ %d more",0x44c],
-      [0xbd0,0xbd8,0,1,"   ↓ %d more",0xbec],
-  ]},
-  {name:"google3/third_party/jetski/cli/model/model.LiveCodeSearchModel.View", size:2288,
-    literals:[
-      [0x4fc,0x504,0,1,"+%d more",0x518],
-  ]},
-  {name:"google3/third_party/jetski/cli/model/model.(*DiffModel).viewFileList", size:10400,
-    literals:[
-      [0x1e18,0x1e20,0,1,"  [%d-%d of %d files]",0x1e34],
-  ]},
-  {name:"google3/third_party/jetski/cli/model/model.(*DiffModel).viewTurnFileList", size:6288,
-    literals:[
-      [0x13a4,0x13ac,0,1,"  [%d-%d of %d rows]",0x13c0],
-  ]},
-  {name:"google3/third_party/jetski/cli/model/model.(*DiffModel).commitTreeRange", size:288,
-    literals:[
-      [0xd4,0xdc,0,1,"[%d-%d of %d commits]",0xec],
-  ]},
-  {name:'google3/third_party/jetski/cli/model/model.liveSettingFields', size:1504, literals:[
-    [0x1b8,0x1c0,0,1,'How fast the agent speaks (%gx to %gx). Applies at once.',0x1d0],
-  ]},
+  {name:"google3/third_party/jetski/cli/layout/layout.Column.Apply", formats:["  [%d-%d of %d items]"]},
+  {name:"google3/third_party/jetski/cli/model/model.SuggestionModel.View", formats:["   ↑ %d more", "   ↓ %d more"]},
+  {name:"google3/third_party/jetski/cli/model/model.ArgSuggestionModel.View", formats:["   ↑ %d more", "   ↓ %d more"]},
+  {name:"google3/third_party/jetski/cli/model/model.AtSuggestionModel.View", formats:["   ↑ %d more", "   ↓ %d more"]},
+  {name:"google3/third_party/jetski/cli/model/model.LiveCodeSearchModel.View", formats:["+%d more"]},
+  {name:"google3/third_party/jetski/cli/model/model.(*DiffModel).viewFileList", formats:["  [%d-%d of %d files]"]},
+  {name:"google3/third_party/jetski/cli/model/model.(*DiffModel).viewTurnFileList", formats:["  [%d-%d of %d rows]"]},
+  {name:"google3/third_party/jetski/cli/model/model.(*DiffModel).commitTreeRange", formats:["[%d-%d of %d commits]"]},
+  {name:'google3/third_party/jetski/cli/model/model.liveSettingFields', formats:["How fast the agent speaks (%gx to %gx). Applies at once."]},
   {name:"google3/third_party/jetski/cli/model/model.ContextModel.header", size:320,
     verifiedCalls:[[0x100,"google3/third_party/golang/charm_land/lipgloss/v/v2/lipgloss.Style.Render"]],
     literals:[
@@ -528,21 +453,14 @@ const literalProfiles = [
       [0xc44,0xc38,5,5,"Legacy workflows"],
       [0xc4c,0xc3c,7,7,"Workflows"],
   ]},
-  {name:"google3/third_party/jetski/cli/model/model.ContextModel.renderCheckpoints", size:1840,
-    literals:[
-      [0x54,0x5c,0,1,"Checkpoints (%d)",0x6c],
-      [0x360,0x368,0,1,"steps %d–%d",0x378],
-      [0x3b4,0x3bc,0,1,"└ Checkpoint %d (active, in context): ",0x3cc],
-      [0x56c,0x574,0,1,"  %d historical checkpoint(s) (summarized, not in context)",0x584],
+  {name:"google3/third_party/jetski/cli/model/model.ContextModel.renderCheckpoints", formats:[
+    "Checkpoints (%d)",
+    "steps %d–%d",
+    "└ Checkpoint %d (active, in context): ",
+    "  %d historical checkpoint(s) (summarized, not in context)",
   ]},
-  {name:"google3/third_party/jetski/cli/model/model.ContextModel.renderFileSection", size:1456,
-    literals:[
-      [0x24c,0x254,0,1," └ %s: %s tokens",0x264],
-  ]},
-  {name:"google3/third_party/jetski/cli/model/model.ContextModel.renderStats.func1", size:672,
-    literals:[
-      [0x144,0x14c,0,1,"%s %s: %s tokens (%.1f%%)\n",0x15c],
-  ]},
+  {name:"google3/third_party/jetski/cli/model/model.ContextModel.renderFileSection", formats:[" └ %s: %s tokens"]},
+  {name:"google3/third_party/jetski/cli/model/model.ContextModel.renderStats.func1", formats:["%s %s: %s tokens (%.1f%%)\n"]},
   {name:"google3/third_party/jetski/cli/model/model.AgentsModel.Update.func1", size:560,
     literals:[
       [0x64,0x6c,2,3,"Exited /agents command"],
@@ -618,13 +536,8 @@ const literalProfiles = [
     [0x24c,0x254,0,1,'  Your Plan: %s\n',0x264],
     [0x5a4,0x588,1,2,'  Upgrade at: '],
   ]},
-  {name:'google3/third_party/jetski/cli/model/model.UsageModel.renderQuotaGroup', size:4160, literals:[
-    [0x63c,0x644,0,1,'Disabled: %s',0x658],
-  ]},
-  {name:'google3/third_party/jetski/cli/model/model.UsageModel.renderCreditsSection', size:1600, literals:[
-    [0x364,0x36c,0,1,'  AI Credit Overages: %s\n',0x37c],
-    [0x4d4,0x4dc,0,1,'  Available AI Credits: %s\n',0x4ec],
-  ]},
+  {name:'google3/third_party/jetski/cli/model/model.UsageModel.renderQuotaGroup', formats:["Disabled: %s"]},
+  {name:'google3/third_party/jetski/cli/model/model.UsageModel.renderCreditsSection', formats:["  AI Credit Overages: %s\n", "  Available AI Credits: %s\n"]},
   {name:'google3/third_party/jetski/cli/model/model.quotaStatus', size:272,
     verifiedCalls:[[0xbc,'runtime.concatstring2']], literals:[
       [0x68,0x70,0,1,'Quota exhausted'],
@@ -642,32 +555,54 @@ const literalProfiles = [
       [0x3ac,0x39c,1,2,'Workspace: '],
       [0x528,0x530,1,2,'Global: '],
   ]},
-  {name:'google3/third_party/jetski/cli/model/model.StatusLineModel.renderRight', size:7040, literals:[
-    [0x102c,0x1034,0,1,'%d task(s) · /tasks',0x1048],
-  ]},
+  {name:'google3/third_party/jetski/cli/model/model.StatusLineModel.renderRight', formats:["%d task(s) · /tasks"]},
+  {name:render + 'editDiffDetail', optional:true,
+    formats:['Added %d line%s', 'Removed %d line%s', 'Wrote %d lines'],
+    pluralSuffixes:['Added %d line%s', 'Removed %d line%s']},
+  {name:render + 'editDiffDetail', optional:true, resolve:relocateStatusLiteralGroup,
+    verifiedCalls:[[0x1c,'runtime.concatstring4']], literals:[[0,8,7,8,' lines',undefined,'cli-diff:']]},
+  {name:render + 'editDiffDetail', optional:true, resolve:relocateStatusLiteralGroup,
+    literals:[[0,8,0,1,'Wrote 1 line']]},
+  {name:'google3/third_party/jetski/cli/model/model.SelectorModel.renderVariantChip', optional:true, formats:['%d of %d']},
+  ...toolStatusProfiles,
+  ...transcriptStatusProfiles,
+  ...authInstructionProfiles,
+  ...modelLiteralProfiles,
+  ...cliPanelLiteralProfiles,
+  ...cliSubagentLiteralProfiles,
+  ...subagentRunStatusProfiles,
+  ...cliSwarmLiteralProfiles,
+  ...cliSwarmToolLiteralProfiles,
+  ...cloudLoginLiteralProfiles.map(profile => ({...profile, resolve:relocateStatusLiteralGroup})),
+  ...cliOnboardingLiteralProfiles,
+  ...feedbackLiteralProfiles,
 ];
 
 function uniqueFunction(metadata, name, size) {
   const fn = metadata.functions instanceof Map ? metadata.functions.get(name) : metadata.functions.find(fn => fn.name === name);
   if (!fn || metadata.ambiguousFunctions?.has(name) || (size && fn.size !== size)) {
-    throw new Error(`CLI 状态显示入口已变化：${name}`);
+    throw new CliCompatibilityError(`CLI 状态显示入口已变化：${name}`);
   }
   return fn;
 }
 
 function literalAddress(buffer, metadata, fn, offset, register) {
-  if (offset < 0 || offset + 8 > fn.size) throw new Error('CLI 状态文案地址超出函数');
+  if (offset < 0 || offset + 8 > fn.size) throw new CliCompatibilityError('CLI 状态文案地址超出函数');
   const position = fn.fileOffset + offset, adrp = buffer.readUInt32LE(position), add = buffer.readUInt32LE(position + 4);
   if (((adrp & 0x9f00001f) >>> 0) !== (0x90000000 | register) >>> 0 ||
       ((add & 0xffc003ff) >>> 0) !== (0x91000000 | (register << 5) | register) >>> 0) {
-    throw new Error(`CLI 状态文案指针布局已变化：${fn.name}+0x${offset.toString(16)}`);
+    throw new CliCompatibilityError(`CLI 状态文案指针布局已变化：${fn.name}+0x${offset.toString(16)}`);
   }
   return pageAddress(adrp, metadata.imageBase + fn.rva + offset) + ((add >>> 10) & 0xfff);
 }
 
 function readString(buffer, metadata, address, length) {
   const offset = fileOffsetFor(metadata, address, length);
-  return decoder.decode(buffer.subarray(offset, offset + length));
+  try { return decoder.decode(buffer.subarray(offset, offset + length)); }
+  catch (error) {
+    if (error.code !== 'ERR_ENCODING_INVALID_ENCODED_DATA') throw error;
+    throw new CliCompatibilityError('CLI 显示文案已不是 UTF-8');
+  }
 }
 
 function callTarget(word, pc) {
@@ -675,6 +610,35 @@ function callTarget(word, pc) {
   let immediate = word & 0x3ffffff;
   if (immediate >= 0x2000000) immediate -= 0x4000000;
   return pc + immediate * 4;
+}
+
+// Go passes the format as (X0,X1) and its argument slice as (X2,X3,X4).
+// Resolve both inputs at fmt.Sprintf itself so stack-frame and function size
+// changes do not invalidate a display string. Require one site per expected text.
+function locateFormats(buffer, metadata, fn, sprintf, formats) {
+  const word = offset => buffer.readUInt32LE(fn.fileOffset + offset);
+  const matches = new Map(), lengths = new Set(formats.map(value => Buffer.byteLength(value)));
+  for (let call = 24; call + 4 <= fn.size; call += 4) {
+    if (callTarget(word(call), metadata.imageBase + fn.rva + call) !== metadata.imageBase + sprintf.rva) continue;
+    let args = call - 12;
+    if (word(call - 4) === 0xaa0303e4 && stringLengthImmediate(word(call - 8), 3) !== null) {
+      // ADD X2,SP,#offset, optionally followed by ADD X2,X2,#offset.
+      if (((word(args) & 0xff8003ff) >>> 0) === 0x91000042) args -= 4;
+      if (args < 12 || ((word(args) & 0xff8003ff) >>> 0) !== 0x910003e2) continue;
+    } else if (word(args) !== 0xaa1f03e2 || word(call - 8) !== 0xaa1f03e3 || word(call - 4) !== 0xaa1f03e4) {
+      continue;
+    }
+    const size = stringLengthImmediate(word(args - 4), 1), pointer = args - 12;
+    if (!lengths.has(size) || ((word(pointer) & 0x9f00001f) >>> 0) !== 0x90000000 ||
+        ((word(pointer + 4) & 0xffc003ff) >>> 0) !== 0x91000000) continue;
+    const address = literalAddress(buffer, metadata, fn, pointer, 0);
+    const original = readString(buffer, metadata, address, size);
+    if (!formats.includes(original)) continue;
+    if (matches.has(original)) throw new CliCompatibilityError(`CLI 状态格式文案存在多个匹配位置：${fn.name}`);
+    matches.set(original, [pointer, args - 4, 0, 1, original, call]);
+  }
+  if (matches.size !== formats.length) throw new CliCompatibilityError(`CLI 状态格式文案已变化：${fn.name}`);
+  return formats.map(original => matches.get(original));
 }
 
 function collectQuotaDescriptionPrefix(buffer, metadata, translate) {
@@ -686,7 +650,7 @@ function collectQuotaDescriptionPrefix(buffer, metadata, translate) {
       readString(buffer,metadata,literalAddress(buffer,metadata,fn,0x26c,5),2) !== '\n\n' ||
       readString(buffer,metadata,literalAddress(buffer,metadata,fn,0x27c,1),2) !== '  ' ||
       callTarget(buffer.readUInt32LE(fn.fileOffset + 0x284),metadata.imageBase + fn.rva + 0x284) !== metadata.imageBase + concat3.rva) {
-    throw new Error('CLI 模型列表说明拼接入口已变化');
+    throw new CliCompatibilityError('CLI 模型列表说明拼接入口已变化');
   }
   const original = 'Models within this group: ', translated = translate(original);
   if (!translated || translated === original) return null;
@@ -767,7 +731,7 @@ function fixedUiColumns(value) {
   return columns;
 }
 
-function collectTaskStatusWidths(buffer, metadata, translate) {
+function collectTaskStatusWidths(buffer, metadata, translate, delta) {
   const deltas = Object.fromEntries(['running','cancelled','failed','completed',' (exit %d)'].map(original => {
     const rendered = translate(original) ?? original;
     return [original,Buffer.byteLength(rendered) - fixedUiColumns(rendered)];
@@ -776,26 +740,8 @@ function collectTaskStatusWidths(buffer, metadata, translate) {
   if (!Object.values(deltas).every(value => Number.isSafeInteger(value) && value >= 0 && value <= 0xfff)) {
     throw new Error('CLI 任务状态列宽修正超出立即数范围');
   }
-  const fn = uniqueFunction(metadata,'google3/third_party/jetski/cli/model/model.TasksModel.View',4544);
-  // The same BackgroundTaskInfo value remains in this frame while its status
-  // is rendered. Verify the bool/int selectors used by the width-only thunks.
-  for (const [offset, word] of [[0x680,0x91406bfb],[0x684,0x3944a364],
-    [0x69c,0x91406bfb],[0x6a0,0x39454765],[0x6a8,0x914063fb],[0x6ac,0xb9a15765],
-    [0x6b0,0x710018bf],[0x6c8,0x91406bfb],[0x6cc,0x39450365],
-    [0x6d4,0x91406bfb],[0x6d8,0x39454365]]) {
-    if (buffer.readUInt32LE(fn.fileOffset + offset) !== word) throw new Error('CLI 任务状态列宽来源已变化');
-  }
-  const sites = [];
-  for (const [offset, register, word] of [[0x96c,4,0xf9507764],[0x9cc,3,0xf9507763]]) {
-    if (buffer.readUInt32LE(fn.fileOffset + offset - 4) !== 0x914063fb ||
-        buffer.readUInt32LE(fn.fileOffset + offset) !== word) throw new Error('CLI 任务状态列宽读取点已变化');
-    sites.push({fileOffset:fn.fileOffset + offset,rva:fn.rva + offset,register,word});
-  }
-  // These four consumers must keep the real UTF-8 byte length for Go strings.
-  for (const offset of [0xae0,0xb50,0xbb4,0xc18]) {
-    if (buffer.readUInt32LE(fn.fileOffset + offset) !== 0xf9507764) throw new Error('CLI 任务状态字符串长度读取已变化');
-  }
-  return {imageBase:metadata.imageBase,taskFrameOffset:0x1a110,deltas,sites};
+  const fn = uniqueFunction(metadata,taskListView);
+  return {...inspectTaskStatusWidths(buffer,metadata,fn,delta), deltas};
 }
 
 function collectCompactionMarkerWidths(buffer, metadata, translate) {
@@ -807,7 +753,7 @@ function collectCompactionMarkerWidths(buffer, metadata, translate) {
   if (!deltas.every(value => Number.isSafeInteger(value) && value >= 0 && value <= 0xfff)) {
     throw new Error('CLI 压缩横幅列宽修正超出立即数范围');
   }
-  const fn = uniqueFunction(metadata,render + 'renderCompactionMarker',512);
+  const fn = uniqueFunction(metadata,compactionMarker,512);
   // The current title header stays at SP+0x320 across both strings.Repeat
   // calls. Its two possible addresses identify the long and short labels.
   for (const [offset,word] of [[0x2c,0x910ca3fb],[0x30,0xa9002367],
@@ -815,10 +761,10 @@ function collectCompactionMarkerWidths(buffer, metadata, translate) {
     [0x60,0xf94193e8],[0x64,0x91004107],[0x70,0xf100081f],
     [0x7c,0xf90193e7],[0x80,0xa94010e3],
     [0xac,0xf9017fe1],[0xd8,0xf9417fe3],[0x10c,0xf9417fe4]]) {
-    if (buffer.readUInt32LE(fn.fileOffset + offset) !== word) throw new Error('CLI 压缩横幅标题来源已变化');
+    if (buffer.readUInt32LE(fn.fileOffset + offset) !== word) throw new CliCompatibilityError('CLI 压缩横幅标题来源已变化');
   }
   const sites = [[0xa4,1,5,0xeb02003f],[0xb4,1,16,0xcb010043],[0xe0,3,5,0x8b440463]].map(([offset,register,operandShift,word]) => {
-    if (buffer.readUInt32LE(fn.fileOffset + offset) !== word) throw new Error('CLI 压缩横幅列宽消费者已变化');
+    if (buffer.readUInt32LE(fn.fileOffset + offset) !== word) throw new CliCompatibilityError('CLI 压缩横幅列宽消费者已变化');
     return {rva:fn.rva + offset,fileOffset:fn.fileOffset + offset,register,operandShift,word};
   });
   return {imageBase:metadata.imageBase,deltas,sites};
@@ -882,7 +828,8 @@ function compactionMarkerWidthCode(plan, site, address) {
 }
 
 /** Collect display literals and UI-only tables; source strings stay untouched. */
-export function collectCliStatusLocalizationPatches(buffer, dictionary, metadata = inspectNativeBinary(buffer)) {
+export function collectCliStatusLocalizationPatches(buffer, dictionary, metadata = inspectNativeBinary(buffer), { codeSpace } = {}) {
+  if (Array.isArray(metadata.functions)) metadata = {...metadata, functions:new Map(metadata.functions.map(fn => [fn.name,fn]))};
   const strings = dictionary?.strings ?? dictionary;
   if (!strings || typeof strings !== 'object') throw new TypeError('CLI translations must be an object');
   const patches = [], missing = [], casePatches = [], formats = value => value.match(/%[-+# 0]*(?:\d+|\*)?(?:\.(?:\d+|\*))?[a-zA-Z%]/g) ?? [];
@@ -890,18 +837,19 @@ export function collectCliStatusLocalizationPatches(buffer, dictionary, metadata
     const value = strings[namespace + original] ?? (namespace === 'cli-ui:' ? strings[original] : undefined);
     return typeof value === 'string' && value ? value : undefined;
   };
-  const add = (patch, namespace = 'cli-ui:') => {
-    const translated = translate(patch.original, namespace);
+  const add = (patch, namespace = 'cli-ui:', displayLabel = patch.original) => {
+    const translated = translate(displayLabel, namespace);
     if (typeof translated !== 'string' || !translated) { missing.push({functionName:patch.functionName, original:patch.original}); return; }
     if (translated === patch.original) return;
     if (patch.sharedLength && Buffer.byteLength(translated) !== patch.sourceLength) {
       throw new Error(`CLI 共享长度文案需保持 ${patch.sourceLength} 字节：${patch.original}`);
     }
-    const originalFormats = formats(patch.original), translatedFormats = formats(translated);
-    // These six UI counters pass a verified constant noun as argument 2.
-    // Consume it at zero precision while the localized template names the noun;
-    // protocol users of the original boxed string retain their English value.
-    const validFormats = patch.countNoun
+    const originalFormats = formats(patch.original);
+    const translatedFormats = formats(translated).map(format =>
+      patch.wrapsError && format === '%.0w' ? '%w' : format);
+    // Some counters pass an English noun or plural suffix as the second argument.
+    // The localized template consumes that argument at zero precision.
+    const validFormats = (patch.countNoun || patch.pluralSuffix)
       ? JSON.stringify(originalFormats) === '["%d","%s"]' && JSON.stringify(translatedFormats) === '["%d","%.0s"]'
       : JSON.stringify(originalFormats) === JSON.stringify(translatedFormats);
     if (!validFormats) {
@@ -909,17 +857,37 @@ export function collectCliStatusLocalizationPatches(buffer, dictionary, metadata
     }
     patches.push({...patch, translated});
   };
-  const sprintf = uniqueFunction(metadata, 'fmt.Sprintf');
-  for (const profile of literalProfiles) {
-    const fn = uniqueFunction(metadata, profile.name, profile.size);
+  const unsupported = [];
+  // A display function's strings, case handling and width calculation are one unit.
+  // Discard every planned write from that unit if any required source has changed.
+  function collectGroup(name, inspect) {
+    const counts = [patches.length, missing.length, casePatches.length];
+    try { return inspect(); }
+    catch (error) {
+      if (!(error instanceof CliCompatibilityError)) throw error;
+      [patches.length, missing.length, casePatches.length] = counts;
+      unsupported.push(name);
+      return null;
+    }
+  }
+  function checkReachable(sites) {
+    if (codeSpace && sites?.some(site => !cliSiteReachesCodeSpace(metadata.imageBase, site, codeSpace))) {
+      throw new CliCompatibilityError('CLI 状态显示入口超出当前代码区');
+    }
+  }
+  function collectProfile(profile) {
+    const fn = profile.variant ?? uniqueFunction(metadata, profile.name, profile.size);
+    const needsSprintf = profile.formats || profile.literals.some(literal => literal[5] !== undefined);
+    const sprintf = needsSprintf ? uniqueFunction(metadata, 'fmt.Sprintf') : null;
+    const literals = profile.formats ? locateFormats(buffer, metadata, fn, sprintf, profile.formats) : profile.literals;
     for (const [offset, word] of profile.guards ?? []) if (buffer.readUInt32LE(fn.fileOffset + offset) !== word) {
-      throw new Error(`CLI 状态条件选择已变化：${fn.name}`);
+      throw new CliCompatibilityError(`CLI 状态条件选择已变化：${fn.name}`);
     }
     for (const [offset, name] of profile.verifiedCalls ?? []) {
       const callee = uniqueFunction(metadata, name);
       if (offset < 0 || offset + 4 > fn.size ||
           callTarget(buffer.readUInt32LE(fn.fileOffset + offset), metadata.imageBase + fn.rva + offset) !== metadata.imageBase + callee.rva) {
-        throw new Error(`CLI 状态文案调用已变化：${fn.name}+0x${offset.toString(16)}`);
+        throw new CliCompatibilityError(`CLI 状态文案调用已变化：${fn.name}+0x${offset.toString(16)}`);
       }
     }
     const countNouns = new Map();
@@ -930,15 +898,15 @@ export function collectCliStatusLocalizationPatches(buffer, dictionary, metadata
       // STP X1,X2,[SP,#offset] installs the boxed string as the second fmt arg.
       if (length !== Buffer.byteLength(original) || readString(buffer,metadata,address,length) !== original ||
           ((buffer.readUInt32LE(fn.fileOffset + referenceOffset + 8) & 0xffc07fff) >>> 0) !== 0xa9000be1 ||
-          !profile.literals.some(value => value[0] === formatOffset && value[5] === formatCall) ||
+          !literals.some(value => value[0] === formatOffset && value[5] === formatCall) ||
           callTarget(buffer.readUInt32LE(fn.fileOffset + formatCall),metadata.imageBase + fn.rva + formatCall) !== metadata.imageBase + sprintf.rva) {
-        throw new Error(`CLI 工具计数名词参数已变化：${fn.name}`);
+        throw new CliCompatibilityError(`CLI 工具计数名词参数已变化：${fn.name}`);
       }
       countNouns.set(formatOffset,original);
     }
     for (const [offset, originalWord, resumeOffset, ...originals] of profile.caseGroups ?? []) {
       if (buffer.readUInt32LE(fn.fileOffset + offset) !== originalWord || resumeOffset < 0 || resumeOffset >= fn.size) {
-        throw new Error(`CLI 工具动作大小写分支已变化：${fn.name}`);
+        throw new CliCompatibilityError(`CLI 工具动作大小写分支已变化：${fn.name}`);
       }
       const firstCharacters = originals.map(original => String.fromCodePoint((translate(original) || original).codePointAt(0)));
       if (!firstCharacters.some(first => Buffer.byteLength(first) > 1)) continue; // Keep the original English case path.
@@ -950,7 +918,8 @@ export function collectCliStatusLocalizationPatches(buffer, dictionary, metadata
       casePatches.push({functionName:fn.name,fileOffset:fn.fileOffset + offset,originalWord,
         word:(0x14000000 | ((resumeOffset - offset) / 4)) >>> 0});
     }
-    for (const [pointerOffset,lengthOffset,pointerRegister,lengthRegister,original,formatCall,namespace] of profile.literals) {
+    const wrapsError = profile.verifiedCalls?.some(([, name]) => name === 'fmt.errorf');
+    for (const [pointerOffset,lengthOffset,pointerRegister,lengthRegister,original,formatCall,namespace] of literals) {
       const sourceLength = Buffer.byteLength(original), sourceAddress = literalAddress(buffer, metadata, fn, pointerOffset, pointerRegister);
       const lengthAlias = profile.lengthAliases?.find(value => value[0] === lengthOffset);
       const lengthWord = buffer.readUInt32LE(fn.fileOffset + lengthOffset);
@@ -961,108 +930,159 @@ export function collectCliStatusLocalizationPatches(buffer, dictionary, metadata
           (stringLengthImmediate(lengthWord, lengthRegister) !== sourceLength && !aliasMatches) ||
           readString(buffer, metadata, sourceAddress, sourceLength) !== original ||
           (formatCall !== undefined && callTarget(buffer.readUInt32LE(fn.fileOffset + formatCall), metadata.imageBase + fn.rva + formatCall) !== metadata.imageBase + sprintf.rva)) {
-        throw new Error(`CLI 状态文案布局已变化：${fn.name}+0x${pointerOffset.toString(16)}`);
+        throw new CliCompatibilityError(`CLI 状态文案布局已变化：${fn.name}+0x${pointerOffset.toString(16)}`);
       }
       const start = Math.min(pointerOffset,lengthOffset,lengthAlias?.[2] ?? pointerOffset);
       const end = Math.max(pointerOffset + 8, lengthOffset + 4, (formatCall ?? -4) + 4);
       const contextFileOffset = fn.fileOffset + start;
       add({kind:'literal', functionName:fn.name, original, sourceAddress, sourceLength,
-        countNoun:countNouns.get(pointerOffset),
-        sharedLength:profile.sharedLengths?.includes(lengthOffset) ?? false,
+        countNoun:countNouns.get(pointerOffset), pluralSuffix:profile.pluralSuffixes?.includes(original),
+        sharedLength:profile.sharedLengths?.includes(lengthOffset) ?? false, wrapsError,
         pointerFileOffset:fn.fileOffset + pointerOffset, pointerPc:metadata.imageBase + fn.rva + pointerOffset,
         lengthFileOffset:fn.fileOffset + lengthOffset, pointerRegister, lengthRegister, contextFileOffset,
         originalContext:Buffer.from(buffer.subarray(contextFileOffset, fn.fileOffset + end))}, namespace);
     }
   }
-  const collectTable = (fn, address, stride, count, expected) => {
+  let statusWidths = null, compactionWidths = null;
+  const declarations = literalProfiles.flatMap(profile => profile.allVariants && metadata.functionVariants?.has(profile.name)
+    ? metadata.functionVariants.get(profile.name).map(variant => ({...profile, variant})) : [profile]);
+  for (const declaration of declarations) {
+    if (declaration.optional && !metadata.functions.has(declaration.name)) continue;
+    collectGroup(declaration.name, () => {
+      const resolve = declaration.resolve ?? resolvePanelStatusProfile;
+      const profile = resolve(buffer, metadata, declaration, dictionary);
+      collectProfile(profile);
+      if (profile.name === taskListView) {
+        const plan = collectTaskStatusWidths(buffer,metadata,translate,profile.literals[0][0] - 0x690);
+        checkReachable(plan?.sites);
+        statusWidths = plan;
+      }
+      if (profile.name === compactionMarker) {
+        const plan = collectCompactionMarkerWidths(buffer,metadata,translate);
+        checkReachable(plan?.sites);
+        compactionWidths = plan;
+      }
+    });
+  }
+  collectCliPanelTables(buffer, metadata, collectGroup, add);
+  collectCliSwarmPluginFieldSlots(buffer, metadata, collectGroup, add);
+  const collectTable = (fn, address, stride, count, expected, displayLabel) => {
     const base = fileOffsetFor(metadata, address, stride * count);
     for (let index = 0; index < count; index++) {
       const fileOffset = base + index * stride, sourceAddress = Number(buffer.readBigUInt64LE(fileOffset));
       const sourceLength = Number(buffer.readBigUInt64LE(fileOffset + 8));
-      if (!Number.isSafeInteger(sourceLength) || sourceLength < 0) throw new Error('CLI 显示文案表长度已变化');
+      if (!Number.isSafeInteger(sourceLength) || sourceLength < 0) throw new CliCompatibilityError('CLI 显示文案表长度已变化');
       const original = sourceLength ? readString(buffer, metadata, sourceAddress, sourceLength) : '';
-      if (expected && expected[index] !== original) throw new Error(`CLI 显示文案表已变化：${fn.name}`);
+      if (expected && expected[index] !== original) throw new CliCompatibilityError(`CLI 显示文案表已变化：${fn.name}`);
       if (original) add({kind:'slot', functionName:fn.name, original, sourceAddress, sourceLength, fileOffset,
-        contextFileOffset:fileOffset, originalContext:Buffer.from(buffer.subarray(fileOffset,fileOffset + 16))});
+        contextFileOffset:fileOffset, originalContext:Buffer.from(buffer.subarray(fileOffset,fileOffset + 16))}, undefined, displayLabel);
     }
   };
-  const labels = uniqueFunction(metadata, stateLabel, 288);
-  collectTable(labels, literalAddress(buffer,metadata,labels,0x30,3),16,8,
-    ['Initializing agent','','Thinking','Running','Waiting','','Compacting conversation','Loading conversation']);
-  const cycleHeader = literalAddress(buffer,metadata,labels,0x6c,27), cycleOffset = fileOffsetFor(metadata,cycleHeader,24);
-  if (buffer.readBigUInt64LE(cycleOffset + 8) !== 3n || buffer.readBigUInt64LE(cycleOffset + 16) !== 3n) throw new Error('CLI 生成状态轮换表已变化');
-  collectTable(labels,Number(buffer.readBigUInt64LE(cycleOffset)),16,3,['Generating','Working','Loading']);
-  // The map initializer reads a separate 35-element label array and tool-ID
-  // array. Only value slots are localized; lookup identities stay untouched.
-  const activity = uniqueFunction(metadata, 'google3/third_party/jetski/cli/steps/steps.map.init.0', 256);
-  for (const [offset, word] of [[0x20,0xd2800461],[0x48,0xf1008c3f],[0x5c,0x8b011084],
-    [0x60,0xa9401484],[0x74,0x8b011084],[0x78,0xa9400c82]]) {
-    if (buffer.readUInt32LE(activity.fileOffset + offset) !== word) throw new Error('CLI 活动标签表读取布局已变化');
-  }
-  const activityLabels = literalAddress(buffer,metadata,activity,0x54,4);
-  const activityKeys = literalAddress(buffer,metadata,activity,0x6c,4);
-  const assign = uniqueFunction(metadata, 'runtime.mapassign_faststr');
-  if (activityKeys + 35 * 16 !== activityLabels ||
-      callTarget(buffer.readUInt32LE(activity.fileOffset + 0x88), metadata.imageBase + activity.rva + 0x88) !== metadata.imageBase + assign.rva) {
-    throw new Error('CLI 活动标签表初始化入口已变化');
-  }
-  collectTable(activity,activityLabels,16,35,[
-    'Reading file','Reading file','Searching','Code searching','Searching internal docs','Searching skills',
-    'Finding files','Listing directory','Running command','Checking command','Sending input','Reading page',
-    'Searching web','Editing files','Editing files','Editing files','Editing files','Editing files',
-    'Editing notebook','Calling MCP tool','Reading resource','Reading resource','Generating image','Delegating',
-    'Defining subagent','Managing subagents','Sending message','Checking inbox','Managing tasks','Scheduling',
-    'Using browser','Using browser','Using browser','Waiting','Waiting',
-  ]);
-  // A playback option has a separate display Label and submission Value.
-  // Localize the label in the copied option template, keeping Value="other".
-  const live = uniqueFunction(metadata, 'google3/third_party/jetski/cli/model/model.liveSettingFields', 1504);
-  for (const [offset, word] of [[0x524,0xaa0003e2],[0x528,0xb27e03f8],
-    [0x52c,0xacc14430],[0x530,0xac814410],[0x534,0xacc14430],[0x538,0xac814410],
-    [0x53c,0xd1000718],[0x540,0xb5ffff78],[0x544,0xad404430],[0x548,0xad004410]]) {
-    if (buffer.readUInt32LE(live.fileOffset + offset) !== word) throw new Error('CLI 语音选项显示表复制已变化');
-  }
-  const playbackOptions = literalAddress(buffer,metadata,live,0x51c,1);
-  const customValue = fileOffsetFor(metadata,playbackOptions + 5 * 48,16);
-  if (buffer.readBigUInt64LE(customValue + 8) !== 5n ||
-      readString(buffer,metadata,Number(buffer.readBigUInt64LE(customValue)),5) !== 'other') {
-    throw new Error('CLI 自定义语速选项身份已变化');
-  }
-  collectTable(live,playbackOptions + 5 * 48 + 16,16,1,['other...']);
-  const quotaPrefix = collectQuotaDescriptionPrefix(buffer,metadata,translate);
-  if (quotaPrefix) patches.push(quotaPrefix);
-  return {imageBase:metadata.imageBase, patches, missing, casePatches,
-    statusWidths:collectTaskStatusWidths(buffer,metadata,translate),
-    compactionWidths:collectCompactionMarkerWidths(buffer,metadata,translate)};
+  collectGroup(stateLabel, () => {
+    const labels = uniqueFunction(metadata, stateLabel, 288);
+    collectTable(labels, literalAddress(buffer,metadata,labels,0x30,3),16,8,
+      ['Initializing agent','','Thinking','Running','Waiting','','Compacting conversation','Loading conversation']);
+    const cycleHeader = literalAddress(buffer,metadata,labels,0x6c,27), cycleOffset = fileOffsetFor(metadata,cycleHeader,24);
+    if (buffer.readBigUInt64LE(cycleOffset + 8) !== 3n || buffer.readBigUInt64LE(cycleOffset + 16) !== 3n) throw new CliCompatibilityError('CLI 生成状态轮换表已变化');
+    // All three labels belong to the response generation state, including incremental output.
+    collectTable(labels,Number(buffer.readBigUInt64LE(cycleOffset)),16,3,['Generating','Working','Loading'],'Generating');
+  });
+  collectGroup('工具活动标签', () => {
+    // The map initializer reads a separate 35-element label array and tool-ID
+    // array. Only value slots are localized; lookup identities stay untouched.
+    const activity = uniqueFunction(metadata, 'google3/third_party/jetski/cli/steps/steps.map.init.0', 256);
+    for (const [offset, word] of [[0x20,0xd2800461],[0x48,0xf1008c3f],[0x5c,0x8b011084],
+      [0x60,0xa9401484],[0x74,0x8b011084],[0x78,0xa9400c82]]) {
+      if (buffer.readUInt32LE(activity.fileOffset + offset) !== word) throw new CliCompatibilityError('CLI 活动标签表读取布局已变化');
+    }
+    const activityLabels = literalAddress(buffer,metadata,activity,0x54,4);
+    const activityKeys = literalAddress(buffer,metadata,activity,0x6c,4);
+    const assign = uniqueFunction(metadata, 'runtime.mapassign_faststr');
+    if (activityKeys + 35 * 16 !== activityLabels ||
+        callTarget(buffer.readUInt32LE(activity.fileOffset + 0x88), metadata.imageBase + activity.rva + 0x88) !== metadata.imageBase + assign.rva) {
+      throw new CliCompatibilityError('CLI 活动标签表初始化入口已变化');
+    }
+    collectTable(activity,activityLabels,16,35,[
+      'Reading file','Reading file','Searching','Code searching','Searching internal docs','Searching skills',
+      'Finding files','Listing directory','Running command','Checking command','Sending input','Reading page',
+      'Searching web','Editing files','Editing files','Editing files','Editing files','Editing files',
+      'Editing notebook','Calling MCP tool','Reading resource','Reading resource','Generating image','Delegating',
+      'Defining subagent','Managing subagents','Sending message','Checking inbox','Managing tasks','Scheduling',
+      'Using browser','Using browser','Using browser','Waiting','Waiting',
+    ]);
+  });
+  collectGroup('语音选项标签', () => {
+    // A playback option has a separate display Label and submission Value.
+    // Localize the label in the copied option template, keeping Value="other".
+    const live = uniqueFunction(metadata, 'google3/third_party/jetski/cli/model/model.liveSettingFields', 1504);
+    for (const [offset, word] of [[0x524,0xaa0003e2],[0x528,0xb27e03f8],
+      [0x52c,0xacc14430],[0x530,0xac814410],[0x534,0xacc14430],[0x538,0xac814410],
+      [0x53c,0xd1000718],[0x540,0xb5ffff78],[0x544,0xad404430],[0x548,0xad004410]]) {
+      if (buffer.readUInt32LE(live.fileOffset + offset) !== word) throw new CliCompatibilityError('CLI 语音选项显示表复制已变化');
+    }
+    const playbackOptions = literalAddress(buffer,metadata,live,0x51c,1);
+    const customValue = fileOffsetFor(metadata,playbackOptions + 5 * 48,16);
+    if (buffer.readBigUInt64LE(customValue + 8) !== 5n ||
+        readString(buffer,metadata,Number(buffer.readBigUInt64LE(customValue)),5) !== 'other') {
+      throw new CliCompatibilityError('CLI 自定义语速选项身份已变化');
+    }
+    collectTable(live,playbackOptions + 5 * 48 + 16,16,1,['other...']);
+  });
+  collectGroup('额度模型列表前缀', () => {
+    const prefix = collectQuotaDescriptionPrefix(buffer,metadata,translate);
+    if (prefix) {
+      checkReachable([prefix]);
+      patches.push(prefix);
+    }
+  });
+  return {imageBase:metadata.imageBase, patches, missing, casePatches, statusWidths, compactionWidths, unsupported};
 }
 
 /** Quota titles and descriptions arrive as server-owned strings, not literals. */
 export function collectCliUsageDisplayStrings(buffer, dictionary, metadata = inspectNativeBinary(buffer)) {
+  if (Array.isArray(metadata.functions)) metadata = {...metadata, functions:new Map(metadata.functions.map(fn => [fn.name,fn]))};
   const prefix = 'google3/third_party/jetski/cli/model/model.';
-  const group = uniqueFunction(metadata,prefix + 'UsageModel.renderQuotaGroup',4160);
-  const description = uniqueFunction(metadata,prefix + 'UsageModel.renderQuotaDescription',976);
-  const upper = uniqueFunction(metadata,'strings.ToUpper');
+  const upper = metadata.functions.get('strings.ToUpper');
+  const stackAddress = word => (word & 0xffc003ff) >>> 0; // Ignore only the 12-bit stack offset.
   const profiles = [
-    // Group title before ToUpper; the source quota object remains unchanged.
-    {fn:group,offset:0xe4,start:0xdc,words:[0x911463fb,0x91403b7b,0xa9400760],pointer:0,length:1},
-    // Period label before it is copied into the Style.Render argument.
-    {fn:group,offset:0x4ac,start:0x4a4,words:[0x913ffffb,0x9106677b,0xa9401764,
-      0x913ffffb,0x9108e77b,0xa9001764],pointer:4,length:5},
-    // Explanatory note before wrapping and border measurement.
-    {fn:description,offset:0xe4,start:0xd8,words:[0x914023fb,0xf970bf61,0x914023fb,
-      0xf970c362,0x913a63fb,0xa9000b61],pointer:1,length:2},
+    // A Go string loaded as one pair and consumed directly by strings.ToUpper.
+    {name:'额度分组标题', method:'renderQuotaGroup', span:16, offset:8, pointer:0, length:1,
+      matches:(word,pc) => upper && !metadata.ambiguousFunctions?.has(upper.name) &&
+        stackAddress(word(0)) === 0x910003fb && stackAddress(word(4)) === 0x9140037b &&
+        word(8) === 0xa9400760 && callTarget(word(12),pc + 12) === metadata.imageBase + upper.rva},
+    // The period is copied between two specific string slots for Style.Render.
+    {name:'额度周期标签', method:'renderQuotaGroup', span:24, offset:8, pointer:4, length:5,
+      matches:word => [0x913ffffb,0x9106677b,0xa9401764,0x913ffffb,0x9108e77b,0xa9001764]
+        .every((expected,index) => word(index * 4) === expected)},
+    // Load the pointer/length from adjacent cells of the same frame, then
+    // copy them into the description to be wrapped. Both frame offsets may move.
+    {name:'额度说明', method:'renderQuotaDescription', span:24, offset:12, pointer:1, length:2,
+      matches:word => stackAddress(word(0)) === 0x914003fb && word(0) === word(8) &&
+        stackAddress(word(4)) === 0xf9400361 && stackAddress(word(12)) === 0xf9400362 &&
+        ((word(4) >>> 10) & 0xfff) + 1 === ((word(12) >>> 10) & 0xfff) &&
+        stackAddress(word(16)) === 0x910003fb && word(20) === 0xa9000b61},
   ];
-  if (callTarget(buffer.readUInt32LE(group.fileOffset + 0xe8),metadata.imageBase + group.rva + 0xe8) !==
-      metadata.imageBase + upper.rva) throw new Error('CLI 额度标题显示调用已变化');
-  const sites = profiles.map(({fn,offset,start,words,pointer,length}) => {
-    if (words.some((word,index) => buffer.readUInt32LE(fn.fileOffset + start + index * 4) !== word)) {
-      throw new Error(`CLI 额度显示数据入口已变化：${fn.name}`);
+  const sites = [], unsupported = [];
+  for (const profile of profiles) {
+    const name = prefix + 'UsageModel.' + profile.method, fn = metadata.functions.get(name);
+    const matches = [];
+    if (fn && !metadata.ambiguousFunctions?.has(name)) {
+      for (let start = 0; start + profile.span <= fn.size; start += 4) {
+        const word = delta => buffer.readUInt32LE(fn.fileOffset + start + delta);
+        if (profile.matches(word,metadata.imageBase + fn.rva + start)) matches.push(start);
+      }
     }
-    return {rva:fn.rva + offset,fileOffset:fn.fileOffset + offset,
-      word:buffer.readUInt32LE(fn.fileOffset + offset),pointerRegister:pointer,lengthRegister:length,replayFirst:true,
+    if (matches.length !== 1) {
+      unsupported.push(profile.name);
+      continue;
+    }
+    const start = matches[0], offset = start + profile.offset;
+    sites.push({rva:fn.rva + offset, fileOffset:fn.fileOffset + offset, word:buffer.readUInt32LE(fn.fileOffset + offset),
+      pointerRegister:profile.pointer, lengthRegister:profile.length, replayFirst:true,
       contextFileOffset:fn.fileOffset + start,
-      originalContext:Buffer.from(buffer.subarray(fn.fileOffset + start,fn.fileOffset + start + words.length * 4))};
-  });
+      originalContext:Buffer.from(buffer.subarray(fn.fileOffset + start,fn.fileOffset + start + profile.span))});
+  }
+  if (!sites.length) throw new CliCompatibilityError('CLI 额度显示数据入口已变化');
   const strings = dictionary?.strings ?? dictionary;
   if (!strings || typeof strings !== 'object') throw new TypeError('CLI translations must be an object');
   const namespace = 'cli-usage:';
@@ -1070,7 +1090,7 @@ export function collectCliUsageDisplayStrings(buffer, dictionary, metadata = ins
     key.length > namespace.length && typeof value === 'string' && value.length > 0)
     .map(([key,translated]) => ({original:key.slice(namespace.length),translated,
       sourceLength:Buffer.byteLength(key.slice(namespace.length))}));
-  return {imageBase:metadata.imageBase,entries,sites,matchContent:true};
+  return {imageBase:metadata.imageBase,entries,sites,matchContent:true,unsupported};
 }
 
 /** A count noun is a display copy of the category key; the key stays English. */
@@ -1081,7 +1101,7 @@ export function collectCliSummaryNounDisplayStrings(buffer, dictionary, metadata
   if (buffer.readUInt32LE(fn.fileOffset + 0x588) !== 0xf94097e0 ||
       buffer.readUInt32LE(fn.fileOffset + 0x58c) !== 0xf94043e1 ||
       callTarget(buffer.readUInt32LE(fn.fileOffset + 0x590), metadata.imageBase + fn.rva + 0x590) !== metadata.imageBase + conv.rva) {
-    throw new Error('CLI 聚合计数名词显示入口已变化');
+    throw new CliCompatibilityError('CLI 聚合计数名词显示入口已变化');
   }
   const sources = new Map(Object.entries(strings).filter(([key,value]) => key.startsWith('cli-noun:') && typeof value === 'string' && value)
     .map(([key,value]) => [key.slice(9),value]));
@@ -1121,7 +1141,8 @@ export function applyCliStatusLocalizationPatches(buffer, plan, allocateString, 
       prefixThunks.push({patch,address,code,offset:options.codeFileOffset + codeBytes});
       codeBytes += code.length;
     }
-    if (codeBytes > options.capacity || options.codeFileOffset < 0 || options.codeFileOffset + codeBytes > buffer.length ||
+    if (codeBytes > options.capacity) throw new CliCompatibilityError('CLI 显示列宽代码区不足');
+    if (options.codeFileOffset < 0 || options.codeFileOffset + codeBytes > buffer.length ||
         buffer.subarray(options.codeFileOffset,options.codeFileOffset + codeBytes).some(byte => byte !== 0)) {
       throw new Error('CLI 显示列宽代码区不足或不是空白');
     }
@@ -1139,6 +1160,13 @@ export function applyCliStatusLocalizationPatches(buffer, plan, allocateString, 
     if (patch.kind === 'slot') {
       const slot = Buffer.alloc(16); slot.writeBigUInt64LE(BigInt(address)); slot.writeBigUInt64LE(BigInt(bytes.length),8);
       stage(patch.fileOffset,slot);
+    } else if (patch.kind === 'inline-string-copy') {
+      for (const source of patch.sources) {
+        const pointer = Buffer.alloc(8);
+        addressInstructions(source.pointerRegister, address + source.resourceOffset, source.pointerPc)
+          .forEach((word,index) => pointer.writeUInt32LE(word,index * 4));
+        stage(source.pointerFileOffset,pointer);
+      }
     } else {
       const pointer = Buffer.alloc(8), words = addressInstructions(patch.pointerRegister,address,patch.pointerPc);
       words.forEach((word,index) => pointer.writeUInt32LE(word,index * 4));

@@ -12,6 +12,7 @@ const appExecutable = join(appPath, 'Contents/MacOS/Antigravity');
 const officialBackendPath = join(appPath, 'Contents/Resources/bin/language_server');
 const stateDir = '/fixture/state', runtimeDir = '/fixture/runtime';
 const helperBackendPath = join(stateDir, 'backend/1017595969/language_server');
+const titleBackendPath = join(stateDir, 'desktop-title/language_server');
 const configPath = join(stateDir, 'backend-context.json');
 const receiptPath = join(stateDir, 'backend-session.json');
 const appStoragePath = '/fixture/Antigravity/app_storage.json';
@@ -38,14 +39,14 @@ function fixture({contextOverridesEnabled = true, targetTokens = 400000, mainSet
   const behavior = {running:[...running], connectError, attachError, readyError, holdReady,
     writeError:null, configureError:null, configureGate:null, disposeGate:null, disposeError:null, killError:null,
     attachGate:null, openingGate:null, restoreGate:null, restoreError:null, statusError:null,
-    accessError:null, installationWriteError:null, mainReadError:null};
+    accessError:null, installationWriteError:null, mainReadError:null, titlePreparationError:null};
   let temporary = 0, launchSequence = 0;
   const absent = path => Object.assign(new Error(`ENOENT: ${path}`), {code:'ENOENT'});
   const execFile = (command, args, _options, callback) => {
     if (typeof _options === 'function') callback = _options;
     events.push({type:'exec', command, args:[...args]});
     let stdout = '';
-    if (command === '/bin/ps') stdout = behavior.running.map(([pid, path]) => `${pid} ${path}`).join('\n');
+    if (command === '/bin/ps') stdout = behavior.running.map(([pid, path, parent = 1]) => `${pid} ${parent} ${path}`).join('\n');
     else if (command === '/usr/bin/plutil') stdout = JSON.stringify({LSEnvironment:{FROM_PLIST:'bundle', SHARED_ENV:'bundle'}});
     else if (command.endsWith('/AntigravityBackendMach')) {
       events.push({type:'mach', operation:args[0], args:[...args]});
@@ -112,7 +113,7 @@ function fixture({contextOverridesEnabled = true, targetTokens = 400000, mainSet
     events.push({type:kind, options});
     const appPid = kind === 'connect' ? options.appPid : 301 + 2 * launchSequence++;
     const backendPid = kind === 'connect' ? options.backendPid : appPid + 1;
-    if (kind === 'launch') behavior.running.push([appPid, appExecutable], [backendPid, helperBackendPath]);
+    if (kind === 'launch') behavior.running.push([appPid, appExecutable], [backendPid, options.helperBackendPath, appPid]);
     const ready = deferred();
     const controller = new AbortController();
     const session = {
@@ -133,7 +134,7 @@ function fixture({contextOverridesEnabled = true, targetTokens = 400000, mainSet
       async restart(pid) {
         session.transition('attaching');
         behavior.running = behavior.running.filter(([current]) => current !== backendPid);
-        behavior.running.push([pid, helperBackendPath]);
+        behavior.running.push([pid, options.helperBackendPath, appPid]);
         await options.onBackendSpawn(pid, {signal:controller.signal, sequence:2, appPid, inspectorUrl:receipt.inspectorUrl});
         session.transition('running');
       },
@@ -172,6 +173,10 @@ function fixture({contextOverridesEnabled = true, targetTokens = 400000, mainSet
   const context = vm.createContext({
     execFile, promisify, join, resolve, relative, sep, constants, homedir:() => '/fixture/home',
     process:{pid:303, env:{FROM_PROCESS:'host', SHARED_ENV:'host'}, kill(pid, signal) {
+      if (signal === 0) {
+        if (behavior.running.some(([candidate]) => candidate === pid)) return true;
+        throw Object.assign(new Error('fixture process exited'), {code:'ESRCH'});
+      }
       events.push({type:'kill', pid, signal});
       assert.equal(signal, 'SIGKILL');
       assert.equal(behavior.running.find(([current]) => current === pid)?.[1], helperBackendPath,
@@ -205,6 +210,11 @@ function fixture({contextOverridesEnabled = true, targetTokens = 400000, mainSet
     rename:async (from, to) => { if (!files.has(from)) throw absent(from); files.set(to, files.get(from)); files.delete(from); },
     rm:async path => { for (const key of files.keys()) if (key === path || key.startsWith(`${path}/`)) files.delete(key); },
     prepareBackendCopy:async options => { events.push({type:'prepare', options}); return {binaryPath:helperBackendPath, buildCL:'1017595969', layout:fixtureLayout}; },
+    prepareDesktopTitleCopy:async options => {
+      events.push({type:'prepare-title', options});
+      if (behavior.titlePreparationError) throw behavior.titlePreparationError;
+      return {binaryPath:titleBackendPath};
+    },
     inspectBackendBinary:async path => { events.push({type:'inspect', path}); return fixtureLayout; },
     CONTEXT_OVERRIDES_ENABLED:false,
     restoreBackendApp:async options => {
@@ -308,7 +318,8 @@ test('launch respects running apps and clears exited or replaced owners before a
 
   const normal = fixture({targetTokens:null}); t.after(() => normal.manager.dispose());
   await normal.manager.ready; await normal.manager.launch();
-  assert.deepEqual(normal.events.filter(event => event.command === '/usr/bin/open').map(event => event.args), [[appPath]]);
+  assert.deepEqual(normal.events.filter(event => event.command === '/usr/bin/open').map(event => event.args),
+    [['-a', appPath, '--args', '--remote-debugging-port=0']]);
   assert.equal(normal.count('prepare'), 0);
   assert.equal(normal.count('launch'), 0);
   assert.equal(normal.count('runtime-create'), 0);
@@ -422,6 +433,7 @@ test('enabled launch forwards bundle environment and restores owned sessions on 
   await success.manager.ready; await success.manager.launch();
   const options = success.events.find(event => event.type === 'launch')?.options;
   assert.ok(options);
+  assert.deepEqual([...options.appArgs], ['--remote-debugging-port=0']);
   assert.equal(options.env.FROM_PLIST, 'bundle');
   assert.equal(options.env.FROM_PROCESS, 'host');
   assert.equal(options.env.SHARED_ENV, 'bundle');
@@ -800,7 +812,7 @@ test('主存储读取失败阻止误用默认启动，通知准确失败且不�
 });
 
 
-test('disabled context policy ignores old budgets and uses only the normal App launch', async t => {
+test('标题副本只冷启动一次，保留调试参数并忽略已停用的预算设置', async t => {
   const f = fixture({contextOverridesEnabled:false, mainSettings:{'antigravityChineseHelper.contextLimit.1437':'768000'}});
   t.after(() => f.manager.dispose());
   f.files.set(configPath, 'old settings need not be parsed while the feature is disabled');
@@ -817,9 +829,125 @@ test('disabled context policy ignores old budgets and uses only the normal App l
   assert.equal(status.mainMessage, '');
   assert.equal(f.events.some(event => event.type === 'read' && [configPath,appStoragePath].includes(event.path)), false);
   assert.equal(f.writes.length, 0, 'a hidden API call must not save or enable a custom budget');
+  assert.equal(status.nativeChineseTitles, null);
+  const [started, focused] = await Promise.all([f.manager.launch(), f.manager.launch()]);
+  assert.equal(started.launched, true);
+  assert.equal(focused.launched, false);
+  assert.equal(focused.message, '');
+  assert.equal(f.count('prepare-title'), 1);
+  assert.deepEqual({...f.events.find(event => event.type === 'prepare-title').options}, {officialBackendPath, stateDir});
+  assert.equal(f.count('launch'), 1);
+  const {options} = f.events.find(event => event.type === 'launch');
+  assert.equal(options.helperBackendPath, titleBackendPath);
+  assert.deepEqual([...options.appArgs], ['--remote-debugging-port=0']);
+  const saved = JSON.parse(f.files.get(receiptPath));
+  assert.equal(saved.purpose, 'titles');
+  assert.equal(saved.helperBackendPath, titleBackendPath);
+  assert.equal(saved.nativeDescriptor, undefined);
+  assert.equal((await f.manager.refresh()).nativeChineseTitles, true);
+  assert.equal(f.manager.getStatus().nativeReady, false);
+  for (const type of ['prepare','inspect','runtime-create','native-install','attach','mach']) assert.equal(f.count(type), 0, type);
+});
+
+test('助手退出后，仍运行的标题副本可直接重新接管', async t => {
+  const first = fixture({contextOverridesEnabled:false});
+  t.after(() => first.manager.dispose());
+  await first.manager.launch();
+  await first.manager.dispose();
+  assert.equal(first.count('kill'), 0);
+  const next = fixture({contextOverridesEnabled:false, files:first.files, running:first.behavior.running});
+  t.after(() => next.manager.dispose());
+  await next.manager.ready;
+  assert.equal(next.manager.getStatus().nativeChineseTitles, true);
+  assert.equal(next.count('connect'), 1);
+  assert.equal(next.events.find(event => event.type === 'connect').options.helperBackendPath, titleBackendPath);
+  for (const type of ['prepare-title','launch','inspect','attach','runtime-create','mach']) assert.equal(next.count(type), 0, type);
+});
+
+test('首次启动向导可以等用户完成，期间重复点击助手只聚焦应用', {timeout:2000}, async t => {
+  const f = fixture({contextOverridesEnabled:false, holdReady:true});
+  t.after(() => f.manager.dispose());
   assert.equal((await f.manager.launch()).launched, true);
+  assert.equal(f.manager.getStatus().nativeChineseTitles, null);
+  assert.equal((await f.manager.launch()).message, '');
+  f.sessions[0].transition('running');
+  assert.equal(f.manager.getStatus().nativeChineseTitles, true);
+});
+
+test('官方后端已运行时聚焦窗口并提示连接后自动改名', async t => {
+  const f = fixture({contextOverridesEnabled:false, running:[[101, appExecutable], [202, officialBackendPath, 101]]});
+  t.after(() => f.manager.dispose());
+  const reply = await f.manager.launch();
+  assert.equal(reply.launched, false);
+  assert.match(reply.message, /中文标题/);
+  assert.match(reply.message, /助手连接窗口后/);
+  assert.equal(f.manager.getStatus().nativeChineseTitles, false);
   assert.deepEqual(f.events.filter(event => event.command === '/usr/bin/open').map(event => event.args), [[appPath]]);
-  for (const type of ['prepare','inspect','connect','runtime-create','native-install','attach','launch','mach']) assert.equal(f.count(type), 0, type);
+  assert.equal(f.count('prepare-title'), 0);
+  assert.equal(f.count('launch'), 0);
+});
+
+test('丢失启动记录时按桌面的实际子进程选择标题语言', async t => {
+  const f = fixture({contextOverridesEnabled:false, running:[[101, appExecutable], [202, titleBackendPath, 101],
+    [311, officialBackendPath, 1]]});
+  t.after(() => f.manager.dispose());
+  await f.manager.ready;
+  assert.equal(f.manager.getStatus().nativeChineseTitles, true);
+  f.behavior.running = [[101, appExecutable], [311, officialBackendPath, 1]];
+  assert.equal((await f.manager.refresh()).nativeChineseTitles, null);
+  f.behavior.running.push([203, officialBackendPath, 101]);
+  assert.equal((await f.manager.refresh()).nativeChineseTitles, false);
+  assert.deepEqual(f.statuses.map(status => status.nativeChineseTitles).slice(-3), [true, null, false]);
+});
+
+test('旧标题记录指向已脱离桌面的副本时选择实际的官方后端', async t => {
+  const f = fixture({contextOverridesEnabled:false, savedReceipt:{...receipt, purpose:'titles', helperBackendPath:titleBackendPath},
+    running:[[101, appExecutable], [202, titleBackendPath, 1], [203, officialBackendPath, 101]]});
+  t.after(() => f.manager.dispose());
+  await f.manager.ready;
+  assert.equal(f.count('connect'), 0);
+  assert.equal(f.manager.getStatus().nativeChineseTitles, false);
+});
+
+test('稳定窗口复用已确认的进程身份，新窗口重验父子进程和后端类型', async t => {
+  const f = fixture({contextOverridesEnabled:false, running:[[101, appExecutable], [202, officialBackendPath, 101]]});
+  t.after(() => f.manager.dispose());
+  await f.manager.ready;
+  const scans = () => f.events.filter(event => event.command === '/bin/ps').length;
+  const initial = scans();
+  assert.equal((await f.manager.refresh()).nativeChineseTitles, false);
+  assert.equal(scans(), initial);
+  f.behavior.running = [[101, appExecutable], [202, titleBackendPath, 101]];
+  assert.equal((await f.manager.refresh({verifyDesktop:true})).nativeChineseTitles, true);
+  assert.equal(scans(), initial + 1);
+  assert.equal((await f.manager.refresh({hasDesktopWindow:false})).nativeChineseTitles, null);
+  assert.equal(scans(), initial + 1);
+});
+
+test('管理连接失效时先暂停界面命名，仍运行的中文副本不能再命名一次', async t => {
+  const f = fixture({contextOverridesEnabled:false});
+  t.after(() => f.manager.dispose());
+  await f.manager.launch();
+  await f.sessions[0].ready;
+  const from = f.statuses.length;
+  f.sessions[0].transition('failed', new Error('fixture Inspector closed'));
+  assert.equal(f.manager.getStatus().nativeChineseTitles, null);
+  assert.equal((await f.manager.refresh()).nativeChineseTitles, true);
+  assert.ok(f.statuses.slice(from).every(status => status.nativeChineseTitles !== false));
+});
+
+test('原生标题不适配的版本仍打开官方应用并报告失败原因', async t => {
+  const f = fixture({contextOverridesEnabled:false});
+  t.after(() => f.manager.dispose());
+  f.behavior.titlePreparationError = new Error('当前版本的标题模板不匹配');
+  const reply = await f.manager.launch();
+  assert.equal(reply.launched, true);
+  assert.match(reply.message, /标题模板不匹配/);
+  assert.equal(f.manager.getStatus().nativeChineseTitles, false);
+  assert.equal(f.count('launch'), 0);
+  assert.equal(f.files.has(receiptPath), false);
+  assert.deepEqual(f.events.filter(event => event.command === '/usr/bin/open').map(event => event.args),
+    [['-a', appPath, '--args', '--remote-debugging-port=0']]);
 });
 
 test('disabled context policy removes an existing installation without reattaching or interrupting its App', async t => {

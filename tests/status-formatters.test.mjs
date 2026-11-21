@@ -39,6 +39,46 @@ function fixture(options = {}) {
 
 const runningSource = '(function runningFormatter(active) { const marker={toolSummary:active}; return active?"Running command":"Exploring"; })';
 
+test('scheduled task displays localize native intervals, weekdays, dates and times', () => {
+  const f = fixture();
+  f.evaluate(`
+    function summary(input) {
+      if (!input) return "Custom schedule";
+      if (input.minutes) return \`Every \${input.minutes} minutes\${input.days ? ' on '+input.days : ''}\`;
+      if (input.monthly) return \`Monthly on the \${input.monthly} at \${input.time}\`;
+      return input.text;
+    }
+    function nextRun(day,time,zone) {
+      return \`Next run \${day === "tomorrow" ? day : 'on '+day} around \${time}\${zone ? ' '+zone : ''}\`;
+    }
+    function runDate(day,time,{withTime:show = true} = {}) {
+      if (day === 0) return \`Today \${time}\`;
+      if (day === 1) return \`Tomorrow \${time}\`;
+      if (day === -1) return \`Yesterday \${time}\`;
+      return show ? day+', '+time : day;
+    }
+  `);
+  const original = f.window.summary;
+  const adapters = f.install();
+  assert.equal(f.window.summary({minutes:3}), '每 3 分钟');
+  assert.equal(f.window.summary({minutes:3,days:'Mon, Wed and Fri'}), '星期一、星期三、星期五，每 3 分钟');
+  assert.equal(f.window.summary({text:'Every hour at :15 on Fridays'}), '星期五，每小时第 15 分钟');
+  assert.equal(f.window.summary({text:'Every hour, 9 AM to 5 PM, on weekdays'}), '工作日，上午 9:00 至下午 5:00每小时');
+  assert.equal(f.window.summary({text:'Daily at 9:15 AM, 12:15 PM and 1:15 PM'}), '每天 上午 9:15、下午 12:15、下午 1:15');
+  assert.equal(f.window.summary({monthly:'2nd',time:'9:30 AM'}), '每月 2 日 上午 9:30');
+  assert.equal(f.window.summary({text:'Unknown schedule'}), 'Unknown schedule');
+  assert.equal(f.window.summary(null), '自定义排程');
+  assert.equal(f.window.nextRun('tomorrow','11:30 AM','EST'), '预计下次运行：明天 上午 11:30 EST');
+  assert.equal(f.window.nextRun('November 19','1:15 PM','UTC+8'), '预计下次运行：11 月 19 日 下午 1:15 UTC+8');
+  assert.equal(f.window.runDate(-1,'9:00 AM'), '昨天 上午 9:00');
+  assert.equal(f.window.runDate('Jul 6, 2025','1:15 PM'), '2025 年 7 月 6 日 下午 1:15');
+  assert.equal(f.window.runDate('Jul 6','1:15 PM',{withTime:false}), '7 月 6 日');
+  adapters.setStrings({'schedule-time:AM':'早上'});
+  assert.equal(f.window.runDate(0,'9:00 AM'), '今天 早上 9:00');
+  f.uninstall()();
+  assert.equal(f.window.summary,original);
+});
+
 test('closure loss falls back once, including cached wrapper references and native errors', () => {
   const f = fixture();
   const native = f.evaluate(`(() => {
@@ -483,7 +523,34 @@ test('notification defaults keep their links and debug callback while supplied e
   assert.equal(supplied.props['data-ch-keep'], true, 'the DOM pass also preserves the supplied message');
 });
 
-test('timer and agent-message titles translate at their native title owner while names and message content stay intact', () => {
+test('browser message rows keep agent lookup names and translate the displayed role and tooltip',()=>{
+  const f=nativeFixture();
+  f.evaluate(`
+    function roleName(a){return(a=a?.trim())&&a.toLowerCase()!=="browser"?a:"Browser Use"}
+    function displayRole(spec){
+      if (!spec.vetoed && spec.hadBrowserSuffix) return {conversationId:spec.id,resolvedRole:roleName(spec.role)};
+    }
+    function browserRow({title:a,canceled:b}){return A.createElement("div",null,
+      A.createElement("i",{"data-testid":b?"agent-status-canceled":"agent-status-done",faviconDataUrl:"icon"}),
+      A.createElement("span",{title:a},a))}
+  `);
+  f.install();
+  const roleFor=role=>f.window.displayRole({id:'browser-conversation',role,hadBrowserSuffix:true});
+  const render=(action,role)=>{
+    const input=action+' '+role;
+    const span=f.window.browserRow({title:input}).props.children[1];
+    assert.equal(span.props.title,span.props.children);
+    return span.props.children;
+  };
+  assert.equal(f.window.roleName('browser'),'Browser Use','the native name comparison stays unchanged');
+  assert.equal(roleFor('browser').conversationId,'browser-conversation');
+  assert.equal(render('Message from',roleFor('browser').resolvedRole),'来自 浏览器操作 的消息');
+  assert.equal(render('Messaged',roleFor('Browser Use').resolvedRole),'已发消息给 Browser Use');
+  assert.equal(render('Messaging',roleFor('Parent Agent').resolvedRole),'正在发消息给 Parent Agent');
+  assert.equal(render('Interrupted',roleFor('$&').resolvedRole),'已中断 $&');
+});
+
+test('timer titles translate while the native agent-message formatter retains routing text', () => {
   const f = nativeFixture();
   f.evaluate(`
     var titlePart = () => null;
@@ -522,9 +589,8 @@ test('timer and agent-message titles translate at their native title owner while
   assert.equal(header.props.customTitle, '30 seconds');
   assert.equal(f.window.summary({prefix:'Timing'}).props.children[0].props.text, '正在计时');
   const agent = 'Agent  $&  "Message from A" (research)';
-  assert.equal(f.window.formatTitle({title:'Message from '+agent}), '来自 '+agent+' 的消息');
-  assert.equal(f.window.formatTitle({title:'Message to '+agent}), '发给 '+agent+' 的消息');
-  assert.equal(f.window.formatTitle({title:'Message from Parent Agent'}), '来自父智能体的消息');
+  for (const title of ['Message from '+agent,'Message to '+agent,'Message from Parent Agent'])
+    assert.equal(f.window.formatTitle({title}),title);
   const recipient = Object.freeze({part:Object.freeze({case:'text',value:'Message from A'})});
   assert.equal(f.window.formatTitle({titleParts:[recipient],icon:'send',aggregationKey:'actions'}), 'Message from A', 'an identical agent name is data, not a notification template');
   const message = f.window.summary({prefix:'Messaged',content:agent,progressMessage:'Message from A'});
@@ -940,20 +1006,30 @@ test('render-info summary reuses plain titles while preserving structured data a
   const f=nativeFixture();
   f.evaluate(`var jCb=()=>null,Bf=uri=>uri.split('/').pop();`);
   f.evaluate("function kZ(a,b){var c=a?.titleParts??[];return c.length===0?a?.title||void 0:c.every(e=>e.part.case===\"text\")?c.map(e=>e.part.value).join(\" \")||void 0:A.createElement(\"span\",{className:\"inline-flex items-center gap-1 overflow-hidden text-muted-foreground\"},c.map((e,f)=>A.createElement(jCb,{key:f,part:e,diffContext:b})))};function uda(a){if(!a)return\"\";if(a){var b=[];var c=new Set;for(let e of a.titleParts??[])switch(e.part.case){case \"text\":e.part.value&&b.push(e.part.value);break;case \"file\":case \"fileDiff\":let f=e.part.value.uri;f&&!c.has(f)&&(c.add(f),b.push(Bf(f)));break;case \"agent\":e.part.value.title&&b.push(e.part.value.title)}b=b.length>0?b.join(\" \"):a.title??\"\"}else b=\"\";return(a=a.titlePrefix??\"\")&&b?`${a} ${b}`:b||a}");
-  f.install();
+  const adapters=f.install();
   const part=Object.freeze({part:Object.freeze({case:'text',value:'Message from Parent Agent'})});
   const data=Object.freeze({titlePrefix:'Ran',titleParts:Object.freeze([part]),title:'Message from Parent Agent'});
   assert.equal(f.window.uda(data),'已运行 Message from Parent Agent');
   assert.equal(data.titleParts[0],part);
   assert.equal(part.part.value,'Message from Parent Agent');
+  assert.equal(f.window.uda({title:'Message from Parent Agent'}),'来自父智能体的消息');
+  assert.equal(f.window.uda({title:'Message to External Agent'}),'发给 外部智能体 的消息');
   assert.equal(f.window.uda({titlePrefix:'Timed',title:'0.5s timer: Timer has expired'}),'已计时 0.5s timer: Timer has expired');
   assert.equal(f.window.uda({titlePrefix:'Custom prefix',title:'custom  title'}),'Custom prefix custom  title');
+  adapters.setStrings({'swarm-ui:Coordinator':'负责人'});
+  assert.equal(f.window.uda({title:'Message from @coordinator'}),'来自 @负责人 的消息');
 });
 
-test('agent and task list counts share native card and running-summary ownership without translating data',()=>{
-  const f=nativeFixture();
+test('managed tool cards and running summaries translate their own labels and preserve supplied content',()=>{
+  const f=nativeFixture({strings:{'builtin-agent:research:name':'研究者'}});
   f.evaluate(`
-    var part=()=>null,card=()=>null,body=()=>null;
+    var part=()=>null,card=()=>null,Markdown=({children})=>children;
+    function body({renderInfo,fallbackMarkdown}) {
+      if (renderInfo?.contentBlocks?.length) return A.createElement(A.Fragment,null,renderInfo.contentBlocks.map(({block},index)=>
+        block.case==="markdown" ? A.createElement(Markdown,{key:index,disableMath:!0},block.value) : null));
+      const text=renderInfo?.markdown||fallbackMarkdown;
+      return text ? A.createElement(Markdown,{disableMath:!0},text) : null;
+    }
     var transition=props=>A.createElement(A.Fragment,null,props.text);
     function title({prefix:p,content:c,progressMessage:g,customTitle:t,tooltipText:h}) {
       return A.createElement('div',{progressMessage:g,customTitle:t,tooltipText:h},typeof p==='string'?A.createElement(transition,{text:p}):p,c);
@@ -975,8 +1051,10 @@ test('agent and task list counts share native card and running-summary ownership
     }
     function generic(props) {
       const info=props.step.result.stepRenderInfo;
-      return A.createElement(card,{status:props.status,title:A.createElement(title,{prefix:info.titlePrefix,content:formatTitle(info)}),
-        supplementaryView:A.createElement('pre',null,props.step.result.output)});
+      const supplementaryView=info?.contentBlocks?.length||info?.markdown
+        ? A.createElement(body,{renderInfo:info,status:props.status})
+        : A.createElement('pre',null,props.step.result.output);
+      return A.createElement(card,{status:props.status,title:A.createElement(title,{prefix:info.titlePrefix,content:formatTitle(info)}),supplementaryView});
     }
     var registry={generic:{renderer:generic},systemMessage:{renderer:({step:a})=>{
       if(a.metadata?.auto_proceed_uri)return null;
@@ -1009,7 +1087,56 @@ test('agent and task list counts share native card and running-summary ownership
     return Object.freeze({step:Object.freeze({case:'generic',value}),metadata:Object.freeze({toolCall:Object.freeze({name:tool})})});
   };
   const render=(record,status)=>f.window.registry.generic.renderer({step:record.step.value,metadata:record.metadata,status});
+  function markdownText(slot) {
+    const body=slot.type(slot.props);
+    const markdown=body.type===f.window.A.Fragment ? body.props.children[0] : body;
+    return markdown.type(markdown.props);
+  }
+  const messageText='Message from Parent Agent\n**Summary:** user text';
+  const quoted='> '+messageText.replaceAll('\n','\n> ');
+  const messageBlock=Object.freeze({block:Object.freeze({case:'markdown',value:quoted})});
+  for (const [prefix,target,expected,recipient] of [
+    ['Messaging','Parent Agent','父智能体','parent-id'],
+    ['Messaged','Parent Agent','父智能体','parent-id'],
+    ['Messaged','Root Agent','根智能体','root-id'],
+    ['Messaged','External Agent','外部智能体','peer-id'],
+    ['Messaged','3 subagents','3 个子智能体','@children'],
+    ['Messaged','Parent Agent $& (research)','Parent Agent $&（研究者）','child-id'],
+    ['Messaged','Parent Agent (custom)','Parent Agent (custom)','child-id'],
+  ]) {
+    const record=list('send_message',target,{titlePrefix:prefix,icon:'send',contentBlocks:[messageBlock]}, {Recipient:recipient,Message:messageText});
+    const card=render(record,2);
+    assert.equal(card.props.title.props.content,expected);
+    assert.equal(f.window.running(record),(prefix==='Messaging'?'正在发消息给 ':'已发消息给 ')+expected);
+    assert.equal(markdownText(card.props.supplementaryView),quoted);
+    assert.equal(record.step.value.result.stepRenderInfo.titleParts[0].part.value,target);
+  }
+  const legacySummary='Parent Agent $&';
+  const legacyMarkdown='**Summary:** *'+legacySummary+'*\n***\n'+quoted;
+  const oldMessage=list('send_message','',{title:'Parent Agent',titleParts:[],titlePrefix:'Messaged',icon:'send',aggregationKey:'',markdown:legacyMarkdown},
+    {Recipient:'parent-id',Message:messageText,MessageSummary:legacySummary});
+  const oldCard=render(oldMessage,2);
+  assert.equal(oldCard.props.title.props.content,'父智能体');
+  assert.equal(markdownText(oldCard.props.supplementaryView),'**摘要：** *'+legacySummary+'*\n***\n'+quoted);
+  assert.equal(oldMessage.step.value.result.stepRenderInfo.markdown,legacyMarkdown);
+  const customMessage=list('custom_message','Parent Agent',{titlePrefix:'Messaged',icon:'send'}, {});
+  assert.equal(render(customMessage,2).props.title.props.content,'Parent Agent');
+  for (const [raw,expected] of [
+    ['Message from Parent Agent','来自父智能体的消息'],
+    ['Message to Root Agent','发给 根智能体 的消息'],
+    ['Message from Role $& (research)','来自 Role $&（研究者） 的消息'],
+    ['Message from @coordinator','来自 @协调员 的消息'],
+    ['Message to @coordinator-helper','发给 @coordinator-helper 的消息'],
+  ]) {
+    const info=Object.freeze({title:raw,contentBlocks:[messageBlock]});
+    const step={message:messageText,renderInfo:info};
+    const card=f.window.registry.systemMessage.renderer({step});
+    assert.equal(card.props.trigger.props.content,expected);
+    assert.equal(markdownText(card.props.children),quoted);
+    assert.equal(f.window.formatTitle(info),raw);
+  }
   for(const [record,expected] of [
+    [list('manage_subagents','subagents'),'子智能体'],
     [list('manage_subagents','11 subagents'),'11 个子智能体'],
     [list('manage_subagents','4 subagents',{titlePrefix:'Killed'},{Action:'kill',Name:'self'}),'4 个子智能体'],
     [list('manage_subagents','4 subagents',{titlePrefix:'Killed'},{Action:'kill_all',Name:'self'}),'4 个子智能体'],
@@ -1032,6 +1159,10 @@ test('agent and task list counts share native card and running-summary ownership
     assert.equal(f.window.formatTitle(record.step.value.result.stepRenderInfo),record.step.value.result.stepRenderInfo.titleParts[0].part.value,'the shared title formatter does not translate unscoped text parts');
   }
   const reference=Object.freeze({block:Object.freeze({case:'agent',value:Object.freeze({conversationId:'owned-agent',title:'subagent',subtitle:''})})});
+  for (const [record,expected] of [
+    [list('manage_subagents','subagents',{titlePrefix:'Finding'},{action:'list_peers'}),'正在查找 子智能体'],
+    [list('manage_task','tasks',{titlePrefix:'Listing'}),'正在列出 任务']
+  ]) assert.equal(f.window.running(record),expected);
   for(const [prefix,translated] of [['Found','已找到'],['Killed','已终止']]) {
     const raw=list('manage_subagents','subagent',{titlePrefix:prefix,contentBlocks:Object.freeze([reference])});
     const record={...raw,step:{...raw.step,value:{...raw.step.value,args:Object.freeze({})}}};
@@ -1053,6 +1184,33 @@ test('agent and task list counts share native card and running-summary ownership
     assert.equal(f.window.running(record),'已列出 '+expected);
     assert.equal(info.titleParts[0].part.value,count);
     assert.equal(render(record,2).props.supplementaryView.props.children,'11 subagents\n1 task');
+  }
+  const legacyAgents=list('manage_subagents','',{title:'subagents',titleParts:[],aggregationKey:'subagents'});
+  function withResult(record,result) {
+    const value=record.step.value;
+    return {...record,step:{...record.step,value:{...value,result:{...value.result,result}}}};
+  }
+  const emptyAgents=withResult(legacyAgents,'You have 0 active subagent(s):\n[]');
+  const namedAgent=withResult(legacyAgents,'You have 1 active subagent(s):\n[{"role":"subagents"}]');
+  assert.equal(render(emptyAgents,2).props.title.props.content,'子智能体');
+  assert.equal(f.window.running(emptyAgents),'已找到 子智能体');
+  assert.equal(render(namedAgent,2).props.title.props.content,'subagents');
+  const detailsStart='<details>\n<summary>View task details</summary>\n\n| Start Time | Task ID | Tool | Description |';
+  const rows='\n|---|---|---|---|\n| 09:00 | `task-7` | `run_command` | View task details $& |\n</details>';
+  const detailedTask=list('manage_task','',{title:'1 task',titleParts:[],aggregationKey:'',markdown:detailsStart+rows});
+  const expanded=render(detailedTask,2);
+  assert.equal(expanded.props.title.props.content,'1 个任务');
+  assert.equal(expanded.props.supplementaryView.props.renderInfo.markdown,
+    '<details>\n<summary>查看任务详情</summary>\n\n| 开始时间 | 任务 ID | 工具 | 说明 |'+rows);
+  assert.equal(detailedTask.step.value.result.stepRenderInfo.markdown,detailsStart+rows);
+  const statusLine='**Status**: RUNNING • **Last progress**: 2s ago';
+  const log='\n\n```\n**Status**: RUNNING\n*No log output recorded yet.*\n```';
+  for (const [body,expected] of [[log,log],['\n\n*No log output recorded yet.*','\n\n*暂无日志输出。*']]) {
+    const record=list('manage_task','My task',{titlePrefix:'Checked task',
+      contentBlocks:[{block:{case:'markdown',value:statusLine+body}}]},{Action:'status'});
+    const card=render(record,2);
+    assert.equal(card.props.title.props.content,'My task');
+    assert.equal(card.props.supplementaryView.props.renderInfo.contentBlocks[0].block.value,'**状态**：运行中 • **最近进展**：2 秒前'+expected);
   }
   const good=list('manage_subagents','11 subagents');
   const wrongAction={...good,step:{...good.step,value:{...good.step.value,args:{Action:'read',Name:'self'}}}};
@@ -1094,9 +1252,13 @@ test('agent and task list counts share native card and running-summary ownership
     ['swarm','robot_2','Killed','3 workers (@fix-b1-r2-1–@fix-b1-r2-3)','3 个执行成员（@fix-b1-r2-1–@fix-b1-r2-3）','已终止'],
     ['swarm','robot_2','Killed','worker @s2-b1','执行成员 @s2-b1','已终止'],
     ['swarm','robot_2','Checked','swarm status (A5 Stage 5.4b Round-2 Fixes)','协作群状态（A5 Stage 5.4b Round-2 Fixes）','已检查'],
+    ['swarm','robot_2','Checked','swarm status','协作群状态','已检查'],
+    ['swarm','robot_2','Listed','suggested swarm models','推荐的协作群模型','已列出'],
     ['read_board','forum','Read','1 message from board (#2)','1 条留言板消息（#2）','已读取'],
+    ['read_board','forum','Read','1 message from #design (#2)','#design 频道的 1 条消息（#2）','已读取'],
     ['read_board','forum','Read','board (0 messages)','留言板（0 条消息）','已读取'],
     ['post_message','send','Posted','#3 to board','留言板消息 #3','已发布'],
+    ['post_message','send','Posted','#3 to #design','#design 频道消息 #3','已发布'],
     ['swarm_wait','timer','Waiting','for board messages after #3','#3 之后的留言板消息','正在等待'],
     ['swarm_wait','timer','Waiting','for @mentions after #2','#2 之后的 @提及','正在等待']
   ]) {
@@ -1107,6 +1269,29 @@ test('agent and task list counts share native card and running-summary ownership
     assert.equal(record.step.value.result.stepRenderInfo.titlePrefix,prefix);
     assert.equal(record.step.value.result.stepRenderInfo.titleParts[0].part.value,text);
     assert.equal(render(record,2).props.supplementaryView.props.children,'11 subagents\n1 task');
+  }
+  const empty='No swarm yet.';
+  const emptyBlock=Object.freeze({block:Object.freeze({case:'markdown',value:empty})});
+  for(const source of [{markdown:empty},{contentBlocks:Object.freeze([emptyBlock])}]) {
+    const record=list('swarm','swarm status',{icon:'robot_2',titlePrefix:'Checked',...source},{action:'status'});
+    assert.equal(markdownText(render(record,2).props.supplementaryView),'暂无协作群。');
+    const supplied=list('read_board','1 message from board (#2)',{icon:'forum',titlePrefix:'Read',...source},{});
+    assert.equal(markdownText(render(supplied,2).props.supplementaryView),empty,'the identical text in a board post is supplied by a member');
+    assert.equal(source.contentBlocks?.[0].block.value??source.markdown,empty);
+    assert.equal(record.step.value.result.output,'11 subagents\n1 task');
+  }
+  const channelTable='| channel | topic | created by | members |\n|---|---|---|---|\n| #main | everyone | — | all |\n| #status (archived) | everyone (archived) | waiting | 2 |\n';
+  const readStatus='| member | state | parked on | last post |\n|---|---|---|---|\n| working | working | anything after #5 | #3 working |\n';
+  const roster='- **@worker** (worker, Model — waiting, last seen just now) — waiting, last seen just now in `/tmp/worker — waiting, last seen just now`\n\n1 agent(s), 1 waiting\nchannels: #main, #docs (archived)\nboard: spanner (working)';
+  for (const [tool,heading,prefix,markdown,expected] of [
+    ['swarm','channels','Listed',channelTable,'| 频道 | 主题 | 创建者 | 成员数 |\n|---|---|---|---|\n| #main | 所有人 | — | 全体成员 |\n| #status（已归档） | everyone (archived) | waiting | 2 |\n'],
+    ['read_board','swarm status (board #5)','Read',readStatus,'| 成员 | 状态 | 等待条件 | 最后留言 |\n|---|---|---|---|\n| working | 执行中 | #5 之后的任意消息 | #3 working |\n'],
+    ['swarm','2 worker(s)','Killed','fix-1 on Mac, fix-2 on linux: killed on the board, so their board tools refuse from now on; each conversation there stops when its current turn ends.','已在留言板上终止 fix-1（Mac）, fix-2（linux）。这些成员已无法使用留言板工具，各自的对话将于当前轮次结束时停止。'],
+    ['swarm','swarm status (working)','Checked',roster,'- **@worker** (执行成员, Model — waiting, last seen just now) — 等待中，刚刚在线，位置 `/tmp/worker — waiting, last seen just now`\n\n1 个智能体，1 个等待中\n频道：#main, #docs（已归档）\n留言板：spanner (working)']
+  ]) {
+    const record=list(tool,heading,{titlePrefix:prefix,icon:tool==='swarm'?'robot_2':'forum',markdown},{});
+    assert.equal(markdownText(render(record,2).props.supplementaryView),expected);
+    assert.equal(record.step.value.result.stepRenderInfo.markdown,markdown);
   }
   const timerRecord=list('timer','1m 30s',{icon:'timer',titlePrefix:'Timed',aggregationKey:'timers'},{});
   assert.equal(render(timerRecord,2).props.title.props.content,'1 分钟 30 秒');
@@ -1128,6 +1313,33 @@ test('agent and task list counts share native card and running-summary ownership
   assert.equal(unrelated.props.trigger.props.content,'Resumed '+resumedText);assert.equal(unrelated.props.children.props.renderInfo,resumedInfo);
   const mismatchedInfo={...resumedInfo,contentBlocks:[{block:{case:'markdown',value:resumedBody.replace('#6–#7','#8')}}]};
   assert.equal(f.window.registry.systemMessage.renderer({step:{...resumedStep,renderInfo:mismatchedInfo}}).props.trigger.props.content,'Resumed '+resumedText);
+  const singleText='wait — new board message (#6)';
+  const singleBody='Board message #6 arrived before waiting completed; reading the board before waiting again.';
+  const singleInfo={...resumedInfo,titleParts:[{part:{case:'text',value:singleText}}],contentBlocks:[{block:{case:'markdown',value:singleBody}}]};
+  const single=f.window.registry.systemMessage.renderer({step:{...resumedStep,renderInfo:singleInfo}});
+  assert.equal(single.props.trigger.props.content,'已结束等待：新留言板消息（#6）');
+  assert.equal(markdownText(single.props.children),'留言板消息 #6 在等待完成前已到达；请先读取留言板，再继续等待。');
+  assert.equal(singleInfo.contentBlocks[0].block.value,singleBody);
+  const model='Gemini $& {member}';
+  const workerHint='If your assignment is unfinished, carry on with it where you left off; otherwise call swarm_wait.';
+  const translatedHint='如果任务尚未完成，请从上次停下的地方继续。如果已经完成，请调用 swarm_wait。';
+  for(const [message,expected] of [
+    [`You switched to the model ${model}. Continue coordinating the swarm from where you left off.`,`你已切换到模型 ${model}。请接着协调协作群的工作。`],
+    [`You switched to the model ${model}. ${workerHint}`,`你已切换到模型 ${model}。${translatedHint}`],
+    [`The coordinator switched you to the model ${model}. ${workerHint}`,`协调员已将你的模型切换为 ${model}。${translatedHint}`],
+    [`@lead_2 switched you to the model ${model}. ${workerHint}`,`@lead_2已将你的模型切换为 ${model}。${translatedHint}`]
+  ]) {
+    const info={title:'Model switched',contentBlocks:[{block:{case:'markdown',value:message}}]};
+    const show=step=>f.window.registry.systemMessage.renderer({step});
+    const switched=show({message,renderInfo:info});
+    assert.equal(switched.props.trigger.props.content,'模型已切换');
+    assert.equal(markdownText(switched.props.children),expected);
+    assert.equal(switched.props.children.props.fallbackMarkdown,message);
+    assert.equal(info.contentBlocks[0].block.value,message);
+    const ordinary=show({message,renderInfo:info,eventType:'another_event'});
+    assert.equal(ordinary.props.trigger.props.content,'Model switched');
+    assert.equal(ordinary.props.children.props.renderInfo,info);
+  }
   for(const [prefix,expected] of [['Checked task','已检查任务'],['Killed task','已终止任务']]) {
     const name='Task  $&  "self"';
     const result=f.window.title({prefix,content:name});
@@ -1550,6 +1762,7 @@ test('official plugin detail localizes display owners while preserving source ob
     [`${prefix}readme:Read [calendar docs](https://example.com/calendar) with \`gcalendar\`.`]:'使用 `gcalendar` 阅读[日历文档](https://example.com/calendar)。',
     [`${prefix}readme:Do not change code`]: '这段代码不能翻译',
     [`${prefix}skill-description:Manage calendar events.`]:'管理日历活动。',
+    [`${prefix}skill-name:gcalendar`]:'Google 日历',
     [`${prefix}prompt:Find a time tomorrow`]: '查找明天的空闲时间'
   };
   const f=nativeFixture({strings});
@@ -1558,7 +1771,7 @@ test('official plugin detail localizes display owners while preserving source ob
     var detailFind=(id,items)=>items;
     var detailLocalLookup=function detailLocalLookup(a){const b={installedPlugins:detailState.local};detailState.lookupArgs.push(a);return{plugin:detailFind(a,b.installedPlugins),isLoading:b.isLoadingPlugins,refetch:b.refresh};};
     var detailCatalogLookup=function detailCatalogLookup(a){const b={installedPlugins:detailState.installed};detailState.lookupArgs.push(a);return{plugin:detailFind(a,b.installedPlugins),isLoading:b.isLoadingPlugins,refetch:b.refresh};};
-    var detailProvenance=function detailProvenance({entry}){const depotPath='http://cs/';return null;};
+    var detailMetadata=function detailMetadata({installedPlugin:a,catalogEntry:b,pluginPreview:c}){return A.createElement('footer',{'data-testid':"plugin-detail-footer"});};
     var detailMarkdown=()=>null,detailDoc=()=>null;
     var detailSkills=function detailSkills({skills:a,showPaths:b}){return A.createElement('div',null,a.map(skill=>A.createElement(detailDoc,{title:'/'+skill.name,description:skill.description.trim(),content:skill.content,copyPath:b?skill.path:void 0})));};
     var detailOverview=function detailOverview({plugin:a,otherSidecars:b}){const hooksJson=a.hooksJson;return A.createElement('section',{'aria-label':"Readme"},A.createElement(detailMarkdown,{markdown:a.readme,baseDirUri:a.path}),A.createElement(detailSkills,{skills:a.skills,showPaths:false}));};
@@ -1566,7 +1779,7 @@ test('official plugin detail localizes display owners while preserving source ob
     var detailPage=function detailPage({catalogId:a,entry,preview,activeTab='overview',onPromptSelected}) {
       detailState.hooks++;
       const local=detailLocalLookup('file:///plugin'),installed=detailCatalogLookup(entry),plugin=local.plugin??installed.plugin??preview;
-      return A.createElement('div',null,A.createElement('h1',null,entry.displayName),A.createElement(detailProvenance,{entry}),A.createElement('p',null,entry.description),
+      return A.createElement('div',null,A.createElement('h1',null,entry.displayName),A.createElement(detailMetadata,{installedPlugin:local.plugin??installed.plugin,catalogEntry:entry,pluginPreview:preview}),A.createElement('p',null,entry.description),
         A.createElement(detailPrompts,{prompts:plugin.suggestedPrompts,skills:plugin.skills,onPromptSelected}),
         A.createElement('div',{id:'plugin-detail-tabpanel'},activeTab==='overview'?A.createElement(detailOverview,{plugin,otherSidecars:[],isInstalled:!!(local.plugin??installed.plugin)}):A.createElement(detailSkills,{skills:plugin.skills,showPaths:true})));
     };
@@ -1597,7 +1810,7 @@ test('official plugin detail localizes display owners while preserving source ob
   assert.equal(overview[0].props.baseDirUri,preview.path);
   const doc=f.window.detailSkills(overview[1].props).props.children[0];
   assert.equal(doc.props.description,'管理日历活动。');
-  assert.equal(doc.props.title,'/gcalendar');
+  assert.equal(doc.props.title,'/gcalendar（Google 日历）');
   assert.equal(doc.props.content,skill.content,'skill instructions remain original');
   assert.equal(skill.description,'Manage calendar events.');
   assert.equal(entry.displayName,'Google Calendar');
@@ -1617,6 +1830,41 @@ test('official plugin detail localizes display owners while preserving source ob
   f.uninstall()();
   assert.equal(f.window.detailPage,originalPage);
   assert.equal(f.window.detailSkills,originalSkills);
+});
+
+test('composer Drive actions and built-in skill rows translate only their native display fields', () => {
+  const f=nativeFixture({strings:{
+    'builtin-skill:automation:name:automation':'自动化',
+    'builtin-skill:automation:description:Manage automations.':'管理自动化。'
+  }});
+  f.evaluate(`
+    var driveAction=()=> 'open official setup',driveMenu=()=>null;
+    function composerFooter({onOpenDrivePlugin:setup,items}) {
+      const row={label:"Drive",trailingComponent:A.createElement("span",null,"Set up"),onClick:setup};
+      return A.createElement("div",{className:"agy-composer-footer"},A.createElement(driveMenu,{items:[[row,...items]],onOpenChange:()=>{}}));
+    }
+    function skillRow(a,b) {
+      return {key:\`skill-\${a.path}\`,name:'/'+a.name,description:a.description,content:a.content,badge:A.createElement('span',null),actions:b};
+    }
+  `);
+  const source={label:'Connectors'},action=f.window.driveAction,adapters=f.install();
+  const menu=f.window.composerFooter({onOpenDrivePlugin:action,items:[source]}).props.children;
+  const [drive,other]=menu.props.items[0];
+  assert.equal(drive.label,'Google 云端硬盘');
+  assert.equal(drive.trailingComponent.props.children,'设置');
+  assert.equal(drive.onClick,action);
+  assert.equal(other,source);
+  const skill=Object.freeze({name:'automation',path:'file:///Users/example/.gemini/antigravity/builtin/skills/automation/SKILL.md',description:'Manage automations.',content:'Original instructions'});
+  const row=f.window.skillRow(skill,action);
+  assert.equal(row.name,'/automation（自动化）');
+  assert.equal(row.description,'管理自动化。');
+  assert.equal(row.actions,action);
+  assert.equal(row.content,skill.content);
+  const custom=f.window.skillRow({...skill,path:'file:///project/.agents/skills/automation/SKILL.md'},action);
+  assert.equal(custom.name,'/automation');
+  assert.equal(custom.description,skill.description);
+  adapters.setStrings({'composer-drive:Set up':'配置'});
+  assert.equal(f.window.composerFooter({onOpenDrivePlugin:action,items:[]}).props.children.props.items[0][0].trailingComponent.props.children,'配置');
 });
 
 
@@ -1798,6 +2046,28 @@ function builtinAgentOwnerFixture(strings) {
   f.evaluate("var TZb=({workspaceUris:a,onOpenFile:b,onOpenAgentConfig:c,onToggleAgent:e,onDeleteAgent:f,plugins:g,onRefreshPlugins:h,onOpenPluginConfig:k,onTogglePlugin:l,onDeletePlugin:m,scrollable:n=!0,showGlobalOnly:p=!1})=>{var {data:r,isLoading:t,error:u,refresh:v}=LZb(a),w=gj().get(\"copyFilePath\"),x=(0,A.useCallback)(K=>{w?.copy?.(void 0,K)},[w]),y=p?r.skills.filter(K=>K.isGlobal):r.skills,B=p?r.rules.filter(K=>K.isGlobal):r.rules,D=p?r.agents.filter(K=>K.isGlobal):r.agents,C=p?(g??[]).filter(K=>K.isGlobal):\ng??[];g=y.length+B.length+D.length+C.length;var E=a.length>1,G=(0,A.useCallback)(async(K,L)=>{var M=d,O=d;try{O(await M(e?.(K,L))),v()}finally{M()}},[e,v]),F=(0,A.useCallback)(async K=>{var L=d,M=d;try{M(await L(f?.(K))),v()}finally{L()}},[f,v]),H=(0,A.useCallback)(async(K,L)=>{var M=d,O=d;try{let N=O(await M(l?.(K,L)));O(await M(h?.()));return N??null}finally{M()}},[l,h]),J=(0,A.useCallback)(async K=>{var L=d,M=d;try{let O=M(await L(m?.(K)));M(await L(h?.()));return O??null}finally{L()}},[m,h]);\nreturn t?A.createElement(\"div\",{className:\"flex items-center gap-2 py-4 text-sm opacity-60\"},A.createElement(NB,{className:\"w-4 h-4\"}),\"Loading workspace customizations...\"):u?A.createElement(\"div\",{className:\"flex items-center gap-2 text-sm text-red-400 py-2\"},A.createElement(Z,{name:\"error\",className:\"w-4 h-4 shrink-0\"}),u):g===0?null:A.createElement(\"div\",{\"data-testid\":\"workspace-customizations-view\",className:`flex flex-col gap-6 ${n?\"overflow-y-auto max-h-[400px]\":\"\"}`},y.length>0&&A.createElement(I2,\n{title:\"Skills\",count:y.length,collapsible:!0},A.createElement(SZb,{items:y,renderItem:(K,L)=>A.createElement(PZb,{key:K.path,item:K,onOpenFile:b,onCopyPath:x,isLast:L,showBadge:E})})),B.length>0&&A.createElement(I2,{title:\"Rules\",count:B.length,collapsible:!0},A.createElement(SZb,{items:B,renderItem:(K,L)=>A.createElement(PZb,{key:K.path,item:K,onOpenFile:b,onCopyPath:x,isLast:L,showBadge:E})})),C.length>0&&A.createElement(I2,{title:\"Plugins\",count:C.length,collapsible:!0},A.createElement(\"div\",\n{className:\"border border-border rounded-xl overflow-hidden\"},C.map((K,L)=>A.createElement(RZb,{key:K.name,plugin:K,onOpenPluginConfig:k,onTogglePlugin:H,onDeletePlugin:J,onCopyPath:x,isLast:L===C.length-1})))),D.length>0&&A.createElement(I2,{title:\"Custom Agents\",count:D.length,collapsible:!0},A.createElement(SZb,{items:D,renderItem:(K,L)=>A.createElement(QZb,{key:K.path,item:K,onOpenAgentConfig:c,onToggleAgent:G,onDeleteAgent:F,onCopyPath:x,isLast:L,showBadge:E})})))};");
   return f;
 }
+
+test('current composer agent badges translate built-in names and keep custom names in the label and tooltip',()=>{
+  const {strings,rows}=builtinAgentTestCatalog(),f=builtinAgentOwnerFixture(strings);
+  f.evaluate(f.window.rbc.toString().replace('function rbc','function currentBadge').replace('text-xs select-none','text-sm select-none'));
+  f.evaluate(`function selectedChip({agent:a}){
+    return a?A.createElement(A.Fragment,null,
+      A.createElement("span",{"data-testid":"selected-agent-chip"},A.createElement("span",null,A.createElement(Tz,null,"Agent: "),a.name)),
+      A.createElement(Mz,{id:"tooltip"},"Agent: ",a.name,". Change it in the model menu.")):null;
+  }`);
+  f.install();
+  const research=rows.find(row=>row.type==='research');
+  for(const [agent,name] of [[builtinAgentTestScript(research),research.name],
+    [builtinAgentTestScript(research,{pluginName:'my-plugin'}),research.type]]) {
+    assert.equal(f.window.currentBadge({conversationAgentScript:agent,isSubagent:true}).props.children[1].props.children,name);
+    const [chip,tooltip]=f.window.selectedChip({agent}).props.children;
+    const [accessiblePrefix,visibleName]=chip.props.children.props.children;
+    assert.equal(accessiblePrefix.props.children,'智能体：');
+    assert.equal(visibleName,name);
+    assert.equal(tooltip.props.children.join(''),'智能体：'+name+'。可在模型菜单中更改。');
+    assert.equal(agent.name,research.type);
+  }
+});
 
 test('all built-in agent badges and selector labels localize display only, retaining validation and selection',()=>{
   const {strings,rows}=builtinAgentTestCatalog(),f=builtinAgentOwnerFixture(strings);
@@ -2063,6 +2333,30 @@ test('subagent tab metadata localizes only the explicit typeName fallback and pr
   adapters.setStrings({...strings,[`builtin-agent:${row.type}:name`]:'updated tab type'});
   assert.equal(f.window.Tic('conversation'),'updated tab type');
   f.uninstall()();assert.equal(f.window.Tic,original);assert.equal(f.window.Tic('conversation'),row.type);
+});
+
+test('subagent view and search show the built-in type fallback while navigation retains the native title',()=>{
+  const f=nativeFixture({strings:{'builtin-agent:research:name':'研究者'}});
+  f.evaluate(`
+    var rows={},state={trajectorySummaries:{summaries:rows}},select=fn=>fn(state);
+    function summarize(a){var b=a.trajectoryMetadata?.subagentSpec;return{subagentName:b?.typeName||"Subagent",toolSummary:b?.role||b?.typeName||a.summary}}
+    var readAgent=a=>select(b=>{var row=b.trajectorySummaries.summaries[a];return row&&{parentId:row.parent,...summarize(row)}});
+    function tab(a){var b=a?.title;a=readAgent(a?.childCascadeId)?.toolSummary||b||"Subagent";return A.createElement("span",{"data-testid":"subagent-tab-header-title",title:a},a)}
+    function search({trimmedQuery:q}){
+      var X=Object.entries(rows).map(([id,a])=>({conversationId:id,title:a.trajectoryMetadata?.subagentSpec?.role||a.trajectoryMetadata?.subagentSpec?.typeName||"Subagent"})),Y=[];
+      X.filter(t=>t.title.toLowerCase().includes(q)).slice(0,5).forEach(t=>{Y.push({key:\`subagent__\${t.conversationId}\`,group:"Subagents",label:t.title,onSelect:()=>({title:t.title,id:t.conversationId})})});return Y;
+    }
+  `);
+  const row=(role,typeName)=>({trajectoryMetadata:{subagentSpec:{role,typeName}}});
+  Object.assign(f.window.rows,{typed:row('','research'),named:row('research','research'),custom:row('','mine')});
+  f.install();
+  for(const [id,display] of [['typed','研究者'],['named','research'],['custom','mine']])
+    assert.equal(f.window.tab({childCascadeId:id}).props.title,display);
+  assert.equal(f.window.tab({childCascadeId:'missing',title:'research'}).props.title,'research');
+  assert.equal(f.window.summarize(f.window.rows.typed).toolSummary,'research');
+  assert.deepEqual(Array.from(f.window.search({trimmedQuery:'research'}),r=>r.label),['研究者','research']);
+  const [result]=f.window.search({trimmedQuery:'研究'});
+  assert.equal(result.onSelect().title,'research');assert.equal(result.onSelect().id,'typed');
 });
 
 test('accumulated fallback localizes before composition while supplied labels titles keys and content stay native', () => {
@@ -2461,7 +2755,7 @@ test('current native menu and confirm boundaries preserve supplied group names a
   environment.confirm=function(...args){calls.confirm.push({receiver:this,args});return false};
   environment.electronNative={showContextMenu:items=>{calls.menus.push(items);return Promise.resolve(null)}};
   const context=vm.createContext(environment);
-  vm.runInContext(`let strings,normalizedStrings;const nativeMenuHooks=[];const projectPlaceholders=new Set();var lSa=value=>value;
+  vm.runInContext(`let strings,translationIndex;const nativeMenuHooks=[];const projectPlaceholders=new Set();var lSa=value=>value;
     ${renderer.slice(start,end)}
     ${notificationAuditSources.MD}\n${notificationAuditSources.mSa}\n${notificationAuditSources.nSa}
     setStrings(dictionary);installNativeMenuHooks();`,context);
@@ -4064,6 +4358,7 @@ test('native generated defaults preserve real Scratchpad files and Rule names, i
   // fixed fallback and the original rule/content objects remain untouched.
   f.evaluate("function qnc(t){return t.map(Ja=>{var Qa=ER(Ja.absolutePath);return{key:`rule-${Qa||Ja.memoryId}`,name:Ja.title||GR(Ja.absolutePath)||\"Rule\",path:Qa,content:Ja.content}})}");
   f.evaluate('var sideTitles=new Map(),Ak=select=>select(sideTitles),Xt=(state,parent,id)=>state.get(parent+":"+id); function sideName(a,b){return Ak(c=>Xt(c,a,b)??"Side Question")}');
+  f.evaluate('function sideQuote(a){return A.createElement("span",{"data-testid":"side-question-quote-pill"},a.title||"Side Question",a.quote)}');
   const originalFile=f.window.EB,originalRows=f.window.qnc,originalSideName=f.window.sideName;
   const content=Object.freeze({text:'Rule / Scratchpad'});
   const rules=Object.freeze([
@@ -4083,6 +4378,8 @@ test('native generated defaults preserve real Scratchpad files and Rule names, i
   assert.equal(savedSideName('parent','missing'),'临时问题');
   f.window.sideTitles.set('parent:named','Side Question');
   assert.equal(savedSideName('parent','named'),'Side Question','an actual side question title is data, even when it matches the fallback');
+  assert.deepEqual(Array.from(f.window.sideQuote({quote:'Side Question'}).props.children),['临时问题','Side Question']);
+  assert.deepEqual(Array.from(f.window.sideQuote({title:'Side Question',quote:'Text'}).props.children),['Side Question','Text']);
   f.uninstall()();
   assert.equal(f.window.EB,originalFile);assert.equal(f.window.qnc,originalRows);
   assert.equal(savedFile({path:'/fixture/scratchpad_a1.md'}),'Scratchpad');
@@ -4138,6 +4435,40 @@ test('side-question default tabs, headers and new-tab actions preserve real name
   assert.equal(f.window.sideTabs.sideQuestionView.getTabTitle,original.tab);
   assert.equal(f.window.sideHeader,original.header);assert.equal(f.window.sideNewTab,original.actions);
   assert.equal(tab(existing),'Side Question','cached display wrappers stop translating after uninstall');
+});
+
+test('side-question origin translates both source modes without changing quotes or navigation', () => {
+  const f=nativeFixture();
+  f.evaluate(`
+    function sideOrigin({excerpt,isMidTurn,subagent,onClick}) {
+      const prefix=isMidTurn?"Started during":"Started from";
+      const source=excerpt?\`“\${excerpt}”\`:subagent?"the subagent conversation":"the main conversation";
+      const destination=subagent?"subagent conversation":"main conversation";
+      const title=\`\${prefix} \${source}\`;
+      return A.createElement("button",{"data-testid":"side-question-origin",title,"aria-label":\`\${title}. Show in \${destination}\`,onClick},
+        A.createElement("svg",null),A.createElement("span",null,prefix),A.createElement("span",null,source),A.createElement("span",null,"Show"));
+    }
+  `);
+  const original=f.window.sideOrigin;
+  const adapters=f.install(),onClick=()=>{};
+  const excerpt='the main conversation  $&\nStarted during';
+  const quoted=f.window.sideOrigin({excerpt,onClick});
+  assert.deepEqual(Array.from(quoted.props.children.slice(1),child=>child.props.children),['源自',`“${excerpt}”`,'查看']);
+  assert.equal(quoted.props.title,`源自“${excerpt}”`);
+  assert.equal(quoted.props['aria-label'],`源自“${excerpt}”。在主对话中查看`);
+  assert.equal(quoted.props.onClick,onClick);
+  for (const [subagent,source,destination] of [[false,'主对话','在主对话中查看'],[true,'子代理对话','在子代理对话中查看']]) {
+    const button=f.window.sideOrigin({isMidTurn:true,subagent});
+    assert.equal(button.props.children[2].props.children,source);
+    assert.equal(button.props.title,`发起于${source}`);
+    assert.equal(button.props['aria-label'],`发起于${source}。${destination}`);
+  }
+  adapters.setStrings({'Started from':'来源','side-question-origin:Show':'跳转'});
+  const updated=f.window.sideOrigin({});
+  assert.equal(updated.props.title,'来源主对话');
+  assert.equal(updated.props.children[3].props.children,'跳转');
+  f.uninstall()();
+  assert.equal(f.window.sideOrigin,original);
 });
 
 
@@ -4427,14 +4758,15 @@ test('native default names and approval status preserve supplied names, task pay
     var kl=()=>fixtureNoop,jl=()=>({getState:()=>({})}),EF=()=>fixtureNoop,GH=()=>fixtureNoop;
     var uA=()=>({scrollRef:{current:null},overflow:{top:false,bottom:false},onScroll:fixtureNoop}),JNb=()=>fixtureNoop;
     var v2=()=>payload=>fixtureOpens.push(payload),No=value=>value,gP=()=>false,FQ=()=>[true,fixtureNoop],NH=()=>undefined,hYa=()=>[];
-    var WSb=function WSb(scope){var count=fixtureCount,noun='tasks';return {text:count?\`\${count} \${noun} running\`:'',mentionsSubagents:false,mentionsTasks:count>0}};
+    var fixtureIdle={soleSubagent:undefined};
+    var WSb=function WSb(scope){var count=fixtureCount,noun='tasks';return {soleSubagent:fixtureIdle.soleSubagent,text:count?\`\${count} \${noun} running\`:'',mentionsSubagents:false,mentionsTasks:count>0}};
     var htc=items=>items.map(item=>({item,key:item.key,show:true})),iNb=fixtureNoop,JZ=fixtureNoop,itc={},XW='480px';
     var tE=()=> 'conversation',sC=()=>fixtureApproval,SSb={},qZ=fixtureNoop,XSb=fixtureNoop;
     var fixtureBrowserAgents=()=>fixtureBrowserItems,fixtureBrowserStatus=()=>({text:fixtureBrowserText,faviconDataUrl:'data:fixture'}),fixtureBrowserIcon=fixtureNoop;
     var Hi=(...values)=>values.filter(Boolean).join(' '),J={CortexStepStatus:{RUNNING:1}},wg={VIEW_BACKGROUND_TASK:'view'};
   `);
   // Current native selector, running panel and status owners.
-  f.evaluate("var Stc=({agentScriptsEnabled:a,selectedAgentScriptItem:b,setSelectedAgentScriptItem:c,agentCustomizations:d,refreshAgentScripts:f,isLoadingAgentScripts:g,agentScriptsError:h})=>{var [k,l]=(0,A.useState)(!1),{triggerShowAgentScriptConfigModal:m,registerOpenSelector:n}=TV(),q=Fj().get(\"agentScriptsFeature\")?.mainAgentName??\"Main Agent\",r=Fj(),t=r.get(\"agentScriptsFeature\"),u=t?.disableScriptModification,v=t?.allowNewAgentScript,w=t?.disableScriptCreation,x=t?.allowScriptConfiguration!==!1;r=r.get(\"inputComponent\");\nt=(0,A.useContext)(jJ)?.product?.customLinks?.docsAgents;var {updateCustomization:y}=lB(),z=(0,A.useCallback)(async E=>{var F=e,G=e;try{try{E.agent&&(G(await F(y(Vb(Yh,{path:E.path,operation:2,customization:{case:\"agent\",value:E.agent}})))),f())}catch(H){G(),console.error(\"Failed to remove agent:\",H)}}finally{F()}},[y,f]);(0,A.useEffect)(()=>{var E=n(()=>{!g&&a&&l(!0)});return()=>{E.dispose()}},[n,g,a]);var C=(0,A.useCallback)(E=>{l(E);E&&f()},[f]),D=(0,A.useMemo)(()=>d.filter(E=>!E.agent?.disabled),\n[d]);(0,A.useEffect)(()=>{g||h||!b||D.find(E=>E.agent?.name===b.name)||c(void 0)},[g,h,b,D,c]);return Qtc({agentScriptsEnabled:a,isLoadingAgentScripts:g,agentScriptsError:h,hideAgentSelectorIfEmpty:r?.hideAgentSelectorIfEmpty,agentCustomizationsCount:d.length,selectedAgentScriptItem:b})?A.createElement(ZR,{open:k,onOpenChange:C},A.createElement($R,{asChild:!0},A.createElement(pA,{\"aria-label\":\"Select Agent\"},A.createElement(\"span\",{className:\"select-none\",\"data-testid\":\"agent-selector-label\"},b?.name??\nq),A.createElement(Z,{name:\"keyboard_arrow_down\",size:14}))),A.createElement(aS,{align:\"end\",className:\"border-border w-max min-w-[200px] max-w-[280px] max-h-80 overflow-y-auto overscroll-contain\"},A.createElement(gS,null,A.createElement(hS,{className:\"flex items-center gap-1\"},A.createElement(\"span\",null,\"Agents\"),t&&A.createElement(A.Fragment,null,A.createElement(iA,{id:\"custom-agents-docs-tooltip\",place:\"top\"},\"Click to Open Docs\"),A.createElement(\"a\",{href:t,target:\"_blank\",rel:\"noopener noreferrer\",\n\"data-tooltip-id\":\"custom-agents-docs-tooltip\",\"aria-label\":\"Click to open docs\",className:\"text-muted-foreground hover:text-foreground inline-flex items-center p-0.5 rounded hover:bg-secondary transition-colors\",onClick:E=>E.stopPropagation()},A.createElement(Z,{name:\"info\",size:13})))),A.createElement(k7,{icon:Ktc,label:q,onSelect:()=>{c(void 0)}}),D.map(E=>{var F=E.agent;if(!F)return null;var G=!u?.(F.name);return A.createElement(k7,{key:`${E.path}/${F.name}`,icon:Ktc,label:F.name,onSelect:()=>\n{c(F,E.path)},kebab:G?A.createElement(Rtc,{showConfigure:x,onConfigure:()=>{m({initialCustomization:E});l(!1)},onRemove:()=>{z(E)}}):void 0})}),g?A.createElement(k7,{icon:Ltc,iconClassNames:\"animate-spin\",label:\"Getting scripts...\",disabled:!0}):h?A.createElement(k7,{icon:Mtc,iconClassNames:\"text-red-500\",label:`Error: ${h.message}`,disabled:!0}):v&&!w&&A.createElement(k7,{icon:Ntc,label:\"New Agent Script\",onSelect:()=>{m({})}})))):null};\nvar jtc=({tasks:a,cascadeId:b,trajectoryId:c,accumulatedSections:d})=>{var f=kl(),g=jl(),h=EF(),k=GH(),{scrollRef:l,overflow:m,onScroll:n}=uA(),{cancelCascadeSteps:q}=lB(),r=JNb(),t=v2(b?No({cascadeId:b}):void 0,\"running_items_panel\"),u=gP(),[v,w]=FQ(`running-items-panel-expanded-${b}`,I=>JSON.stringify(I),I=>JSON.parse(I)),x=v??!u;u=WSb(\"tree\").text;var y=Fj(),z=y.get(\"rawCommandDetails\")?.isEnabled??!0,C=y.get(\"browserSubagentWebview\")===!0,D=NH(),E=hYa(b),F=(0,A.useMemo)(()=>E.filter(I=>I.status===\nJ.CortexStepStatus.RUNNING),[E]),G=(0,A.useMemo)(()=>[...a].sort((I,K)=>(K.taskSnapshot?.stepIndex??0)-(I.taskSnapshot?.stepIndex??0)),[a]),H=(0,A.useMemo)(()=>(d??[]).filter(I=>I.locations&&I.locations.length!==0&&I.locations.includes(J.RenderLocation.ABOVE_INPUT)?I.items?.some(K=>!!K.renderInfo)??!1:!1),[d]);y=F.length+G.length+H.length;F=[...F.map(I=>({key:`subagent-${I.conversationId}`,icon:A.createElement(LZ,{isPendingUserInteraction:I.needsAttention,toolName:I.firstWaitingStep?.metadata?.toolCall?.name,\nisLoading:I.status===J.CortexStepStatus.RUNNING,isUnread:!1,idleFallback:A.createElement(Z,{name:\"check_circle\",size:16,className:\"shrink-0 opacity-50\"})}),label:I.toolSummary||I.subagentName,onClick:()=>{h(wg.VIEW_SUBAGENT_FROM_PANEL,\"running_subagent_item\");var K=C&&b&&I.subagentName===\"browser\"?$qa(g.getState(),b,I.conversationId,D):void 0;K&&ara(f,I.conversationId,K,D);f($q.actions.viewSubagent({parentConversationId:b,childConversationId:I.conversationId,subagentName:I.subagentName,toolSummary:I.toolSummary}));\nK?k(b,I.conversationId,{tab:K}):k(b,I.conversationId)},onStop:K=>{K.stopPropagation();h(wg.STEP_REJECT,\"subagent_stop_button_panel\");r(I.conversationId)},tooltipId:`stop-subagent-${I.conversationId}`,tooltipContent:\"Stop Subagent\",labelTooltipId:`label-subagent-${I.conversationId}`,needsAttention:I.needsAttention})),...G.map((I,K)=>{var L=I.taskSnapshot,M=L?.description||L?.toolSummary||\"Background Task\";I=z?M:L?.toolSummary||\"Background task\";return{key:`task-${L?.stepIndex??`index-${K}`}`,icon:A.createElement(iNb,\n{size:16,className:\"shrink-0 opacity-70\"}),label:I,onClick:()=>{t&&L?.stepIndex!==void 0&&(h(wg.VIEW_BACKGROUND_TASK,\"running_task_item\"),t({type:\"backgroundTaskView\",backgroundTaskView:{cascadeId:b,taskId:L.taskId,trajectoryId:c??\"\",stepIndex:L.stepIndex,commandText:M}}))},onStop:N=>{N.stopPropagation();h(wg.STEP_REJECT,\"task_stop_button\");b&&L?.stepIndex!==void 0&&q(b,[L.stepIndex])},tooltipId:`stop-task-${L?.stepIndex}`,tooltipContent:\"Stop Task\",labelTooltipId:`label-task-${L?.stepIndex}`,fontClass:z?\n\"font-mono\":void 0}}),...H.flatMap(I=>(I.items?.filter(K=>!!K.renderInfo)??[]).map((K,L)=>{var {iconName:M,isSpinning:N,label:O,itemKey:P}=Ioc(I,K,L);return{key:`section-${P}`,icon:A.createElement(\"div\",{className:\"flex items-center justify-center w-4 h-4 shrink-0\"},A.createElement(Z,{name:M,size:16,className:`shrink-0 ${N?\"animate-spin opacity-50\":\"opacity-70\"}`})),label:O,onClick:()=>{t&&(h(wg.VIEW_ACCUMULATED_SECTION_FROM_PANEL,`running_${I.key}_item`),t({type:\"overview\",overview:{cascadeId:b}}))}}}))];\nF=htc(F,I=>I.key);return A.createElement(\"div\",{\"data-testid\":\"running-items-panel\",className:Hi(\"grid transition-[grid-template-rows] ease-expo-out motion-reduce:transition-none\",y>0?\"grid-rows-[1fr]\":\"grid-rows-[0fr]\"),style:itc},A.createElement(\"div\",{className:\"min-h-0 overflow-hidden\"},A.createElement(\"div\",{className:\"flex flex-col px-3 py-1.5 rounded-t-2xl w-full\"},A.createElement(\"button\",{\"data-testid\":\"running-items-panel-toggle\",className:\"flex items-center justify-between cursor-pointer h-6 shrink-0 text-secondary-foreground hover:text-foreground border-none bg-transparent outline-none w-full\",\n\"aria-label\":u,\"aria-expanded\":x,onClick:()=>{h(wg.RUNNING_ITEMS_PANEL_TOGGLE,\"running_items_toggle\",{extra:{expanded:String(!x)}});w(!x)}},A.createElement(\"span\",{className:\"text-sm\"},u),A.createElement(Z,{name:\"keyboard_arrow_up\",size:16,className:Hi(\"shrink-0 transition-transform duration-150\",x&&\"rotate-180\")})),A.createElement(\"div\",{className:Hi(\"grid transition-[grid-template-rows] ease-expo-out motion-reduce:transition-none\",x?\"grid-rows-[1fr]\":\"grid-rows-[0fr]\"),style:itc},A.createElement(\"div\",\n{className:\"min-h-0 overflow-hidden\"},A.createElement(\"div\",{className:\"py-1\"},A.createElement(\"div\",{ref:l,onScroll:n,className:\"flex flex-col max-h-32 overflow-y-auto\",style:{maskImage:m.top&&m.bottom?\"linear-gradient(to bottom, transparent, black 15%, black 85%, transparent)\":m.top?\"linear-gradient(to bottom, transparent, black 15%)\":m.bottom?\"linear-gradient(to bottom, black 85%, transparent)\":void 0}},F.map(({item:I,key:K,show:L})=>A.createElement(JZ,{key:K,shouldShow:L,durationMs:500,easingClassName:\"ease-expo-out\",\nclassName:\"shrink-0\"},A.createElement(\"div\",{className:\"flex items-center gap-1.5 mb-0.5 text-secondary-foreground hover:text-foreground h-6 group relative overflow-hidden cursor-pointer shrink-0\"},A.createElement(\"button\",{className:\"flex items-center gap-1.5 flex-1 min-w-0 text-left border-none bg-transparent outline-none cursor-pointer\",onClick:I.onClick},I.icon,A.createElement(\"div\",{className:\"flex items-center gap-1 min-w-0\",\"data-tooltip-id\":I.labelTooltipId},A.createElement(\"span\",{className:`text-sm truncate ${I.fontClass??\n\"\"}`},I.label),I.needsAttention&&A.createElement(\"span\",{className:\"text-sm text-muted-foreground group-hover:text-secondary-foreground whitespace-nowrap\"},\"Needs Attention\"))),I.labelTooltipId&&A.createElement(iA,{id:I.labelTooltipId,place:\"top\"},A.createElement(\"div\",{style:{maxWidth:`min(${XW}, calc(100vw - 32px))`},className:\"whitespace-pre-wrap break-all\"},I.label)),I.onStop&&A.createElement(A.Fragment,null,A.createElement(\"div\",{className:Hi(\"absolute top-0 bottom-0 right-0 pl-3 flex items-center justify-end gap-px\",\n\"can-hover:opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 group-has-[:focus-visible]:opacity-100 has-[:focus-visible]:opacity-100\"),style:{background:\"linear-gradient(to right, transparent 0%, var(--card-border) 25%)\"}},A.createElement(lA,{variant:\"ghost\",size:\"icon\",onClick:I.onStop,\"aria-label\":I.tooltipContent??\"Stop\",\"data-tooltip-id\":I.tooltipId,className:\"mr-0.5\"},A.createElement(Z,{name:\"stop_circle\",size:16,className:\"text-secondary-foreground hover:text-foreground transition-colors\"}))),\nI.tooltipId&&A.createElement(iA,{id:I.tooltipId,content:I.tooltipContent??\"Stop\",place:\"left\"}))))))))))))};\nvar YSb=({className:a}={})=>{var {text:b,mentionsSubagents:c,mentionsTasks:d}=WSb(\"direct\"),f=tE(),g=!!sC(f),h=(0,A.useContext)(SSb),k=Fj(),l=k.get(\"conversationView\")?.hideSubagents??!1;k=k.get(\"browserSubagentWebviewUx\")===!0;f=fixtureBrowserAgents(f,k);var m=f.length>0,{text:n,faviconDataUrl:p}=fixtureBrowserStatus(f,k&&m);m=!g&&k&&m;if(l){if(!(g||c||d||m))return null}else if(!b&&!m)return null;k=m?n:l?g?\"Waiting for your approval\":\"Working\":b;f=[];l?m&&f.push(\"browserSubagents\"):((c||m)&&f.push(\"subagents\"),d&&f.push(\"backgroundTasks\"));\nm=m?A.createElement(fixtureBrowserIcon,{faviconDataUrl:p,testIdPrefix:\"idle-status-browser\"}):void 0;return h&&f.length!==0?A.createElement(XSb,{statusText:k,leadingIcon:m,shimmerActive:!(l&&g),sections:f,renderRunningItems:h,className:a}):A.createElement(\"div\",{\"data-testid\":\"idle-status-text\",className:Hi(\"flex items-center gap-1.5 text-sm text-muted-foreground min-w-0 max-w-full\",a)},m,A.createElement(qZ,{active:!(l&&g),className:\"truncate\"},k))};");
+  f.evaluate("var Stc=({agentScriptsEnabled:a,selectedAgentScriptItem:b,setSelectedAgentScriptItem:c,agentCustomizations:d,refreshAgentScripts:f,isLoadingAgentScripts:g,agentScriptsError:h})=>{var [k,l]=(0,A.useState)(!1),{triggerShowAgentScriptConfigModal:m,registerOpenSelector:n}=TV(),q=Fj().get(\"agentScriptsFeature\")?.mainAgentName??\"Main Agent\",r=Fj(),t=r.get(\"agentScriptsFeature\"),u=t?.disableScriptModification,v=t?.allowNewAgentScript,w=t?.disableScriptCreation,x=t?.allowScriptConfiguration!==!1;r=r.get(\"inputComponent\");\nt=(0,A.useContext)(jJ)?.product?.customLinks?.docsAgents;var {updateCustomization:y}=lB(),z=(0,A.useCallback)(async E=>{var F=e,G=e;try{try{E.agent&&(G(await F(y(Vb(Yh,{path:E.path,operation:2,customization:{case:\"agent\",value:E.agent}})))),f())}catch(H){G(),console.error(\"Failed to remove agent:\",H)}}finally{F()}},[y,f]);(0,A.useEffect)(()=>{var E=n(()=>{!g&&a&&l(!0)});return()=>{E.dispose()}},[n,g,a]);var C=(0,A.useCallback)(E=>{l(E);E&&f()},[f]),D=(0,A.useMemo)(()=>d.filter(E=>!E.agent?.disabled),\n[d]);(0,A.useEffect)(()=>{g||h||!b||D.find(E=>E.agent?.name===b.name)||c(void 0)},[g,h,b,D,c]);return Qtc({agentScriptsEnabled:a,isLoadingAgentScripts:g,agentScriptsError:h,hideAgentSelectorIfEmpty:r?.hideAgentSelectorIfEmpty,agentCustomizationsCount:d.length,selectedAgentScriptItem:b})?A.createElement(ZR,{open:k,onOpenChange:C},A.createElement($R,{asChild:!0},A.createElement(pA,{\"aria-label\":\"Select Agent\"},A.createElement(\"span\",{className:\"select-none\",\"data-testid\":\"agent-selector-label\"},b?.name??\nq),A.createElement(Z,{name:\"keyboard_arrow_down\",size:14}))),A.createElement(aS,{align:\"end\",className:\"border-border w-max min-w-[200px] max-w-[280px] max-h-80 overflow-y-auto overscroll-contain\"},A.createElement(gS,null,A.createElement(hS,{className:\"flex items-center gap-1\"},A.createElement(\"span\",null,\"Agents\"),t&&A.createElement(A.Fragment,null,A.createElement(iA,{id:\"custom-agents-docs-tooltip\",place:\"top\"},\"Click to Open Docs\"),A.createElement(\"a\",{href:t,target:\"_blank\",rel:\"noopener noreferrer\",\n\"data-tooltip-id\":\"custom-agents-docs-tooltip\",\"aria-label\":\"Click to open docs\",className:\"text-muted-foreground hover:text-foreground inline-flex items-center p-0.5 rounded hover:bg-secondary transition-colors\",onClick:E=>E.stopPropagation()},A.createElement(Z,{name:\"info\",size:13})))),A.createElement(k7,{icon:Ktc,label:q,onSelect:()=>{c(void 0)}}),D.map(E=>{var F=E.agent;if(!F)return null;var G=!u?.(F.name);return A.createElement(k7,{key:`${E.path}/${F.name}`,icon:Ktc,label:F.name,onSelect:()=>\n{c(F,E.path)},kebab:G?A.createElement(Rtc,{showConfigure:x,onConfigure:()=>{m({initialCustomization:E});l(!1)},onRemove:()=>{z(E)}}):void 0})}),g?A.createElement(k7,{icon:Ltc,iconClassNames:\"animate-spin\",label:\"Getting scripts...\",disabled:!0}):h?A.createElement(k7,{icon:Mtc,iconClassNames:\"text-red-500\",label:`Error: ${h.message}`,disabled:!0}):v&&!w&&A.createElement(k7,{icon:Ntc,label:\"New Agent Script\",onSelect:()=>{m({})}})))):null};\nvar jtc=({tasks:a,cascadeId:b,trajectoryId:c,accumulatedSections:d})=>{var f=kl(),g=jl(),h=EF(),k=GH(),{scrollRef:l,overflow:m,onScroll:n}=uA(),{cancelCascadeSteps:q}=lB(),r=JNb(),t=v2(b?No({cascadeId:b}):void 0,\"running_items_panel\"),u=gP(),[v,w]=FQ(`running-items-panel-expanded-${b}`,I=>JSON.stringify(I),I=>JSON.parse(I)),x=v??!u;u=WSb(\"tree\").text;var y=Fj(),z=y.get(\"rawCommandDetails\")?.isEnabled??!0,C=y.get(\"browserSubagentWebview\")===!0,D=NH(),E=hYa(b),F=(0,A.useMemo)(()=>E.filter(I=>I.status===\nJ.CortexStepStatus.RUNNING),[E]),G=(0,A.useMemo)(()=>[...a].sort((I,K)=>(K.taskSnapshot?.stepIndex??0)-(I.taskSnapshot?.stepIndex??0)),[a]),H=(0,A.useMemo)(()=>(d??[]).filter(I=>I.locations&&I.locations.length!==0&&I.locations.includes(J.RenderLocation.ABOVE_INPUT)?I.items?.some(K=>!!K.renderInfo)??!1:!1),[d]);y=F.length+G.length+H.length;F=[...F.map(I=>({key:`subagent-${I.conversationId}`,icon:A.createElement(LZ,{isPendingUserInteraction:I.needsAttention,toolName:I.firstWaitingStep?.metadata?.toolCall?.name,\nisLoading:I.status===J.CortexStepStatus.RUNNING,isUnread:!1,idleFallback:A.createElement(Z,{name:\"check_circle\",size:16,className:\"shrink-0 opacity-50\"})}),label:I.toolSummary||I.subagentName,onClick:()=>{h(wg.VIEW_SUBAGENT_FROM_PANEL,\"running_subagent_item\");var K=C&&b&&I.subagentName===\"browser\"?$qa(g.getState(),b,I.conversationId,D):void 0;K&&ara(f,I.conversationId,K,D);f($q.actions.viewSubagent({parentConversationId:b,childConversationId:I.conversationId,subagentName:I.subagentName,toolSummary:I.toolSummary}));\nK?k(b,I.conversationId,{tab:K}):k(b,I.conversationId)},onStop:K=>{K.stopPropagation();h(wg.STEP_REJECT,\"subagent_stop_button_panel\");r(I.conversationId)},tooltipId:`stop-subagent-${I.conversationId}`,tooltipContent:\"Stop Subagent\",labelTooltipId:`label-subagent-${I.conversationId}`,needsAttention:I.needsAttention})),...G.map((I,K)=>{var L=I.taskSnapshot,M=L?.description||L?.toolSummary||\"Background Task\";I=z?M:L?.toolSummary||\"Background task\";return{key:`task-${L?.stepIndex??`index-${K}`}`,icon:A.createElement(iNb,\n{size:16,className:\"shrink-0 opacity-70\"}),label:I,onClick:()=>{t&&L?.stepIndex!==void 0&&(h(wg.VIEW_BACKGROUND_TASK,\"running_task_item\"),t({type:\"backgroundTaskView\",backgroundTaskView:{cascadeId:b,taskId:L.taskId,trajectoryId:c??\"\",stepIndex:L.stepIndex,commandText:M}}))},onStop:N=>{N.stopPropagation();h(wg.STEP_REJECT,\"task_stop_button\");b&&L?.stepIndex!==void 0&&q(b,[L.stepIndex])},tooltipId:`stop-task-${L?.stepIndex}`,tooltipContent:\"Stop Task\",labelTooltipId:`label-task-${L?.stepIndex}`,fontClass:z?\n\"font-mono\":void 0}}),...H.flatMap(I=>(I.items?.filter(K=>!!K.renderInfo)??[]).map((K,L)=>{var {iconName:M,isSpinning:N,label:O,itemKey:P}=Ioc(I,K,L);return{key:`section-${P}`,icon:A.createElement(\"div\",{className:\"flex items-center justify-center w-4 h-4 shrink-0\"},A.createElement(Z,{name:M,size:16,className:`shrink-0 ${N?\"animate-spin opacity-50\":\"opacity-70\"}`})),label:O,onClick:()=>{t&&(h(wg.VIEW_ACCUMULATED_SECTION_FROM_PANEL,`running_${I.key}_item`),t({type:\"overview\",overview:{cascadeId:b}}))}}}))];\nF=htc(F,I=>I.key);return A.createElement(\"div\",{\"data-testid\":\"running-items-panel\",className:Hi(\"grid transition-[grid-template-rows] ease-expo-out motion-reduce:transition-none\",y>0?\"grid-rows-[1fr]\":\"grid-rows-[0fr]\"),style:itc},A.createElement(\"div\",{className:\"min-h-0 overflow-hidden\"},A.createElement(\"div\",{className:\"flex flex-col px-3 py-1.5 rounded-t-2xl w-full\"},A.createElement(\"button\",{\"data-testid\":\"running-items-panel-toggle\",className:\"flex items-center justify-between cursor-pointer h-6 shrink-0 text-secondary-foreground hover:text-foreground border-none bg-transparent outline-none w-full\",\n\"aria-label\":u,\"aria-expanded\":x,onClick:()=>{h(wg.RUNNING_ITEMS_PANEL_TOGGLE,\"running_items_toggle\",{extra:{expanded:String(!x)}});w(!x)}},A.createElement(\"span\",{className:\"text-sm\"},u),A.createElement(Z,{name:\"keyboard_arrow_up\",size:16,className:Hi(\"shrink-0 transition-transform duration-150\",x&&\"rotate-180\")})),A.createElement(\"div\",{className:Hi(\"grid transition-[grid-template-rows] ease-expo-out motion-reduce:transition-none\",x?\"grid-rows-[1fr]\":\"grid-rows-[0fr]\"),style:itc},A.createElement(\"div\",\n{className:\"min-h-0 overflow-hidden\"},A.createElement(\"div\",{className:\"py-1\"},A.createElement(\"div\",{ref:l,onScroll:n,className:\"flex flex-col max-h-32 overflow-y-auto\",style:{maskImage:m.top&&m.bottom?\"linear-gradient(to bottom, transparent, black 15%, black 85%, transparent)\":m.top?\"linear-gradient(to bottom, transparent, black 15%)\":m.bottom?\"linear-gradient(to bottom, black 85%, transparent)\":void 0}},F.map(({item:I,key:K,show:L})=>A.createElement(JZ,{key:K,shouldShow:L,durationMs:500,easingClassName:\"ease-expo-out\",\nclassName:\"shrink-0\"},A.createElement(\"div\",{className:\"flex items-center gap-1.5 mb-0.5 text-secondary-foreground hover:text-foreground h-6 group relative overflow-hidden cursor-pointer shrink-0\"},A.createElement(\"button\",{className:\"flex items-center gap-1.5 flex-1 min-w-0 text-left border-none bg-transparent outline-none cursor-pointer\",onClick:I.onClick},I.icon,A.createElement(\"div\",{className:\"flex items-center gap-1 min-w-0\",\"data-tooltip-id\":I.labelTooltipId},A.createElement(\"span\",{className:`text-sm truncate ${I.fontClass??\n\"\"}`},I.label),I.needsAttention&&A.createElement(\"span\",{className:\"text-sm text-muted-foreground group-hover:text-secondary-foreground whitespace-nowrap\"},\"Needs Attention\"))),I.labelTooltipId&&A.createElement(iA,{id:I.labelTooltipId,place:\"top\"},A.createElement(\"div\",{style:{maxWidth:`min(${XW}, calc(100vw - 32px))`},className:\"whitespace-pre-wrap break-all\"},I.label)),I.onStop&&A.createElement(A.Fragment,null,A.createElement(\"div\",{className:Hi(\"absolute top-0 bottom-0 right-0 pl-3 flex items-center justify-end gap-px\",\n\"can-hover:opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 group-has-[:focus-visible]:opacity-100 has-[:focus-visible]:opacity-100\"),style:{background:\"linear-gradient(to right, transparent 0%, var(--card-border) 25%)\"}},A.createElement(lA,{variant:\"ghost\",size:\"icon\",onClick:I.onStop,\"aria-label\":I.tooltipContent??\"Stop\",\"data-tooltip-id\":I.tooltipId,className:\"mr-0.5\"},A.createElement(Z,{name:\"stop_circle\",size:16,className:\"text-secondary-foreground hover:text-foreground transition-colors\"}))),\nI.tooltipId&&A.createElement(iA,{id:I.tooltipId,content:I.tooltipContent??\"Stop\",place:\"left\"}))))))))))))};\nvar YSb=({className:a}={})=>{var {text:b,mentionsSubagents:c,mentionsTasks:d,soleSubagent:sole}=WSb(\"direct\"),f=tE(),g=!!sC(f),h=(0,A.useContext)(SSb),k=Fj(),l=k.get(\"conversationView\")?.hideSubagents??!1;k=k.get(\"browserSubagentWebviewUx\")===!0;f=fixtureBrowserAgents(f,k);var m=f.length>0,{text:n,faviconDataUrl:p}=fixtureBrowserStatus(f,k&&m);m=!g&&k&&m;if(l){if(!(g||c||d||m))return null}else if(!b&&!m)return null;k=m?n:l?g?\"Waiting for your approval\":\"Working\":b;f=[];l?m&&f.push(\"browserSubagents\"):((c||m)&&f.push(\"subagents\"),d&&f.push(\"backgroundTasks\"));\nm=m?A.createElement(fixtureBrowserIcon,{faviconDataUrl:p,testIdPrefix:\"idle-status-browser\"}):void 0;return h&&f.length!==0?A.createElement(XSb,{statusText:!m&&sole?\"Waiting for subagent\":k,subagent:m?void 0:sole,leadingIcon:m,shimmerActive:!(l&&g),sections:f,renderRunningItems:h,className:a}):A.createElement(\"div\",{\"data-testid\":\"idle-status-text\",className:Hi(\"flex items-center gap-1.5 text-sm text-muted-foreground min-w-0 max-w-full\",a)},m,A.createElement(qZ,{active:!(l&&g),className:\"truncate\"},k))};");
   const original={agent:f.window.Stc,panel:f.window.jtc,idle:f.window.YSb};
   const adapters=f.install();
 
@@ -4469,8 +4801,11 @@ test('native default names and approval status preserve supplied names, task pay
   f.window.fixtureRunningItems=f.window.fixtureNoop;
   idle=f.window.YSb({});assert.equal(idle.type,f.window.XSb);assert.equal(idle.props.statusText,'2 个任务运行中');
   assert.deepEqual(Array.from(idle.props.sections),['backgroundTasks']);assert.equal(idle.props.renderRunningItems,f.window.fixtureNoop);
+  f.window.fixtureIdle.soleSubagent={conversationId:'child-1'};
+  idle=f.window.YSb({});assert.equal(idle.props.statusText,'正在等待子代理');
+  assert.equal(idle.props.subagent,f.window.fixtureIdle.soleSubagent);
   f.window.fixtureHideSubagents=true;f.window.fixtureBrowserEnabled=true;f.window.fixtureBrowserItems=[{}];
-  for(const text of ['Working','Waiting for your approval']) {
+  for(const text of ['Working','Waiting for your approval','Waiting for subagent']) {
     f.window.fixtureBrowserText=text;
     idle=f.window.YSb({});assert.equal(idle.props.statusText,text,'browser activity remains native in the clickable status slot');
     assert.deepEqual(Array.from(idle.props.sections),['browserSubagents']);assert.equal(idle.props.leadingIcon.props.faviconDataUrl,'data:fixture');
@@ -5238,7 +5573,7 @@ test('location descriptions translate their native prefix and preserve the proje
 test('message time projection follows changing native timestamps and preserves content, tooltips and actions', () => {
   const dictionary=JSON.parse(fs.readFileSync(new URL('../runtime/translations.json',import.meta.url)));
   const start=renderer.indexOf('  function computerUseAppName('),end=renderer.indexOf('  function translatedMenu(',start);
-  const translator=vm.runInNewContext(`let strings,normalizedStrings;${renderer.slice(start,end)};setStrings(dictionary);({translate,setStrings})`,{dictionary});
+  const translator=vm.runInNewContext(`let strings,translationIndex;${renderer.slice(start,end)};setStrings(dictionary);({translate,setStrings})`,{dictionary});
   const f=nativeFixture({strings:dictionary.strings,translate:translator.translate});
   f.evaluate(`A.useId=()=> 'time-fixture';var ZA=()=>null,MZb=()=>null,OZb=()=>null;
     var replyToolbar=({steps:steps,showThumbsUpDown,relativeText,tooltip,onCopy})=>A.createElement('div',{'data-testid':'cascade-system-message-toolbar'},
@@ -5531,11 +5866,11 @@ test('built-in Swarm display owners localize menus, metadata and tab titles with
   assert.equal(slot(customMenu,'menu-option-label').props.children.props.text,'swarm','a same-name custom skill stays native');
   const coordinatorBlock=Object.freeze({block:Object.freeze({case:'markdown',value:'@coordinator original message'})});
   const coordinatorInfo=Object.freeze({title:'Message from @coordinator',titleParts:Object.freeze([]),contentBlocks:Object.freeze([coordinatorBlock])});
-  assert.equal(f.window.swarmMessageTitle(coordinatorInfo),'来自 @协调员 的消息');
-  assert.equal(f.window.swarmMessageTitle({title:'Message to @coordinator'}),'发给 @协调员 的消息');
+  assert.equal(f.window.swarmMessageTitle(coordinatorInfo),'Message from @coordinator');
+  assert.equal(f.window.swarmMessageTitle({title:'Message to @coordinator'}),'Message to @coordinator');
   assert.equal(coordinatorInfo.title,'Message from @coordinator');assert.equal(coordinatorInfo.contentBlocks[0],coordinatorBlock);
   assert.equal(coordinatorBlock.block.value,'@coordinator original message');
-  assert.equal(f.window.swarmMessageTitle({title:'Message from @coordinator-helper'}),'来自 @coordinator-helper 的消息');
+  assert.equal(f.window.swarmMessageTitle({title:'Message from @coordinator-helper'}),'Message from @coordinator-helper');
   const coordinatorPart=Object.freeze({part:Object.freeze({case:'text',value:'Message from @coordinator'})});
   assert.equal(f.window.swarmMessageTitle({titleParts:[coordinatorPart]}),'Message from @coordinator','structured member data retains its internal handle');
   let resolves=0,prevented=0;const linkTargets=[],linkNode=Object.freeze({raw:'Open the Swarm UI'});
@@ -5638,7 +5973,7 @@ test('built-in Swarm display owners localize menus, metadata and tab titles with
   assert.equal(f.window.swarmNewTabs.sidecarView.getTabTitle(state),'协作团队');
   assert.equal(f.window.swarmPaneTitle(state,views),'协作团队');
   assert.equal(f.window.swarmIframe.type(frameProps).frame.title,'协作团队');
-  assert.equal(f.window.swarmMessageTitle(coordinatorInfo),'来自 @负责人 的消息');
+  assert.equal(f.window.swarmMessageTitle(coordinatorInfo),'Message from @coordinator');
   assert.equal(f.window.swarmSidecarLink(linkProps).props.children,'进入协作群界面');
   f.uninstall()();
   assert.equal(f.window.swarmMenu,originals.menu);assert.equal(f.window.swarmPluginRow,originals.plugin);
@@ -5649,4 +5984,141 @@ test('built-in Swarm display owners localize menus, metadata and tab titles with
   assert.equal(f.window.swarmFrameHost,originals.frames);
   assert.equal(f.window.swarmMessageTitle,originals.messageTitle);assert.equal(f.window.swarmSidecarLink,originals.sidecarLink);
   assert.equal(f.window.swarmNewTabs.sidecarView.getTabTitle(state),'Swarm');
+});
+
+test('browser download approval translates current scopes and preserves decision data', () => {
+  const f = nativeFixture();
+  f.evaluate(`
+    var downloadForm = () => null;
+    function downloadQuestion(action, saveRule, description, {verbatim} = {}) {
+      if (action === 'download_url' && !saveRule) return 'Allow the browser agent to download a file?';
+      return saveRule ? \`Save rule to always allow \${description}?\` : \`Allow \${description}?\`;
+    }
+    function downloadView({permissionSpec, target, options}) {
+      const question = 'download_url(' + target + ')';
+      return A.createElement(downloadForm, {toolName:'ask_permission', permissionAction:permissionSpec.resource.action,
+        questions:[{question, options}], disabledOptionIds:new Map(),
+        headerInputSlot:A.createElement('div',{'data-testid':'permission-target-editor'},
+          A.createElement('dt',null,'From'),A.createElement('dd',null,'From'))});
+    }
+  `);
+  f.install();
+  assert.equal(f.window.downloadQuestion('download_url',false), '允许浏览器智能体下载文件？');
+  const target = 'example.test/$&(edited)';
+  const input = {permissionSpec:{resource:{action:'download_url',target:'old.test'}}, target, options:[
+    {id:'1', text:'Yes, allow this download'},
+    {id:'2', text:`Yes, allow downloads from ${target} for this run`},
+    {id:'3', text:`Yes, allow downloads from ${target} in this conversation`},
+    {id:'4', text:`Yes, always allow downloads from ${target}`},
+  ]};
+  const result = f.window.downloadView(input).props;
+  assert.equal(result.questions[0].question,`download_url(${target})`);
+  assert.deepEqual(Array.from(result.questions[0].options, o=>[o.id,o.text]),[
+    ['1','是，允许此次下载'],['2',`是，本次运行允许从 ${target} 下载`],
+    ['3',`是，本次对话允许从 ${target} 下载`],['4',`是，始终允许从 ${target} 下载`],
+  ]);
+  assert.deepEqual(Array.from(result.headerInputSlot.props.children, n=>n.props.children),['来源','From']);
+});
+
+test('workspace settings skill rows translate built-in names and descriptions after the list callback', () => {
+  const f = nativeFixture({strings:{
+    'builtin-skill:migrate-agent-settings:name:migrate-agent-settings':'迁移智能体设置',
+    'builtin-skill:migrate-agent-settings:description:Migrate settings.':'迁移设置。'
+  }});
+  f.evaluate(`
+    var skillDisplayRow = ({name, path, description, onCopyPath:copy, expandableContent:content}) =>
+      A.createElement('div',null,
+        A.createElement('span',{className:'font-medium truncate '},name),
+        A.createElement('div',{className:'text-sm text-muted-foreground line-clamp-2 mt-1'},description),
+        A.createElement('button',{onClick:()=>copy(path)},"Copy Path"),
+        content);
+    const skillItem = ({item,onCopyPath:copy,showBadge,pluginName}) =>
+      A.createElement(skillDisplayRow,{name:item.name,path:item.path,description:item.description,
+        onCopyPath:copy,expandableContent:item.content});
+    var settingsSkillList = ({items,renderItem}) => items.map(renderItem);
+    var workspaceSkills = ({items,onCopyPath:copy}) =>
+      A.createElement(settingsSkillList,{items,renderItem:item=>A.createElement(skillItem,{item,onCopyPath:copy})});
+  `);
+  const builtin = Object.freeze({name:'migrate-agent-settings',description:'Migrate settings.',
+    path:'file:///Users/example/.gemini/antigravity/builtin/skills/migrate-agent-settings/SKILL.md',content:'Original instructions'});
+  const custom = {...builtin,path:'file:///project/.agents/skills/migrate-agent-settings/SKILL.md'};
+  f.install();
+  const copied = [];
+  const list = f.window.workspaceSkills({items:[builtin,custom],onCopyPath:path=>copied.push(path)});
+  const [officialRow,customRow] = list.type(list.props).map(item=>{
+    const row = item.type(item.props);
+    return row.type(row.props).props.children;
+  });
+  assert.equal(officialRow[0].props.children,'迁移智能体设置');
+  assert.equal(officialRow[1].props.children,'迁移设置。');
+  assert.equal(officialRow[3],builtin.content);
+  officialRow[2].props.onClick();
+  assert.deepEqual(copied,[builtin.path]);
+  assert.equal(customRow[0].props.children,custom.name);
+  assert.equal(customRow[1].props.children,custom.description);
+});
+
+test('2.34 model menus and settings share the Extra High label without changing model values', () => {
+  const f = nativeFixture();
+  f.evaluate(`
+    var choose = value=>value;
+    var ModelRow = ({model,effortIndex:index}) =>
+      A.createElement('button',{'data-testid':'model-selector-item','data-model-label':model.label,onClick:()=>choose(model)},
+        A.createElement('span',{className:'truncate text-sm text-left'},model.label),
+        A.createElement('span',{'data-testid':'model-selector-orchestrator-model'},'Gemini 4 Neon Extra High'),
+        A.createElement('span',{'data-testid':'model-selector-effort-option','data-effort':'xhigh'},index.xhigh));
+    var PlannerMenu = ({name,effort,rows}) => rows.map(item => item.kind === 'model'
+      ? A.createElement('div',{'data-testid':'orchestrator-picker-row','data-model-label':item.option.label},
+        A.createElement('span',{className:'truncate'},item.option.label))
+      : A.createElement('div',{'data-testid':'orchestrator-picker-row','data-model-base':name},
+        A.createElement('span',{className:'shrink-0 opacity-70'},effort),
+        A.createElement('span',{'data-testid':'orchestrator-picker-effort','data-effort':'xhigh'},effort)));
+    var SettingsRow = () => null;
+    var PlannerSettings = ({name,effort}) =>
+      A.createElement(SettingsRow,{rightElement:
+        A.createElement('button',{'aria-labelledby':'orchestrator-picker-label-id orchestrator-picker-value-id'},
+          A.createElement('span',{id:'orchestrator-picker-value-id'},name),
+          A.createElement('span',{className:'shrink-0 opacity-70'},effort))});
+    var Badge = ({option}) => option.tagDescription
+      ? A.createElement('div',{className:'max-w-[200px]'},A.createElement('span',null,option.tagTitle),option.tagDescription)
+      : A.createElement('div',null,option.tagTitle);
+  `);
+  const model = Object.freeze({label:'GPT-OSS 120B (Medium)',value:120,tagTitle:'New'});
+  const props = {model,effortIndex:{xhigh:'Extra High'}};
+  const adapters = f.install();
+  const row = f.window.ModelRow(props);
+  assert.deepEqual(Array.from(row.props.children, node=>node.props.children), ['GPT-OSS 120B（中）','Gemini 4 Neon 超高','超高']);
+  assert.equal(row.props.children[2].props['data-effort'],'xhigh');
+  assert.equal(row.props['data-model-label'],model.label);
+  assert.equal(row.props.onClick(),model);
+  assert.equal(f.window.Badge({option:model}).props.children,'新上线');
+  assert.equal(model.tagTitle,'New');
+  const planner = {name:'Gemini 4 Neon',effort:'Extra High'};
+  const [grouped,single] = f.window.PlannerMenu({...planner,rows:[{kind:'family'},{kind:'model',option:model}]});
+  assert.deepEqual(Array.from(grouped.props.children, node=>node.props.children), ['超高','超高']);
+  assert.equal(single.props.children.props.children,'GPT-OSS 120B（中）');
+  assert.equal(single.props['data-model-label'],model.label);
+  const setting = f.window.PlannerSettings(planner).props.rightElement;
+  assert.deepEqual(Array.from(setting.props.children, node=>node.props.children), [planner.name,'超高']);
+  adapters.setStrings({Extra:'极高'});
+  assert.equal(f.window.ModelRow(props).props.children[1].props.children,'Gemini 4 Neon 极高');
+  f.uninstall()();
+  assert.equal(f.window.ModelRow(props).props.children[1].props.children,'Gemini 4 Neon Extra High');
+});
+
+test('2.34 automation draft translates its native default and preserves custom text', () => {
+  const copy = 'Guide me through creating an automated task';
+  const f = nativeFixture({strings:{[copy]:'引导我创建自动化任务'}});
+  f.evaluate(`
+    A.useCallback = callback=>callback;
+    function automationDraft({goToHome:open,draftKey:key}) {
+      return A.useCallback((text="[/automation](slashCommand;automation) Guide me through creating an automated task")=>open(key,text),[open,key]);
+    }
+  `);
+  const adapters = f.install();
+  const begin = f.window.automationDraft({goToHome:(key,text)=>[key,text],draftKey:'draft'});
+  assert.deepEqual(begin(), ['draft','[/automation](slashCommand;automation) 引导我创建自动化任务']);
+  assert.deepEqual(begin(copy), ['draft',copy]);
+  adapters.setStrings({[copy]:'开始创建自动化'});
+  assert.deepEqual(begin(), ['draft','[/automation](slashCommand;automation) 开始创建自动化']);
 });

@@ -6,21 +6,24 @@ import { join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { createBackendRuntime, inspectBackendBinary, prepareBackendCopy } from './backend-runtime.mjs';
 import { connectBackendApp, launchBackendApp, restoreBackendApp } from './backend-launch.mjs';
+import { prepareDesktopTitleCopy } from './desktop-title-copy.mjs';
 import { CONTEXT_OVERRIDES_ENABLED } from './context-policy.mjs';
 
 const exec = promisify(execFile);
+const desktopDebugArgs = ['--remote-debugging-port=0'];
 export const antigravityDataDirectories = ['Antigravity', 'antigravity'].map(name =>
   join(homedir(), 'Library', 'Application Support', name));
 const savedMessage = '已保存。正常退出 Antigravity 后，点击“Antigravity 汉化助手”图标启动。';
 const runningMessage = '已切到正在运行的 Antigravity，但本次子代理上下文覆盖未启用。请正常退出后，点击“Antigravity 汉化助手”图标重新启动。';
 const mainSavedMessage = '主代理上下文已保存，但本次预算适配未启用。请正常退出 Antigravity 后，点击“Antigravity 汉化助手”图标重新启动。';
 const mainStoragePrefix = 'antigravityChineseHelper.contextLimit.';
+const fallbackTitleMessage = '助手连接窗口后，会为新会话自动改成中文标题。';
 
 function validLimit(tokens) {
   return tokens === null || Number.isSafeInteger(tokens) && tokens > 0 && tokens <= 4294967295;
 }
 
-/** Own the shared native budget lifecycle; main preferences stay in nativeStorage. */
+/** Manage the desktop backend selected at cold start and its lifetime. */
 export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applications/Antigravity.app', appStoragePath, onChange, contextOverridesEnabled = CONTEXT_OVERRIDES_ENABLED }) {
   const directory = resolve(stateDir);
   const settingsPath = join(directory, 'backend-context.json');
@@ -30,17 +33,23 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
   const machExecutablePath = join(runtimeDir, '..', 'Antigravity汉化助手.app', 'Contents', 'MacOS', 'AntigravityBackendMach');
   const appExecutable = join(appPath, 'Contents', 'MacOS', 'Antigravity');
   const officialBackendPath = join(appPath, 'Contents', 'Resources', 'bin', 'language_server');
+  const titleBackendPath = join(directory, 'desktop-title', 'language_server');
   let targetTokens = null, owner = null, disposed = false, disposal;
   let pending = Promise.resolve();
   let error = null;
   let mainOverrides = false, mainSettingsError = null;
+  let observedBackend = null;
 
   const getStatus = () => {
-    const native = owner?.runtime.getStatus();
-    const nativeReady = contextOverridesEnabled && !disposed && Boolean(owner && !owner.appGone && !owner.ending &&
-      owner.session?.getStatus().phase === 'running' && native.attached && !native.disposed && !native.lastError);
+    const native = owner?.runtime?.getStatus();
+    const managed = !disposed && owner && !owner.appGone && !owner.ending;
+    const phase = owner?.session?.getStatus().phase;
+    const running = managed && phase === 'running';
+    // Desktop can display its setup wizard before it starts the language server.
+    const nativeChineseTitles = disposed ? null : managed ? (running ? !owner.runtime : null) : observedBackend?.localized ?? null;
+    const nativeReady = contextOverridesEnabled && Boolean(running && native?.attached && !native.disposed && !native.lastError);
     const active = targetTokens !== null && nativeReady;
-    return { contextOverridesEnabled, targetTokens, active, nativeReady, mainOverrides, error: error ?? mainSettingsError,
+    return { nativeChineseTitles, contextOverridesEnabled, targetTokens, active, nativeReady, mainOverrides, error: error ?? mainSettingsError,
       mainMessage: mainSettingsError ?? (mainOverrides && !nativeReady ? mainSavedMessage : ''),
       message: targetTokens === null ? '使用子代理默认上下文' : active ? '' : savedMessage };
   };
@@ -89,13 +98,40 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
     } finally { await rm(temporary, { recursive: true, force: true }).catch(() => {}); }
   }
   async function processes() {
-    const { stdout } = await exec('/bin/ps', ['-axo', 'pid=,comm='], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 });
+    const { stdout } = await exec('/bin/ps', ['-xo', 'pid=,ppid=,comm='], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 });
     const result = new Map();
     for (const line of stdout.split(/\r?\n/)) {
-      const match = /^\s*(\d+)\s+(.+)$/.exec(line);
-      if (match) result.set(Number(match[1]), match[2].trim());
+      const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/.exec(line);
+      if (match) result.set(Number(match[1]), {parent:Number(match[2]), path:match[3].trim()});
     }
     return result;
+  }
+  // The inspector receipt can be absent or stale across helper restarts.
+  // The desktop's running child still determines which title prompt it uses.
+  function identifyTitles(current) {
+    let found = null;
+    for (const [pid, child] of current) {
+      if (current.get(child.parent)?.path !== appExecutable) continue;
+      if (child.path !== officialBackendPath && child.path !== titleBackendPath) continue;
+      if (found) return null;
+      found = {appPid:child.parent, backendPid:pid, localized:child.path === titleBackendPath};
+    }
+    return found;
+  }
+  function updateObservedTitles(next) {
+    const changed = observedBackend?.localized !== next?.localized;
+    observedBackend = next;
+    return changed ? publish() : getStatus();
+  }
+  function alive(pid) {
+    try { process.kill(pid, 0); return true; }
+    catch { return false; }
+  }
+  async function observeTitles(verifyDesktop = false) {
+    if (!verifyDesktop && observedBackend?.appPid &&
+        alive(observedBackend.appPid) && alive(observedBackend.backendPid)) return getStatus();
+    try { return updateObservedTitles(identifyTitles(await processes())); }
+    catch { return updateObservedTitles(null); }
   }
   async function appEnvironment() {
     const { stdout } = await exec('/usr/bin/plutil', ['-convert', 'json', '-o', '-', join(appPath, 'Contents', 'Info.plist')],
@@ -111,14 +147,18 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
     if (inspector.protocol !== 'ws:' || inspector.hostname !== '127.0.0.1' || !inspector.port) return null;
     const [app, official, helper, backendFolder, current] = await Promise.all([
       realpath(appExecutable), realpath(officialBackendPath), realpath(receipt.helperBackendPath),
-      realpath(join(directory, 'backend')), processes(),
+      realpath(join(directory, receipt.purpose === 'titles' ? 'desktop-title' : 'backend')), processes(),
     ]);
     const ownedPath = relative(backendFolder, helper).split(sep);
-    if (receipt.officialBackendPath !== official || helper === official || ownedPath.length !== 2 ||
-        !/^\d+$/.test(ownedPath[0]) || ownedPath[1] !== 'language_server') return null;
-    const appMatches = current.get(receipt.appPid) === app, backendMatches = current.get(receipt.backendPid) === helper;
+    const expectedCopy = receipt.purpose === 'titles' ? ownedPath.length === 1 && ownedPath[0] === 'language_server'
+      : ownedPath.length === 2 && /^\d+$/.test(ownedPath[0]) && ownedPath[1] === 'language_server';
+    if (!expectedCopy || receipt.officialBackendPath !== official || helper === official) return null;
+    const backendProcess = current.get(receipt.backendPid);
+    const appMatches = current.get(receipt.appPid)?.path === app, backendMatches = backendProcess?.path === helper;
+    const matches = appMatches && backendMatches &&
+      (receipt.purpose !== 'titles' || backendProcess.parent === receipt.appPid);
     return { appPid: receipt.appPid, backendPid: receipt.backendPid, appExecutable: app, helperBackendPath: helper,
-      appMatches, backendMatches, matches: appMatches && backendMatches };
+      appMatches, backendMatches, matches };
   }
 
   async function reapOrphanedBackend(owned) {
@@ -126,10 +166,10 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
     const appPid = owned.session?.appPid ?? owned.appPid;
     if (!Number.isSafeInteger(appPid) || appPid <= 0) return;
     const current = await processes();
-    if (current.get(appPid) === owned.appExecutable) return;
+    if (current.get(appPid)?.path === owned.appExecutable) return;
     owned.appGone = true;
     if (owned.backendGone || !Number.isSafeInteger(owned.backendPid) || owned.backendPid <= 0) return;
-    if (current.get(owned.backendPid) === owned.helperBackendPath) {
+    if (current.get(owned.backendPid)?.path === owned.helperBackendPath) {
       // Once its App has exited, only this recorded helper copy is ours to reap.
       try { process.kill(owned.backendPid, 'SIGKILL'); }
       catch (error) { if (error.code !== 'ESRCH') throw error; }
@@ -165,7 +205,7 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
           // 写入失败已由启动路径报告；这里只等待落盘结束，保证 receipt 写删顺序。
           if (owned.receiptWrite) await owned.receiptWrite.catch(() => {});
         } catch (error) { cleanupError ??= error; }
-        try { await owned.runtime.dispose(); }
+        try { await owned.runtime?.dispose(); }
         catch (error) {
           // An executor can lose the target while its App exit is being handled.
           if (!owned.appGone || !owned.backendGone) cleanupError ??= error;
@@ -194,9 +234,10 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
     return owned.ending.then(result => result.cleanupError);
   }
   function createOwner(helperBackendPath, executable, layout, appPid = null, backendPid = null, receipt = null) {
+    observedBackend = null;
     const owned = { session: null, opening: null, receiptWrite: null, receipt, ending: null, appPid, backendPid,
       appExecutable: executable, helperBackendPath };
-    owned.runtime = createBackendRuntime({ machExecutablePath,
+    if (layout) owned.runtime = createBackendRuntime({ machExecutablePath,
       expectedBinaryPath: helperBackendPath, layout, targetTokens,
       async onInstallation({ pid, descriptor }) {
         if (disposed || owner !== owned || owned.ending || owned.backendPid !== pid) throw new Error('子代理上下文连接已取消');
@@ -218,9 +259,11 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
         // branches remain the authority when another helper reconnects.
         const nativeDescriptor = owned.receipt?.backendPid === pid ? owned.receipt.nativeDescriptor : undefined;
         owned.receipt = { appPid, backendPid: pid, inspectorUrl, officialBackendPath: official, helperBackendPath: helper,
+          ...(owned.runtime ? {} : {purpose:'titles'}),
           ...(nativeDescriptor === undefined ? {} : { nativeDescriptor }) };
         owned.receiptWrite = writeJson(receiptPath, owned.receipt);
         await owned.receiptWrite;
+        if (!owned.runtime) return;
         if (disposed || owner !== owned || owned.ending || signal.aborted) throw new Error('子代理上下文连接已取消');
         const result = await owned.runtime.attach(pid, { descriptor: nativeDescriptor });
         if (disposed || owner !== owned || owned.ending || signal.aborted) throw new Error('子代理上下文连接已取消');
@@ -277,7 +320,8 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
       let candidate;
       try { candidate = await inspectReceipt(receipt); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
-      if (!contextOverridesEnabled && candidate) {
+      const titleCopy = receipt.purpose === 'titles';
+      if (!contextOverridesEnabled && !titleCopy && candidate) {
         await removeSavedBudget(receipt, candidate);
         return publish({error:null});
       }
@@ -287,7 +331,7 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
         return getStatus();
       }
       const { helperBackendPath: helper, appExecutable: executable } = candidate;
-      const layout = await inspectBackendBinary(helper);
+      const layout = titleCopy ? null : await inspectBackendBinary(helper);
       if (disposed) return getStatus();
       const owned = createOwner(helper, executable, layout, receipt.appPid, receipt.backendPid, receipt);
       try {
@@ -304,7 +348,7 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
     } catch (error) { publish({ error: error.message }); }
     return getStatus();
   }
-  const ready = initialize();
+  const ready = initialize().then(status => !disposed && !owner ? observeTitles() : status);
   function serial(action) {
     const result = pending.then(async () => { await ready; return action(); });
     pending = result.catch(() => {});
@@ -322,21 +366,22 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
         return publish();
       });
     },
-    refresh() {
+    refresh({hasDesktopWindow = true, verifyDesktop = false} = {}) {
       return serial(async () => {
         const owned = owner;
-        if (disposed || !owned) return getStatus();
+        if (disposed) return getStatus();
+        if (!owned) return hasDesktopWindow ? observeTitles(verifyDesktop) : updateObservedTitles(null);
         if (owned.ending) {
           await reapOrphanedBackend(owned);
           if (owned.appGone) await endOwner(owned);
-          return getStatus();
+          return hasDesktopWindow ? observeTitles(verifyDesktop) : updateObservedTitles(null);
         }
         const gate = owned.session.getStatus();
         if (gate.phase === 'failed' || gate.phase === 'exiting' || gate.phase === 'exited' || gate.phase === 'restored') {
           void endOwner(owned, gate.error ? new Error(gate.error) : null);
           return getStatus();
         }
-        if (gate.phase !== 'running' || !owned.runtime.getStatus().attached) return getStatus();
+        if (gate.phase !== 'running' || !owned.runtime?.getStatus().attached) return getStatus();
         try {
           const native = await owned.runtime.status();
           if (native.lastError) throw new Error(native.lastError);
@@ -353,7 +398,7 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
         if (!validLimit(tokens)) return publish({ error: '子代理上下文上限必须为正整数 token，或恢复默认' });
         const previous = targetTokens, owned = owner && !owner.ending ? owner : null;
         try {
-          if (owned) {
+          if (owned?.runtime) {
             const applied = await owned.runtime.setLimit(tokens);
             if (applied.lastError) throw new Error(applied.lastError);
           }
@@ -361,7 +406,7 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
           targetTokens = tokens;
           return publish({ error: null });
         } catch (error) {
-          if (owned && owner === owned && !owned.ending) {
+          if (owned?.runtime && owner === owned && !owned.ending) {
             try { await owned.runtime.setLimit(previous); }
             catch (rollback) { await endOwner(owned, new Error(`${error.message}；恢复原设置失败：${rollback.message}`)); return getStatus(); }
           }
@@ -384,34 +429,51 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
             return { launched: false, message: mainSettingsError };
           }
           const executable = await realpath(appExecutable);
-          const running = [...(await processes()).values()].includes(executable);
+          const current = await processes();
+          const running = [...current.values()].some(item => item.path === executable);
           if (owner?.session?.getStatus().phase === 'exiting' && !owner.appGone) {
             return { launched: false, message: 'Antigravity 正在退出，请退出完成后再启动。' };
           }
           if (running) {
+            if (!owner || owner.ending) updateObservedTitles(identifyTitles(current));
             await exec('/usr/bin/open', [appPath], { timeout: 10000 });
             const status = getStatus();
+            if (!contextOverridesEnabled && status.nativeChineseTitles === false) return { launched:false, message:fallbackTitleMessage };
             return { launched: false, message: status.mainMessage || (targetTokens === null || status.active ? '' : runningMessage) };
           }
           if (disposed) return { launched: false, message: '汉化助手已退出' };
           const cleanupError = await endOwner(owner);
           if (cleanupError) throw cleanupError;
           if (disposed) return { launched: false, message: '汉化助手已退出' };
-          if (targetTokens === null && !mainOverrides) {
-            await exec('/usr/bin/open', [appPath], { timeout: 10000 });
+          if (contextOverridesEnabled && targetTokens === null && !mainOverrides) {
+            await exec('/usr/bin/open', ['-a', appPath, '--args', ...desktopDebugArgs], { timeout: 10000 });
             publish({ error: null });
             return { launched: true, message: '' };
           }
           const official = await realpath(officialBackendPath);
-          await access(machExecutablePath, constants.X_OK);
-          const prepared = await prepareBackendCopy({ officialBackendPath: official, stateDir: directory });
+          let prepared;
+          if (contextOverridesEnabled) {
+            await access(machExecutablePath, constants.X_OK);
+            prepared = await prepareBackendCopy({ officialBackendPath: official, stateDir: directory });
+          } else {
+            try {
+              prepared = await prepareDesktopTitleCopy({ officialBackendPath: official, stateDir: directory });
+            } catch (error) {
+              if (disposed) return { launched: false, message: '汉化助手已退出' };
+              const message = `原生中文标题未启用（${error.message}）。${fallbackTitleMessage}`;
+              await exec('/usr/bin/open', ['-a', appPath, '--args', ...desktopDebugArgs], { timeout: 10000 });
+              observedBackend = {localized:false};
+              publish({error:message});
+              return { launched:true, message };
+            }
+          }
           const helper = prepared.binaryPath;
           const environment = await appEnvironment();
           if (disposed) return { launched: false, message: '汉化助手已退出' };
           const owned = createOwner(helper, executable, prepared.layout);
           try {
             owned.opening = launchBackendApp({ enabled: true, appExecutable: executable,
-              officialBackendPath: official, helperBackendPath: helper, env: environment,
+              officialBackendPath: official, helperBackendPath: helper, appArgs: desktopDebugArgs, env: environment,
               ...callbacks(owned, official, helper) });
             const session = await owned.opening;
             owned.session = session;
@@ -419,7 +481,9 @@ export function createBackendManager({ stateDir, runtimeDir, appPath = '/Applica
               await endOwner(owned);
               return { launched: false, message: getStatus().error || (disposed ? '汉化助手已退出' : 'Antigravity 正在退出或连接已结束。') };
             }
-            await session.ready;
+            // The official first-run wizard can stay open indefinitely. The app
+            // has already launched; its running event will report title readiness.
+            if (owned.runtime) await session.ready;
             if (disposed || owner !== owned || owned.ending) {
               await endOwner(owned);
               return { launched: false, message: getStatus().error || 'Antigravity 正在退出或连接已结束。' };

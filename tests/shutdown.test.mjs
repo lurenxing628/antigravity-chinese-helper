@@ -115,7 +115,7 @@ test('Swarm frames use their own renderer lifecycle without receiving the main A
       uninstall() { globalThis.restores = (globalThis.restores ?? 0) + 1; globalThis.display = 'Board'; }};
   })`;
   const files = { 'renderer.js':'(function() { throw new Error("Main App renderer must not run in Swarm"); })',
-    'swarm-renderer.js':source, 'translations.json':JSON.stringify({strings:{Board:'看板'}}) };
+    'swarm-renderer.js':source, 'auxiliary-renderer.js':'(() => null)', 'translations.json':JSON.stringify({strings:{Board:'看板'}}) };
   const mtimes = {'renderer.js':1,'swarm-renderer.js':2,'translations.json':3};
   const target = { id:'swarm', type:'iframe', url:'plugin://swarm--swarm_board-5000/?token=fixture',
     webSocketDebuggerUrl:'ws://127.0.0.1:9222/devtools/page/swarm' };
@@ -249,19 +249,19 @@ test('shutdown preserves a pending registration identifier and removes it withou
 });
 
 test('页面不可达时仍检查后台，菜单状态不等待失联页面响应', async () => {
-  for (const missingPort of [true, false]) {
+  for (const [readError, debugPortPresent] of [['ENOENT', false], ['EACCES', null], [null, true]]) {
     let status = {targetTokens:512000, active:true, error:null, message:''};
     const written = [];
     const helper = runner(undefined, {
       readFile:async () => {
-        if (missingPort) throw Object.assign(new Error('没有页面调试端口'), {code:'ENOENT'});
+        if (readError) throw Object.assign(new Error('读取页面调试端口失败'), {code:readError});
         return '9222\n';
       },
       fetch:async () => { throw new Error('页面调试连接已关闭'); },
       stat:async () => ({mtimeMs:1}),
       writeFile:async (_path, contents) => { written.push(JSON.parse(contents)); },
     });
-    helper.setBundle({sourceMtime:1, swarm:{sourceMtime:1}, dictionaryMtime:1});
+    helper.setBundle({sourceMtime:1, swarm:{sourceMtime:1}, auxiliary:{sourceMtime:1}, dictionaryMtime:1});
     helper.setBackend({
       getStatus:() => status,
       async refresh() { status = {...status, active:false, message:'已保存，等待下次启动'}; },
@@ -269,6 +269,8 @@ test('页面不可达时仍检查后台，菜单状态不等待失联页面响�
     await helper.tick();
     assert.equal(helper.snapshot().subagentContext.active, false);
     assert.equal(helper.snapshot().state, 'waiting-for-app');
+    assert.equal(written.at(-1).debugPortPresent, debugPortPresent);
+    assert.ok(Number.isFinite(Date.parse(written.at(-1).discoveredAt)));
     const response = deferred();
     helper.sessions.set('失联的旧窗口', {kind:'main', client:{connected:false, call:() => response.promise}});
     const publishing = helper.publishBackendStatus();
@@ -277,6 +279,17 @@ test('页面不可达时仍检查后台，菜单状态不等待失联页面响�
     response.resolve({});
     await publishing;
   }
+  let hasPort = true;
+  const helper = runner(undefined, {readFile:async () => {
+    if (hasPort) return '9222\n';
+    throw Object.assign(new Error('端口已关闭'), {code:'ENOENT'});
+  }});
+  await helper.discover();
+  assert.equal(helper.snapshot().lastError, 'window-connect-failed');
+  hasPort = false;
+  await helper.discover();
+  assert.equal(helper.snapshot().status, 'waiting');
+  assert.equal(helper.snapshot().debugPortPresent, false);
 });
 
 test('主设置通知只发送变更信号，manager重读后经同一bridge返回native状态', async () => {

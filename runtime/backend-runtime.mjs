@@ -28,7 +28,7 @@ export async function prepareBackendCopy({ officialBackendPath, stateDir }) {
   const buildCL = stdout.match(/^Built at CL: (\d+)\r?$/m)?.[1];
   if (!buildCL) throw new Error('后台未返回有效的构建编号');
   const folder = join(resolve(stateDir), 'backend', buildCL);
-  return { ...await prepareSignedNativeCopy({ sourcePath:official, destinationPath:join(folder, 'language_server'),
+  return { ...await prepareSignedNativeCopy({ sourcePath:official, destinationPath:join(folder, 'language_server'), debugEntitlements:true,
     transform(binary) {
       return { binary, layout:deriveBackendLayout(binary, prepareBackendMetadata(binary)) };
     },

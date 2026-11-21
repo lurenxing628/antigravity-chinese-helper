@@ -25,8 +25,11 @@ function page() {
 async function fixture(preparePage) {
   const files = {
     source: `(dictionary, options) => {
+      const VERSION = 'fixture-1';
       installs++;
-      return { version: 'fixture-1', dictionary, contextOverridesEnabled:options.contextOverridesEnabled, history: new Map([[1, 'cached']]),
+      return { version: VERSION, dictionary, contextOverridesEnabled:options.contextOverridesEnabled, history: new Map([[1, 'cached']]),
+        fallbackTitles:options.fallbackTitles,
+        setFallbackTitles(enabled) { this.fallbackTitles = enabled; },
         refresh(next) { this.dictionary = next; },
         uninstall() { uninstalls++; }
       };
@@ -62,21 +65,42 @@ async function fixture(preparePage) {
   });
   const runner = vm.runInContext(runnerSource + `\n({
     reload, sessions, install,
+    changeBackend(nativeChineseTitles) {
+      backend = {getStatus:() => ({nativeChineseTitles})};
+      return publishBackendStatus();
+    },
     async initialize() { bundle = await loadBundle(); }
   })`, context);
   await runner.initialize();
-  const session = { client, scriptId: null, operation: Promise.resolve(), closing: false };
+  const session = { client, kind:'app', scriptId: null, operation: Promise.resolve(), closing: false };
   runner.sessions.set('window', session);
   await runner.install(session);
-  return { files, current, scripts, session, reload: runner.reload, ensure: () => runner.install(session) };
+  return { files, current, scripts, session, reload: runner.reload, ensure: () => runner.install(session),
+    changeBackend:runner.changeBackend };
 }
+
+test('当前主窗口和下次导航都按实际后端选择标题模式', async () => {
+  const f = await fixture();
+  const helper = f.current.__antigravityChineseHelper;
+  assert.equal(helper.fallbackTitles, false, '后端尚未确认');
+  for (const native of [false, null, false, true]) {
+    await f.changeBackend(native);
+    assert.strictEqual(f.current.__antigravityChineseHelper, helper);
+    assert.equal(helper.fallbackTitles, native === false);
+    assert.equal(f.scripts.size, 1);
+    const nextPage = page();
+    vm.runInContext([...f.scripts.values()][0], nextPage);
+    assert.equal(nextPage.__antigravityChineseHelper.fallbackTitles, native === false);
+  }
+  assert.equal(f.current.installs, 1);
+});
 
 test('disabled startup replaces a leftover legacy helper and removes its send hook', async () => {
   let restored = false, bridgeDisposed = false;
   const send = request => request;
   const client = { sendUserCascadeMessage: request => send({...request, maxTokens:900000}) };
   const f = await fixture(current => {
-    current.__antigravityChineseHelper = {version:'legacy', uninstall() {
+    current.__antigravityChineseHelper = {version:'legacy', contextOverridesEnabled:false, uninstall() {
       restored = true; client.sendUserCascadeMessage = send;
     }};
     current.__antigravitySubagentContext = {dispose() {

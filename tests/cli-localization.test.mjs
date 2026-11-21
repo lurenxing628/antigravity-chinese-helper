@@ -4,8 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { collectCliLocalizationPatches, collectCliDisplayLabels, applyCliDisplayLabels,
+import { CliCompatibilityError } from '../runtime/cli-compatibility.mjs';
+import { collectCliLocalizationPatches, collectCliDisplayLabels,
   addressInstructions } from '../runtime/cli-localization.mjs';
+import { applyCliDisplayStrings } from '../runtime/cli-display.mjs';
 
 function fixture() {
   const buffer = Buffer.alloc(0x10000), imageBase = 0x100000000;
@@ -38,27 +40,64 @@ function fixture() {
 function install(f) {
   const plan = collectCliDisplayLabels(f.buffer, f.dictionary, f.metadata);
   let pool = 0xb000;
-  const result = applyCliDisplayLabels(f.buffer, plan, {
+  const result = applyCliDisplayStrings(f.buffer, plan, {
     codeAddress:f.metadata.imageBase + 0x9000, codeFileOffset:0x9000, capacity:4096,
+    tableAddress:f.metadata.imageBase + 0xa000,
     allocateString(bytes) { const offset = pool; bytes.copy(f.buffer, offset); pool += bytes.length; return f.metadata.imageBase + offset; },
   });
+  result.table.copy(f.buffer, 0xa000);
   return {plan, result};
 }
 
 test('display translation keeps the original labels used for settings identity', () => {
   const f = fixture(), before = Buffer.from(f.buffer);
   const {plan, result} = install(f);
-  assert.deepEqual(result, {translated:2, sites:3, codeBytes:288});
+  assert.equal(result.translated, 2);
   assert.equal(plan.missing.length, 0);
-  assert.deepEqual(plan.labels.map(label => [label.original, label.sourceAddress, label.sourceLength]), [
-    ['Editor',0x100007000,6], ['Editor Mode',0x100007000,11],
+  assert.deepEqual(plan.entries.map(label => [label.original, label.sourceRva, label.sourceLength]), [
+    ['Editor',0x7000,6], ['Editor Mode',0x7000,11],
   ]);
   assert.ok(f.buffer.subarray(0x5000,0x5140).equals(before.subarray(0x5000,0x5140)), 'identity table remains unchanged');
   assert.ok(f.buffer.subarray(0x7000,0x7304).equals(before.subarray(0x7000,0x7304)), 'English labels and custom content remain unchanged');
   for (const site of plan.sites) {
-    assert.notEqual(f.buffer.readUInt32LE(site.fileOffset), site.load);
+    assert.notEqual(f.buffer.readUInt32LE(site.fileOffset), site.word);
     assert.ok(f.buffer.subarray(site.fileOffset + 4, site.fileOffset + 24).equals(before.subarray(site.fileOffset + 4, site.fileOffset + 24)), 'Go call and continuation stay intact');
   }
+});
+
+test('settings display loads follow the shared label when the renderer layout moves', () => {
+  const {buffer, dictionary, metadata} = fixture();
+  const displacement = 0x40;
+  const blocks = [[0x1174,32], [0x15e0,32], [0x1878,16]];
+  for (const [start, length] of blocks) {
+    const moved = start + displacement;
+    buffer.copy(buffer, moved, start, start + length);
+    buffer.fill(0, start, start + length);
+    buffer.writeUInt32LE(0x9123c3fb, moved); // ADD X27,SP,#0x8f0
+    const call = moved + length - 4;
+    buffer.writeUInt32LE(buffer.readUInt32LE(call) - displacement / 4, call);
+  }
+  const plan = collectCliDisplayLabels(buffer, dictionary, metadata);
+  assert.deepEqual(plan.sites.map(site => site.fileOffset), blocks.map(([start]) => start + displacement + 8));
+  buffer.writeUInt32LE(0x9119c3fb, blocks[2][0] + displacement);
+  assert.throws(() => collectCliDisplayLabels(buffer, dictionary, metadata), CliCompatibilityError);
+});
+
+test('verified command descriptions survive other incompatible fixed text sources', () => {
+  const {buffer, dictionary, metadata} = fixture();
+  const commandPrefix = 'google3/third_party/jetski/cli/commands/commands.';
+  const mainSettings = 'google3/third_party/jetski/cli/model/model.settingFields.func1';
+  const supported = commandPrefix + 'Editor.Description', ambiguous = commandPrefix + 'Another.Description';
+  for (const [name, rva] of [[supported,0x3100], [ambiguous,0x3120]]) {
+    metadata.functions.set(name, {name, rva, fileOffset:rva, size:16});
+    [...addressInstructions(0, metadata.imageBase + 0x7200, metadata.imageBase + rva), 0xd28000c1, 0xd65f03c0]
+      .forEach((word, index) => buffer.writeUInt32LE(word, rva + index * 4));
+  }
+  metadata.ambiguousFunctions.add(ambiguous);
+  buffer.writeUInt32LE(0xd503201f, metadata.functions.get(mainSettings).fileOffset);
+  const plan = collectCliLocalizationPatches(buffer, dictionary, metadata);
+  assert.deepEqual(plan.patches.map(patch => [patch.functionName,patch.translated]), [[supported,'编辑器']]);
+  assert.deepEqual(plan.unsupported, [ambiguous,mainSettings]);
 });
 
 test('settings sources include the live array tail and external singleton for labels and hints', () => {
@@ -104,7 +143,7 @@ test('settings sources include the live array tail and external singleton for la
   put(0xa800, 'Use AI Credits', '使用 AI 点数');
   put(0xa810, 'Use AI credits after quota', '额度用尽后使用 AI 点数');
   const labelPlan = collectCliDisplayLabels(buffer, dictionary, metadata);
-  assert.deepEqual(labelPlan.labels.map(label => label.original), ['Editor','Editor Mode','Use AI Credits',...labels]);
+  assert.deepEqual(labelPlan.entries.map(label => label.original), ['Editor','Editor Mode','Use AI Credits',...labels]);
   const hintPlan = collectCliLocalizationPatches(buffer, dictionary, metadata);
   assert.equal(hintPlan.missing.length, 0);
   assert.deepEqual(hintPlan.patches.map(patch => [patch.original,patch.fileOffset]), [
@@ -112,6 +151,9 @@ test('settings sources include the live array tail and external singleton for la
     ...[0,1,2,3].map(index => [`Voice setting hint ${index}`,0xa410 + index * 160]),
   ]);
   buffer.writeUInt32LE(0xd503201f, live.fileOffset + 0x250);
+  const partial = collectCliLocalizationPatches(buffer, dictionary, metadata);
+  assert.deepEqual(partial.patches.map(patch => patch.original), ['Use AI credits after quota']);
+  assert.deepEqual(partial.unsupported, [live.name]);
   assert.throws(() => collectCliDisplayLabels(buffer, dictionary, metadata), /settings table copy changed/);
 });
 
@@ -124,10 +166,23 @@ test('changed display loads and callees are rejected before writing native code'
   assert.throws(() => collectCliDisplayLabels(g.buffer, g.dictionary, g.metadata), /load at renderer/);
   const h = fixture(), plan = collectCliDisplayLabels(h.buffer, h.dictionary, h.metadata), before = Buffer.from(h.buffer);
   let allocations = 0;
-  assert.throws(() => applyCliDisplayLabels(h.buffer, plan, {codeAddress:0x100009000,
-    codeFileOffset:0x9000, capacity:128, allocateString() { allocations++; return 0x10000b000; }}), /reservation/);
+  assert.throws(() => applyCliDisplayStrings(h.buffer, plan, {codeAddress:0x100009000, tableAddress:0x10000a000,
+    codeFileOffset:0x9000, capacity:128, allocateString() { allocations++; return 0x10000b000; }}), /显示代码空间不足/);
   assert.equal(allocations, 0);
   assert.ok(h.buffer.equals(before));
+});
+
+test('adding settings labels only grows the read-only table within this instruction range', () => {
+  const small = install(fixture()).result;
+  const f = fixture();
+  const plan = collectCliDisplayLabels(f.buffer, f.dictionary, f.metadata);
+  for (let i = 0; i < 24; i++) {
+    plan.entries.push({original:'Editor', translated:'编辑器', sourceRva:0x900 + i * 8, sourceLength:6});
+  }
+  const larger = applyCliDisplayStrings(f.buffer, plan, {codeAddress:0x100009000, codeFileOffset:0x9000,
+    capacity:small.codeSize, tableAddress:0x10000a000, allocateString:() => 0x10000b000});
+  assert.equal(larger.codeSize, small.codeSize);
+  assert.equal(larger.table.length - small.table.length, 24 * 16);
 });
 
 test('ARM64 thunks preserve flags, other registers and source identities at all three sites', {

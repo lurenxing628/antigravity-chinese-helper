@@ -17,13 +17,13 @@ assert.ok(restoreHooksSource, 'the actual native hook restoration is present');
 function fixture(dictionary = {}, window) {
   const context = vm.createContext({dictionary, window});
   return vm.runInContext(`
-    let strings, normalizedStrings;
+    let strings, translationIndex;
     const nativeMenuHooks = [];
     const projectPlaceholders = new Set(['No Project','Select Project','Select Workspace','New Workspace']);
     ${translationSource}
     ${nativeHooksSource}
     setStrings(dictionary);
-    ({translate, setStrings, installNativeMenuHooks, restoreNativeHooks() {
+    ({translate, translateControlAria, setStrings, installNativeMenuHooks, restoreNativeHooks() {
       ${restoreHooksSource}
       nativeMenuHooks.length = 0;
     }});
@@ -84,6 +84,23 @@ test('native confirmations translate current UI text and preserve names, decisio
   assert.equal(calls.at(-1).args[0], '删除此处理程序？');
   f.restoreNativeHooks();
   assert.equal(window.confirm, original);
+});
+
+test('terminal snapshots preserve the mouse encoding of each tab on remount', () => {
+  class SerializeAddon {
+    _serializeBufferByRange() {}
+    _serializeModes() { return '\x1b[?1002h'; }
+  }
+  const original = SerializeAddon.prototype._serializeModes;
+  const f = fixture({}, {SerializeAddon});
+  f.installNativeMenuHooks();
+  const addon = new SerializeAddon();
+  for (const [encoding, sequence] of [['SGR', '\x1b[?1006h'], ['DEFAULT', ''], ['SGR_PIXELS', '\x1b[?1016h']]) {
+    const terminal = {_core:{coreMouseService:{activeEncoding:encoding}}};
+    assert.equal(addon._serializeModes(terminal), '\x1b[?1002h' + sequence);
+  }
+  f.restoreNativeHooks();
+  assert.equal(SerializeAddon.prototype._serializeModes, original);
 });
 
 test('dynamic labels preserve shortcuts, counts and model punctuation', () => {
@@ -204,4 +221,98 @@ test('native operation and browser templates retain raw names and error suffixes
   assert.equal(translate('Sign in from the My  Product panel.'),'请在 My  Product 面板中登录。');
   for (const value of ['Failed to update my file: data','Could not attach folder notes',"Couldn't rename conversation",'The folder My Folder does not exist.'])
     assert.equal(translate(value),null,value);
+});
+
+test('PDF labels keep page numbers and selected text within the viewer', () => {
+  const {translate} = fixture({
+    'pdf-template:"{text}" not found on page {page}':'未在第 {page} 页找到“{text}”',
+    'pdf-template:Go to page {page}':'前往第 {page} 页',
+    'pdf-annotation:Underline':'下划线',
+  });
+  assert.equal(translate('"A  {page} $&" not found on page 7','pdf'),'未在第 7 页找到“A  {page} $&”');
+  assert.equal(translate('Underline annotation on page 13','pdf'),'第 13 页的下划线批注');
+  assert.equal(translate('Go to page 4','pdf'),'前往第 4 页');
+  assert.equal(translate('Go to page Settings','pdf'),null);
+  assert.equal(translate('Go to page 4'),null);
+});
+
+test('accessibility templates preserve filenames and use their owning controls on refresh', () => {
+  const dictionary = {
+    'aria-label:Address bar suggestions':'地址栏建议',
+    'aria-template:webview-download-open,input-attachment-open:Open {name}':'打开 {name}',
+    'aria-template:cloud-trigger-run-now:Run {name} now':'立即运行 {name}',
+    'Settings':'设置', 'Cancel':'取消',
+  };
+  const f = fixture(dictionary);
+  assert.equal(f.translateControlAria('browser-autocomplete-dropdown','Address bar suggestions'),'地址栏建议');
+  for (const id of ['webview-download-open','input-attachment-open']) {
+    assert.equal(f.translateControlAria(id,'Open My  File $& {name}'),'打开 My  File $& {name}');
+    assert.equal(f.translateControlAria(id,'Settings'),null);
+  }
+  assert.equal(f.translateControlAria('cloud-trigger-run-now','Run Settings now'),'立即运行 Settings');
+  assert.equal(f.translateControlAria('media-modal-video','Settings'),null);
+  assert.equal(f.translateControlAria('','Cancel'),null);
+  assert.equal(f.translate('Open My  File $& {name}'),null);
+  f.setStrings({'aria-template:webview-download-open:Open {name}':'查看 {name}'});
+  assert.equal(f.translateControlAria('webview-download-open','Open Settings'),'查看 Settings');
+  assert.equal(f.translateControlAria('input-attachment-open','Open Settings'),null);
+});
+
+test('desktop templates retain literal parameters and refresh with the dictionary', () => {
+  const f = fixture({
+    'desktop-template:Retrying transcription (attempt {attempt})…':'正在重试转录（第 {attempt} 次）…',
+    'desktop-template:Enable {name} on {host}. Return to {host}.':'返回 {host}，启用 {name}。',
+    'desktop-template:{count} hidden hosts':'已隐藏 {count} 个主机',
+  });
+  const name = 'My  App\n{host} $&', host = 'Host “Local”';
+  assert.equal(f.translate('Retrying transcription (attempt 3)…'), '正在重试转录（第 3 次）…');
+  assert.equal(f.translate('3 hidden hosts'), '已隐藏 3 个主机');
+  assert.equal(f.translate('user hidden hosts'), null);
+  assert.equal(f.translate(`Enable ${name} on ${host}. Return to ${host}.`), `返回 ${host}，启用 ${name}。`);
+  assert.equal(f.translate(`Enable App on ${host}. Return to Other.`), null);
+  f.setStrings({'desktop-template:{count} hidden hosts':'隐藏主机 {count} 台'});
+  assert.equal(f.translate('3 hidden hosts'), '隐藏主机 3 台');
+  assert.equal(f.translate('Retrying transcription (attempt 3)…'), null);
+});
+
+test('side-question controls translate help counts and preserve the question title', () => {
+  const dictionary = JSON.parse(fs.readFileSync(new URL('../runtime/translations.json', import.meta.url)));
+  const {translate,translateControlAria} = fixture(dictionary);
+  assert.equal(translate('2 Help'), '2 条帮助请求');
+  assert.equal(translate('1 Help · 2 Side Questions'), '1 条帮助请求 · 2 个临时问题');
+  assert.equal(translate('View 1 help and 2 side questions'), '查看 1 条帮助请求和 2 个临时问题');
+  assert.equal(translate('View 2 help items and 1 side question'), '查看 2 条帮助请求和 1 个临时问题');
+  assert.equal(translate('View 2 help items'), '查看 2 条帮助请求');
+  assert.equal(translateControlAria('side-question-tab-promote','Promote to conversation'), '转为独立对话');
+  assert.equal(translateControlAria('side-question-tab-delete','Delete side question'), '删除临时问题');
+  assert.equal(translateControlAria('side-question-tab-stop','Stop side question'), '停止临时问题');
+  assert.equal(translateControlAria('side-question-row-delete','Delete side question: My  notes $&'), '删除临时问题：My  notes $&');
+  assert.equal(translateControlAria('side-question-tab-header-name','Delete side question: My  notes $&'), null);
+});
+
+test('the Mac control HUD translates its new stop state and restores the button tooltip', () => {
+  const source = fs.readFileSync(new URL('../runtime/auxiliary-renderer.js', import.meta.url), 'utf8');
+  const originalTooltip = 'Let agents use this Mac again. The stopped task does not restart.';
+  const buttonText = {nodeType:3, data:'Allow again', isConnected:true};
+  const statusText = {nodeType:3, data:'You took over — agent stopped', isConnected:true};
+  let tooltip = originalTooltip;
+  const button = {childNodes:[buttonText], getAttribute:() => tooltip, setAttribute:(_, next) => { tooltip = next; }};
+  const document = {
+    body:{}, documentElement:{lang:'en', getAttribute() { return this.lang; }},
+    querySelector: selector => selector === '#resume[title]' ? button : null,
+    querySelectorAll: () => [button, {childNodes:[statusText]}],
+  };
+  const install = vm.runInNewContext(source, {document, MutationObserver:class { observe() {} disconnect() {} }});
+  const dictionary = {'aux-ui:Allow again':'重新允许', 'aux-ui:You took over — agent stopped':'你已接管操作，智能体已停止',
+    ['aux-ui:' + originalTooltip]:'允许智能体再次使用这台 Mac。已停止的任务不会重新启动。'};
+  const helper = install('hud', dictionary);
+  assert.equal(buttonText.data, '重新允许');
+  assert.equal(statusText.data, '你已接管操作，智能体已停止');
+  assert.equal(tooltip, '允许智能体再次使用这台 Mac。已停止的任务不会重新启动。');
+  helper.refresh({...dictionary, ['aux-ui:' + originalTooltip]:'允许智能体再次操作 Mac。'});
+  assert.equal(tooltip, '允许智能体再次操作 Mac。');
+  helper.uninstall();
+  assert.equal(buttonText.data, 'Allow again');
+  assert.equal(tooltip, originalTooltip);
+  assert.equal(document.documentElement.lang, 'en');
 });

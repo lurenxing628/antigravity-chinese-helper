@@ -60,7 +60,8 @@ const typeFields = {
   ReplacerDecorator: { name:'decorators.replacerDecorator', fields:{ Trajectory:['trajectory.Trajectory',16,20] } },
 };
 
-const unsupported = message => new Error(`Unsupported backend metadata: ${message}`);
+export class UnsupportedNativeMetadata extends Error {}
+const unsupported = message => new UnsupportedNativeMetadata(`Unsupported backend metadata: ${message}`);
 const describeBudgetSlot = (rva, size) => ({ rva, size, codeRva:rva + 32, capacity:size - 32 });
 
 function readMachO(input) {
@@ -159,10 +160,7 @@ function readMachO(input) {
 const overlap = (start, size, other, length) => start < other + length && other < start + size;
 const nativePageSize = 16384;
 
-// Admission belongs to the copied file's one Mach-O reader. The note names a
-// structural, file-backed RX padding range; it does not own budget semantics.
-function budgetReservation(mach, { trailingBytes = 0 } = {}) {
-  const { bytes, range, u32, u64, fixedName, segments, allSections, commands, commandEnd, imageBase } = mach;
+function nativeTextTail({segments, commandEnd}) {
   const textSegments = segments.filter(segment => segment.name === '__TEXT');
   if (textSegments.length !== 1) throw unsupported('budget reservation needs one __TEXT segment');
   const text = textSegments[0];
@@ -173,10 +171,23 @@ function budgetReservation(mach, { trailingBytes = 0 } = {}) {
   const occupiedEnd = Math.max(text.address + commandEnd - text.fileOffset,
     ...text.sections.map(section => section.address + section.size));
   const address = Math.ceil(Math.max(occupiedEnd, Math.floor((end - 1) / nativePageSize) * nativePageSize) / 16) * 16;
+  return {text, address, available:end - address};
+}
+
+/** Geometry for planning the CLI display area. Reservation validates ownership before use. */
+export function inspectNativeTextTail(buffer) {
+  const mach = readMachO(buffer), {address, available} = nativeTextTail(mach);
+  return describeBudgetSlot(address - mach.imageBase, available);
+}
+
+// The note covers the budget only. On first admission the adjacent UI range must
+// pass the same ownership and zero-padding checks before either consumer can write.
+function budgetReservation(mach, {trailingBytes = 0} = {}) {
+  const {bytes, range, u32, u64, fixedName, segments, allSections, commands, commandEnd, imageBase} = mach;
+  const {text, address, available} = nativeTextTail(mach);
   if (!Number.isSafeInteger(trailingBytes) || trailingBytes < 0 || trailingBytes % 16) {
     throw unsupported('native RX resources must use an aligned trailing size');
   }
-  const available = end - address;
   const size = mach.budgetSlot?.size ?? available - trailingBytes, offset = text.fileOffset + address - text.address;
   if (size < 36) throw unsupported('RX text has insufficient single-page tail padding for a budget reservation');
   const slot = describeBudgetSlot(address - imageBase, size);
@@ -184,19 +195,20 @@ function budgetReservation(mach, { trailingBytes = 0 } = {}) {
       trailingBytes && size !== available - trailingBytes)) {
     throw unsupported('AGHBudget note does not identify the structural RX tail reservation');
   }
+  const reservedSize = size + trailingBytes;
   const fileRange = (start, length, label) => {
     range(start, length);
-    if (length && overlap(start, length, offset, size)) throw unsupported(`${label} occupies the budget reservation`);
+    if (length && overlap(start, length, offset, reservedSize)) throw unsupported(`${label} occupies the budget reservation`);
     if (length && !mach.budgetSlot && overlap(start, length, commandEnd, 40)) {
       throw unsupported(`${label} occupies the AGHBudget note header space`);
     }
   };
   for (const segment of segments) {
-    if (segment !== text && (overlap(segment.address, segment.memorySize, address, size) ||
-        overlap(segment.fileOffset, segment.fileSize, offset, size))) throw unsupported('another segment occupies the budget reservation');
+    if (segment !== text && (overlap(segment.address, segment.memorySize, address, reservedSize) ||
+        overlap(segment.fileOffset, segment.fileSize, offset, reservedSize))) throw unsupported('another segment occupies the budget reservation');
   }
   for (const section of allSections) {
-    if (overlap(section.address, section.size, address, size)) throw unsupported('a section occupies the budget reservation');
+    if (overlap(section.address, section.size, address, reservedSize)) throw unsupported('a section occupies the budget reservation');
     fileRange(section.relocationOffset, section.relocationCount * 8, 'section relocations');
     if (section.relocationCount) throw unsupported('classic section relocations are unsupported for budget reservation');
   }
@@ -275,7 +287,7 @@ function budgetReservation(mach, { trailingBytes = 0 } = {}) {
       for (let index = 0n; index < count; index++) {
         if (cursor > BigInt(segment.memorySize - width)) throw unsupported('dyld fixup leaves its segment');
         const location = segment.address + Number(cursor);
-        if (overlap(location, width, address, size)) throw unsupported('dyld fixup writes into the budget reservation');
+        if (overlap(location, width, address, reservedSize)) throw unsupported('dyld fixup writes into the budget reservation');
         advance(8n + skip);
       }
     };
@@ -314,7 +326,7 @@ function budgetReservation(mach, { trailingBytes = 0 } = {}) {
     while (!stream.done) {
       const delta = stream.integer(); if (!delta) break;
       functionAddress += delta;
-      if (functionAddress >= BigInt(address) && functionAddress < BigInt(address + size)) {
+      if (functionAddress >= BigInt(address) && functionAddress < BigInt(address + reservedSize)) {
         throw unsupported('function entry occupies the budget reservation');
       }
     }
@@ -329,10 +341,10 @@ function budgetReservation(mach, { trailingBytes = 0 } = {}) {
     for (let index = 0; index < count; index++) {
       if ((bytes[start + index * 16 + 4] & 14) !== 14) continue; // Only N_SECT values identify a section address.
       const value = u64(start + index * 16 + 8);
-      if (value >= address && value < address + size) throw unsupported('symbol occupies the budget reservation');
+      if (value >= address && value < address + reservedSize) throw unsupported('symbol occupies the budget reservation');
     }
   }
-  if (bytes.subarray(offset, offset + size).some(value => value !== 0)) throw unsupported('budget reservation padding is not zero-filled');
+  if (bytes.subarray(offset, offset + reservedSize).some(value => value !== 0)) throw unsupported('budget reservation padding is not zero-filled');
   return { slot, offset };
 }
 
@@ -403,7 +415,7 @@ function decodeGoFunctions(mach) {
   const tableSize = (count * 2 + 1) * 4;
   if (!count) throw unsupported('empty Go function table');
   range(table, tableSize, pclnEnd);
-  const functions = new Map(), ambiguousFunctions = new Set();
+  const functions = new Map(), functionVariants = new Map();
   for (let index = 0; index < count; index++) {
     const entry = u32(table + index * 8), next = u32(table + (index + 1) * 8);
     const infoOffset = u32(table + index * 8 + 4);
@@ -414,25 +426,29 @@ function decodeGoFunctions(mach) {
     const namePosition = names + i32(info + 4);
     if (namePosition < names) throw unsupported('invalid Go function name offset');
     const name = cstring(namePosition, namesEnd);
-    if (functions.has(name)) ambiguousFunctions.add(name);
     if (next === entry) throw unsupported(`empty function ${name}`);
-    functions.set(name, { name, rva: text.address + entry - imageBase, size: next - entry,
+    const fn = { name, rva: text.address + entry - imageBase, size: next - entry,
       fileOffset: fileOffset(text.address + entry, next - entry),
-      funcDataRva: pcln.address + info - h - imageBase, funcDataFileOffset: info });
+      funcDataRva: pcln.address + info - h - imageBase, funcDataFileOffset: info };
+    if (functions.has(name)) {
+      if (!functionVariants.has(name)) functionVariants.set(name, [functions.get(name)]);
+      functionVariants.get(name).push(fn);
+    }
+    functions.set(name, fn);
   }
-  return { functions, ambiguousFunctions, section, text, pcln, goType, h, pclnEnd, fileOffset };
+  return { functions, functionVariants, ambiguousFunctions:new Set(functionVariants.keys()), section, text, pcln, goType, h, pclnEnd, fileOffset };
 }
 
 /** One Mach-O and Go function reader for native budgets and CLI display fields. */
 export function inspectNativeBinary(input) {
   const mach = readMachO(input);
-  const { functions, ambiguousFunctions } = decodeGoFunctions(mach);
+  const { functions, ambiguousFunctions, functionVariants } = decodeGoFunctions(mach);
   return { imageBase:mach.imageBase, segments:mach.segments, sections:mach.sections, allSections:mach.allSections,
-    functions, ambiguousFunctions };
+    functions, ambiguousFunctions, functionVariants };
 }
 
-/** Append immutable CLI text before re-signing, retaining every existing address. */
-export function appendNativeResources(input, resources) {
+/** Append read-only text before signing while retaining existing addresses. */
+export function appendNativeResources(input, resources, {reserveBudgetHeader = false} = {}) {
   if (!Buffer.isBuffer(resources)) throw new TypeError('Native resources must be a Buffer');
   const mach = readMachO(input);
   const linkCommands = mach.commands.filter(item => item.command === 0x19 && mach.fixedName(item.position + 8) === '__LINKEDIT');
@@ -454,7 +470,7 @@ export function appendNativeResources(input, resources) {
   // version list is optional; the platform, minimum OS and SDK stay intact.
   let commands = mach.commands.filter(item => item !== signature);
   const firstSection = Math.min(...mach.allSections.filter(item => !item.zeroFill && item.size).map(item => item.fileOffset));
-  const requiredHeader = () => 32 + commands.reduce((sum, item) => sum + item.size, 0) + 40 + 16;
+  const requiredHeader = () => 32 + commands.reduce((sum, item) => sum + item.size, 0) + (reserveBudgetHeader ? 40 : 0) + 16;
   if (requiredHeader() > firstSection) commands = commands.map(item => {
     if (item.command !== 0x32 || item.size < 24 || mach.u32(item.position + 20) === 0) return item;
     const count = mach.u32(item.position + 20);
@@ -463,7 +479,7 @@ export function appendNativeResources(input, resources) {
     payload.writeUInt32LE(24, 4); payload.writeUInt32LE(0, 20);
     return { ...item, size:24, payload };
   });
-  if (requiredHeader() > firstSection) throw unsupported('native resources leave insufficient header space for budget and signing');
+  if (requiredHeader() > firstSection) throw unsupported('native resources leave insufficient header space');
   buffer.fill(0, 32, mach.commandEnd);
   let position = 32;
   for (const item of commands) {

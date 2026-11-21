@@ -1,26 +1,23 @@
 #!/usr/bin/env node
 import { execFile, spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { access, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
-import { appendNativeResources, inspectNativeBinary, prepareBackendMetadata, reserveBackendBudget } from './backend-metadata.mjs';
-import { deriveBackendLayout } from './backend-layout.mjs';
-import { createBackendRuntime, inspectBackendBinary } from './backend-runtime.mjs';
-import { collectCliLocalizationPatches, applyCliLocalizationPatches, collectCliDisplayLabels, applyCliDisplayLabels } from './cli-localization.mjs';
+import { createBackendRuntime } from './backend-runtime.mjs';
 import { prepareSignedNativeCopy } from './native-copy.mjs';
-import { collectCliMainContextPatch, applyCliMainContextPatch } from './cli-context.mjs';
-import { collectCliTitleLocalizationPatch, applyCliTitleLocalizationPatch } from './cli-title-localization.mjs';
-import { collectCliDisplayStrings, applyCliDisplayStrings,
-  collectCliSettingsDisplayStrings, applyCliContentDisplayStrings } from './cli-display.mjs';
+import { UnsupportedNativeMetadata } from './backend-metadata.mjs';
+import { CliCompatibilityError } from './cli-compatibility.mjs';
+import { buildLocalizedCli, collectCliBuildPlan } from './cli-build.mjs';
+import { prepareCachedCliCopy } from './cli-copy-cache.mjs';
+import { verifyLocalizedCliScreen } from './cli-screen-check.mjs';
+import { scheduleOfficialCliUpdate } from './cli-update.mjs';
+import { localizeCliNativeHelp, nativeCliHelpArgs } from './cli-native-help.mjs';
+import { cliOutputCommand, runCliOutputCommand } from './cli-command-output.mjs';
 import { withCliHud } from './cli-hud.mjs';
-import { collectCliNoticeDisplayStrings, applyCliNoticeDisplayStrings } from './cli-notice-localization.mjs';
-import { collectCliStatusLocalizationPatches, applyCliStatusLocalizationPatches,
-  collectCliSummaryNounDisplayStrings, collectCliUsageDisplayStrings } from './cli-status-localization.mjs';
-
 import { CONTEXT_OVERRIDES_ENABLED } from './context-policy.mjs';
 
 const exec = promisify(execFile);
@@ -56,7 +53,7 @@ export function parseCliArguments(argv, { contextOverridesEnabled = CONTEXT_OVER
     if (!contextOverridesEnabled && ['--main-context', '--subagent-context'].includes(item.split('=')[0])) throw new Error('上下文调节功能已停用，CLI 使用原生默认上下文');
     const key = item === '--main-context' ? 'mainTokens' : item === '--subagent-context' ? 'subagentTokens' : null;
     if (key) { overrides[key] = parseContextK(argv[++index]); continue; }
-    if (item === '--help' || item === '-h') { help = true; continue; }
+    if (argv.length === 1 && (item === '--help' || item === '-h')) { help = true; continue; }
     if (item === '--collect-cli') { collect = true; continue; }
     if (item === '--version') version = true;
     if (command === null && !item.startsWith('-')) command = item;
@@ -124,100 +121,25 @@ export async function findCliExecutable(candidate = process.env.ANTIGRAVITY_HELP
   throw new Error('未找到 agy；请先安装官方 Antigravity CLI，或用 ANTIGRAVITY_HELPER_CLI 指定路径');
 }
 
-export async function prepareCliCopy({ officialCliPath, stateDir, translationsPath = dictionaryPath, mainTokens = null, contextOverridesEnabled = CONTEXT_OVERRIDES_ENABLED }) {
+export async function prepareCliCopy({ officialCliPath, stateDir, translationsPath = dictionaryPath,
+  mainTokens = null, contextOverridesEnabled = CONTEXT_OVERRIDES_ENABLED, allowFallback = false }) {
   if (!contextOverridesEnabled) mainTokens = null;
-  const [sourcePath, sourceStat, dictionaryStat] = await Promise.all([
-    realpath(officialCliPath), stat(officialCliPath), stat(translationsPath),
-  ]);
-  const { stdout } = await exec(sourcePath, ['--version'], { timeout:10000, maxBuffer:65536 });
-  const version = stdout.trim();
-  if (!/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(version)) throw new Error('Antigravity CLI 未返回有效版本号');
-  const source = { path:sourcePath, size:sourceStat.size, modified:sourceStat.mtimeMs };
-  const dictionary = { size:dictionaryStat.size, modified:dictionaryStat.mtimeMs };
-  const adapter = Math.max(...await Promise.all(['cli.mjs', 'context-policy.mjs', 'cli-context.mjs', 'cli-localization.mjs', 'cli-display.mjs',
-    'cli-notice-localization.mjs', 'cli-status-localization.mjs', 'cli-title-localization.mjs', 'backend-metadata.mjs']
-    .map(async file => (await stat(join(runtimeDir, file))).mtimeMs)));
-  const folder = join(resolve(stateDir), 'builds', version), binaryPath = join(folder, 'agy');
-  const receiptPath = join(folder, 'copy.json');
-  const receipt = await readObject(receiptPath, null);
-  if (receipt && JSON.stringify(receipt.source) === JSON.stringify(source) &&
-      JSON.stringify(receipt.dictionary) === JSON.stringify(dictionary) && receipt.adapter === adapter && receipt.mainTokens === mainTokens && receipt.contextOverridesEnabled === contextOverridesEnabled) {
-    try {
-      return { binaryPath:await realpath(binaryPath), version, localization:receipt.localization,
-        layout:contextOverridesEnabled ? await inspectBackendBinary(binaryPath) : null };
-    } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  }
-  const translations = await readObject(translationsPath);
-  const prepared = await prepareSignedNativeCopy({ sourcePath, destinationPath:binaryPath,
-    transform(original) {
-      const metadata = inspectNativeBinary(original);
-      const plan = collectCliLocalizationPatches(original, translations, metadata);
-      const labels = collectCliDisplayLabels(original, translations, metadata);
-      const status = collectCliStatusLocalizationPatches(original, translations, metadata);
-      const title = collectCliTitleLocalizationPatch(original, metadata);
-      const lookups = [
-        {plan:collectCliDisplayStrings(original, translations, metadata), apply:applyCliDisplayStrings},
-        {plan:collectCliSettingsDisplayStrings(original, translations, metadata), apply:applyCliContentDisplayStrings},
-        {plan:collectCliUsageDisplayStrings(original, translations, metadata), apply:applyCliContentDisplayStrings},
-        {plan:collectCliSummaryNounDisplayStrings(original, translations, metadata), apply:applyCliDisplayStrings},
-        {plan:collectCliNoticeDisplayStrings(original, translations, metadata), apply:applyCliNoticeDisplayStrings},
-      ];
-      const main = collectCliMainContextPatch(original, metadata, mainTokens, { contextOverridesEnabled });
-      if (!plan.patches.length) throw new Error('当前 CLI 的文案入口与词库不匹配，尚不能准备汉化副本');
-      const strings = new Map(), chunks = [];
-      let size = 0;
-      for (const translated of [...plan.patches.map(patch => patch.translated), ...status.patches.map(patch => patch.translated),
-        ...labels.labels.map(label => label.translated), ...lookups.flatMap(({plan}) => plan.entries.flatMap(entry =>
-          plan.matchContent ? [entry.original, entry.translated] : [entry.translated])),
-        title.value, ...(main ? [main.value] : [])]) {
-        if (strings.has(translated)) continue;
-        strings.set(translated, size);
-        const bytes = Buffer.from(`${translated}\0`, 'utf8');
-        chunks.push(bytes); size += bytes.length;
-      }
-      let resourceSize = Math.ceil(size / 16) * 16;
-      for (const lookup of lookups) {
-        lookup.tableOffset = resourceSize;
-        resourceSize += lookup.plan.entries.length * 16;
-      }
-      const resources = appendNativeResources(original, Buffer.concat([...chunks,
-        Buffer.alloc(resourceSize - size)]));
-      const allocateString = bytes => resources.address + strings.get(bytes.toString('utf8'));
-      applyCliLocalizationPatches(resources.binary, plan, allocateString);
-      applyCliTitleLocalizationPatch(resources.binary, title, resources.address + strings.get(title.value));
-      if (main) applyCliMainContextPatch(resources.binary, main, resources.address + strings.get(main.value));
-      const uiCapacity = 6720, slot = reserveBackendBudget(resources.binary, { trailingBytes:uiCapacity });
-      const statusUi = applyCliStatusLocalizationPatches(resources.binary, status, allocateString, {
-        codeAddress:metadata.imageBase + slot.rva + slot.size,
-        codeFileOffset:slot.rva + slot.size, capacity:uiCapacity,
-      });
-      let displayOffset = Math.ceil(statusUi.codeBytes / 16) * 16;
-      const ui = applyCliDisplayLabels(resources.binary, labels, {
-        codeAddress:metadata.imageBase + slot.rva + slot.size + displayOffset,
-        codeFileOffset:slot.rva + slot.size + displayOffset, capacity:uiCapacity - displayOffset, allocateString,
-      });
-      displayOffset = Math.ceil((displayOffset + ui.codeBytes) / 16) * 16;
-      for (const lookup of lookups) {
-        const rendered = lookup.apply(resources.binary, lookup.plan, {
-          codeAddress:metadata.imageBase + slot.rva + slot.size + displayOffset,
-          codeFileOffset:slot.rva + slot.size + displayOffset, capacity:uiCapacity - displayOffset,
-          tableAddress:resources.address + lookup.tableOffset, allocateString,
-        });
-        rendered.table.copy(resources.binary, resources.fileOffset + lookup.tableOffset);
-        displayOffset = Math.ceil((displayOffset + rendered.codeSize) / 16) * 16;
-      }
-      const layout = contextOverridesEnabled ? deriveBackendLayout(resources.binary, prepareBackendMetadata(resources.binary)) : null;
-      const originals = [...plan.patches.map(patch => patch.original), ...status.patches.map(patch => patch.original),
-        ...labels.labels.map(label => label.original), ...lookups.flatMap(({plan}) => plan.entries.map(entry => entry.original))];
-      return { binary:resources.binary, layout,
-        localization:{ translated:new Set(originals).size,
-          references:plan.patches.length + status.patches.length + labels.sites.length + lookups.reduce((sum, {plan}) => sum + plan.entries.length, 0),
-          missing:plan.missing.length + labels.missing.length + status.missing.length +
-            lookups.reduce((sum,{plan}) => sum + (plan.missing?.length ?? 0),0) } };
+  const dictionary = await stat(translationsPath);
+  const adapterFiles = (await readdir(runtimeDir)).filter(file =>
+    (file.startsWith('cli-') || ['cli.mjs','context-policy.mjs','native-copy.mjs','native-title.mjs','native-strings.mjs','backend-metadata.mjs','backend-layout.mjs','backend-hook.js'].includes(file)) &&
+    (/\.m?js$/.test(file) || file === 'cli-release-notes.zh-CN.json') && !file.startsWith('cli-hud') &&
+    !['cli-command-output.mjs','cli-update.mjs'].includes(file)).sort();
+  const adapter = await Promise.all(adapterFiles.map(async file => [file, (await stat(join(runtimeDir, file))).mtimeMs]));
+  return prepareCachedCliCopy({ officialCliPath, stateDir, allowFallback,
+    verifyCandidate:contextOverridesEnabled ? undefined : verifyLocalizedCliScreen,
+    inputs:{ dictionary:{size:dictionary.size, modified:dictionary.mtimeMs}, adapter, mainTokens, contextOverridesEnabled },
+    isIncompatible:error => error instanceof CliCompatibilityError || error instanceof UnsupportedNativeMetadata,
+    async build({sourcePath, destinationPath}) {
+      const translations = await readObject(translationsPath);
+      return prepareSignedNativeCopy({sourcePath, destinationPath, debugEntitlements:true,
+        transform:original => buildLocalizedCli(original, translations, {mainTokens, contextOverridesEnabled})});
     },
   });
-  await writeObject(receiptPath, { source, dictionary, adapter, mainTokens, contextOverridesEnabled, localization:prepared.localization });
-  return { ...prepared, version };
 }
 
 export async function ensureCliTools(stateDir) {
@@ -249,6 +171,7 @@ export async function ensureCliTools(stateDir) {
 export async function launchCliSession({ binaryPath, args, layout, subagentTokens, machExecutablePath,
   launchExecutablePath, env = process.env, stdio = ['inherit', 'inherit', 'inherit'], onReady,
   contextOverridesEnabled = CONTEXT_OVERRIDES_ENABLED }) {
+  env = {...env, AGY_CLI_DISABLE_AUTO_UPDATE:'true'};
   if (!contextOverridesEnabled) {
     const child = spawn(binaryPath, args, { env, stdio });
     const interrupt = () => {}, term = () => child.kill('SIGTERM'), hup = () => child.kill('SIGHUP');
@@ -335,14 +258,29 @@ export async function main(argv = process.argv.slice(2), { stateDir = defaultCli
   const officialCliPath = await findCliExecutable();
   if (parsed.collect) {
     const [binary, dictionary] = await Promise.all([readFile(officialCliPath), readObject(dictionaryPath)]);
-    const metadata = inspectNativeBinary(binary);
-    const plan = collectCliLocalizationPatches(binary, dictionary, metadata);
-    const labels = collectCliDisplayLabels(binary, dictionary, metadata);
-    const status = collectCliStatusLocalizationPatches(binary, dictionary, metadata);
-    const settings = collectCliSettingsDisplayStrings(binary, dictionary, metadata);
-    console.log(JSON.stringify({ translated:plan.patches.length + labels.labels.length + status.patches.length + settings.entries.length,
-      missing:[...plan.missing, ...labels.missing, ...status.missing, ...settings.missing] }, null, 2));
+    const {report} = collectCliBuildPlan(binary, dictionary);
+    console.log(JSON.stringify(report, null, 2));
     return 0;
+  }
+  const nativeHelp = !parsed.version && nativeCliHelpArgs(parsed.args, valueFlags);
+  if (nativeHelp) {
+    const dictionary = await readObject(dictionaryPath);
+    const result = await exec(officialCliPath, nativeHelp, {maxBuffer:1024 * 1024,
+      env:{...process.env, AGY_CLI_DISABLE_AUTO_UPDATE:'true'}}).catch(error => {
+      if (typeof error.code !== 'number') throw error;
+      return error;
+    });
+    process.stdout.write(localizeCliNativeHelp(result.stdout, dictionary));
+    process.stderr.write(localizeCliNativeHelp(result.stderr, dictionary));
+    return result.code ?? 0;
+  }
+  const outputCommand = !parsed.version && cliOutputCommand(parsed.args, valueFlags);
+  // The native agent list shows a heading only on a TTY. Its localized
+  // executable keeps the native TTY and the raw list/JSON output contract.
+  const agentListOnTerminal = outputCommand?.command === 'agents' && process.stdout.isTTY;
+  if (outputCommand && !agentListOnTerminal) {
+    const dictionary = outputCommand.machineOutput ? undefined : await readObject(dictionaryPath);
+    return runCliOutputCommand(officialCliPath, parsed.args, outputCommand, dictionary);
   }
   // Commands that install/update the executable or own a background service
   // must retain the official program path and lifecycle.
@@ -352,10 +290,31 @@ export async function main(argv = process.argv.slice(2), { stateDir = defaultCli
   }
   if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('CLI 汉化目前支持 macOS arm64');
   const context = { ...await readCliContext(stateDir, { contextOverridesEnabled }), ...parsed.overrides };
-  const prepared = await prepareCliCopy({ officialCliPath, stateDir, mainTokens:context.mainTokens, contextOverridesEnabled });
-  const tools = contextOverridesEnabled ? await ensureCliTools(stateDir) : {};
   const printMode = nativeTokens(parsed.args).some(arg => /^(?:-p|--print|--prompt)(?:=|$)/.test(arg));
   const interactive = parsed.command === null && !printMode;
+  let prepared;
+  try {
+    prepared = await prepareCliCopy({officialCliPath, stateDir, mainTokens:context.mainTokens, contextOverridesEnabled,
+      allowFallback:!process.env.ANTIGRAVITY_HELPER_CLI && !contextOverridesEnabled});
+  } finally {
+    if (interactive) void scheduleOfficialCliUpdate({officialCliPath, stateDir});
+  }
+  if (prepared.fallback) {
+    console.error(`官方 CLI ${prepared.fallback.version} 尚未通过汉化检查，本次使用中文 ${prepared.version}。原因：${prepared.fallback.reason}`);
+  } else if (interactive && (prepared.localization.unsupported?.length || prepared.localization.missing)) {
+    // Warn once for this particular published build. Other output formats stay machine-readable.
+    try {
+      await writeFile(join(dirname(prepared.binaryPath), '.partial-notified'), '', {flag:'wx', mode:0o600});
+      const features = [...new Set(prepared.localization.unsupported.map(item => item.feature))];
+      const summary = [features.length ? `${features.join('、')}有入口尚未适配` : '',
+        prepared.localization.missing ? `${prepared.localization.missing} 处已识别文案缺词` : ''].filter(Boolean).join('，');
+      console.error(`CLI ${prepared.version}：${summary}。运行 agy-zh --collect-cli 查看详情。`);
+    } catch (error) { if (error.code !== 'EEXIST') console.error('部分界面暂用英文。'); }
+  }
+  if (outputCommand) {
+    return runCliOutputCommand(prepared.binaryPath, parsed.args, outputCommand, await readObject(dictionaryPath));
+  }
+  const tools = contextOverridesEnabled ? await ensureCliTools(stateDir) : {};
   const args = interactive ? await withCliHud(parsed.args,{valueFlags}) : parsed.args;
   const env = interactive ? {...process.env,ANTIGRAVITY_HELPER_CLI_HUD_RUN:`${process.pid}-${Date.now()}`} : process.env;
   return await launchCliSession({ ...prepared, ...tools, args, env, subagentTokens:context.subagentTokens, contextOverridesEnabled });

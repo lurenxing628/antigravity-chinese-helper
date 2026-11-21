@@ -83,12 +83,22 @@ function lockManager() {
   };
 }
 
+function sidebarController({client, store, createTitles, storage, locks, fallbackTitles}) {
+  const start = renderer.indexOf('(function createContextRingController');
+  const end = renderer.indexOf('\n});', start);
+  const createHost = vm.runInNewContext(renderer.slice(start, end + 3), {queueMicrotask});
+  const sidebar = {__reactFiber$test:{memoizedProps:{value:{store}, services:{core:{authService:{_lsClient:client}}}}}};
+  const document = {defaultView:{}, querySelectorAll:() => [sidebar]};
+  client.getAvailableModels = async () => ({tieredModelIds:{flashLite:['fixture']}, models:{fixture:{model}}});
+  return createHost(document, undefined, (loadModel, options) => createTitles(loadModel, {...options, storage, locks}), {fallbackTitles});
+}
+
 function fixture({ summaries = { new: {
   summary: 'Fix Login Button', stepCount: 0,
   createdTime: { seconds: 1793559164n, nanos: 423000000 },
 } }, topLevel, forks = {}, sideQuestionType = 22,
   startCascade, send, save, read, generate = () => ({ response: '修复登录界面' }), loadModel = () => model,
-  BroadcastChannel = broadcastChannels(), storage = memoryStorage(), locks } = {}) {
+  BroadcastChannel = broadcastChannels(), storage = memoryStorage(), locks, fallbackTitles } = {}) {
   let current = summaries;
   let registeredForks = forks;
   let roots = topLevel ?? Object.fromEntries(Object.keys(summaries).map(id => [id, true]));
@@ -139,10 +149,12 @@ function fixture({ summaries = { new: {
   };
   const original = Object.fromEntries(Object.keys(client).map(key => [key, client[key]]));
   const create = vm.runInNewContext(controllerSource, { AbortController, BroadcastChannel, queueMicrotask, setTimeout, clearTimeout });
-  const controller = create(async (nativeClient) => {
-    calls.model.push(nativeClient);
-    return loadModel(nativeClient);
-  }, { storage, locks, sideQuestionType });
+  const controller = typeof fallbackTitles === 'boolean'
+    ? sidebarController({client, store, createTitles:create, storage, locks, fallbackTitles})
+    : create(async (nativeClient) => {
+      calls.model.push(nativeClient);
+      return loadModel(nativeClient);
+    }, { storage, locks, sideQuestionType });
   return {
     controller, client, calls, listeners, original, BroadcastChannel,
     bind: () => controller.bind(client, store),
@@ -162,6 +174,44 @@ function fixture({ summaries = { new: {
     summary: id => current[id],
   };
 }
+
+test('页面开启后备命名立即绑定已有侧栏，切回原生命名取消在途请求并还原原生方法', async t => {
+  const generated = deferred();
+  const f = fixture({fallbackTitles:false, generate:() => generated.promise});
+  t.after(() => { generated.resolve({response:'迟到的中文命名'}); f.controller.dispose(); });
+  assert.equal(f.controller.titleStatus(), null);
+  assert.equal(f.client.startCascade, f.original.startCascade);
+  f.controller.setFallbackTitles(true);
+  assert.equal(f.controller.titleStatus().boundClients, 1);
+  const enabledSend = f.client.sendUserCascadeMessage;
+  f.controller.setFallbackTitles(true);
+  assert.equal(f.client.sendUserCascadeMessage, enabledSend);
+  await f.client.startCascade({cascadeId:'new'});
+  await f.client.sendUserCascadeMessage(message());
+  await settle();
+  assert.equal(f.calls.generated.length, 1);
+  f.controller.setFallbackTitles(false);
+  assert.equal(f.controller.titleStatus(), null);
+  assert.equal(f.calls.generated[0].options.signal.aborted, true);
+  for (const key of ['startCascade','sendUserCascadeMessage','updateConversationAnnotations']) {
+    assert.equal(f.client[key], f.original[key]);
+  }
+  generated.resolve({response:'迟到的中文命名'});
+  await settle();
+  assert.equal(f.calls.saved.length, 0);
+});
+
+test('页面启动时选中后备模式即能使用原生模型目录生成并保存一次中文标题', async t => {
+  const f = fixture({fallbackTitles:true});
+  t.after(() => f.controller.dispose());
+  await f.client.startCascade({cascadeId:'new'});
+  await f.client.sendUserCascadeMessage(message());
+  await settle();
+  assert.equal(f.calls.generated.length, 1);
+  assert.equal(f.calls.generated[0].request.model, model);
+  assert.equal(f.calls.saved.length, 1);
+  assert.equal(f.summary('new').annotations.title, '修复登录界面');
+});
 
 const sideQuestionSource = '分析冗余的来源和代码收敛办法';
 const sideQuestionTitle = '分析冗余来源与收敛办法';

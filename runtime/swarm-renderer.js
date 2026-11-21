@@ -48,7 +48,9 @@
   function ui(raw) {
     const keys = { 'The team':'team',Coordinator:'lead',Blocked:'blocked',Running:'running','Planned next':'planned',Done:'done',
       Goal:'goal',Threads:'threads',Now:'now',Progress:'progress','Compare with now':'compare','Open full timeline':'expand',
-      'Nothing blocked':'none_blocked','Nothing running':'none_running','Nothing planned':'none_planned',Reply:'reply',Open:'open' };
+      'Nothing blocked':'none_blocked','Nothing running':'none_running','Nothing planned':'none_planned',Reply:'reply',Open:'open',
+      'Needs you':'needs','Waiting on @coordinator':'waiting',Stuck:'stuck','Nothing waiting':'none_waiting',
+      'Nothing stuck':'none_stuck','Nothing needs you':'none_needs' };
     const custom = window.SwarmHive?.viewCopy?.ui;
     if (custom && own(keys,raw) && custom[keys[raw]]) return raw;
     if (/^\+\d+ more$/.test(raw)) return custom?.more ? raw : template(raw,/^\+(\d+) more$/,'+{count} more',['count']);
@@ -86,6 +88,13 @@
   const memberName = name => name === 'coordinator' && members().some(member => member.name === name && member.role === 'coordinator')
     ? exact('coordinator') : name;
   const memberLabel = raw => raw.startsWith('@') ? '@'+memberName(raw.slice(1)) : memberName(raw);
+  // Hive uses the coordinator alias internally even when the lead has a custom name.
+  const hiveMember = name => name === 'coordinator' ? exact(name) : name;
+  function waitingLabel(raw) {
+    const wait = /^Waiting on @(.+)$/.exec(raw);
+    if (wait) return phrase('Waiting on @{name}',{name:hiveMember(wait[1])},raw);
+    return template(raw,/^Waiting on (\d+)$/,'Waiting on {count}',['count']);
+  }
   function nativeAttribute(element,name) {
     const current = element?.getAttribute(name), record = element && attributeRecords.get(element)?.get(name);
     return record && current === record.translated ? record.original : current;
@@ -98,13 +107,24 @@
       (record && who.data === record.translated ? record.original : who?.data)?.trim().replace(/^@/,'');
     return name === 'coordinator' ? members().find(member => member.role === 'coordinator')?.name || name : name;
   }
+  const boardActions = ['Waiting for posts','Reading the board','Posting to the board'];
   function memberText(raw,name) {
     const member = members().find(value => value.name === name);
     const hasActivity = member?.status === 'working' && member.activity;
     if (raw === 'No posts yet' && member && !hasActivity &&
       !boardMessages().some(message => message.agent === name)) return exact(raw);
     return member?.status === 'working' && member.activityKind === 'tool' && raw === member.activity &&
-      ['Waiting for posts','Reading the board','Posting to the board'].includes(raw) ? exact(raw) : raw;
+      boardActions.includes(raw) ? exact(raw) : raw;
+  }
+  function liveActivity(raw,element) {
+    const tip = nativeAttribute(element.parentElement,'title');
+    return boardActions.includes(raw) && (tip === 'Latest action: '+raw || tip?.startsWith('Latest action: '+raw+'\n')) ? exact(raw) : raw;
+  }
+  function liveTip(raw) {
+    const match = /^(Thinking|Latest action): ([^\n]*)([\s\S]*)$/.exec(raw);
+    if (!match) return raw;
+    const text = match[1] === 'Latest action' && boardActions.includes(match[2]) ? exact(match[2]) : match[2];
+    return phrase(match[1]+': {text}',{text},match[1]+': '+match[2])+match[3];
   }
   function hasSuppliedMemberTitle(name) {
     if (!snapshot) return true;
@@ -115,9 +135,14 @@
   function isFallbackTask(name) {
     return Boolean(snapshot && name && !titleSources().workstreams.length && !hasSuppliedMemberTitle(name));
   }
-  function systemAlert(raw, name) {
-    if (snapshot?.view?.json?.attention?.some(item => item?.why === raw || item?.short?.line === raw) ||
-      snapshot?.view?.json?.workstreams?.some(item => item?.note === raw || item?.short?.line === raw)) return raw;
+  function systemAlert(raw, name, replySlot = false) {
+    // Hive clips the trailing period when showing short cards.
+    const same = text => typeof text === 'string' && (text === raw || text.replace(/\.$/,'') === raw);
+    if (snapshot?.view?.json?.attention?.some(item => [item?.title,item?.why,item?.short?.title,item?.short?.line].some(same)) ||
+      snapshot?.view?.json?.workstreams?.some(item => [item?.title,item?.note,item?.short?.title,item?.short?.line].some(same))) return raw;
+    const lead = members().find(member => member.role === 'coordinator');
+    if (replySlot && lead?.replied && !lead.killed && lead.status === 'waiting' && (!name || name === lead.name) &&
+      ['The coordinator is waiting for your reply','Answer it in the coordinator chat','Waiting for your reply in chat'].includes(raw)) return exact(raw);
     for (const item of snapshot?.systemAttention || []) {
       if (name && item.member !== name) continue;
       const custom = window.SwarmHive?.viewCopy?.items?.[item.id];
@@ -145,10 +170,10 @@
     if (raw === 'Task') {
       if (isFallbackTask(taskOwner(element))) return exact(raw);
     }
-    return systemAlert(raw);
+    return systemAlert(raw,null,element.matches('.o2-askb > b,.o2-cb > b'));
   }
   function taskNote(raw, element) {
-    const notice = systemAlert(raw);
+    const notice = systemAlert(raw,null,element.matches('.o2-cb > p'));
     if (notice !== raw) return notice;
     if (!snapshot || titleSources().workstreams.length) return raw;
     const name = taskOwner(element);
@@ -160,7 +185,7 @@
   function memberStatus(raw, element) {
     const row = element.closest('.o2-mrow');
     if (raw.startsWith('→ @')) return '→ '+memberLabel(raw.slice(2));
-    if (row?.matches('.coord') || element.matches('.info,.warn')) return exact(raw);
+    if (row?.matches('.coord') || element.matches('.info,.warn,.bad')) return element.matches('.warn') && raw.startsWith('Waiting on @') ? waitingLabel(raw) : ui(raw);
     const name = row?.getAttribute('data-open-member');
     const member = members().find(value => value.name === name);
     if (raw === 'Retired' && member?.killed && !hasSuppliedMemberTitle(name)) return exact(raw);
@@ -171,7 +196,7 @@
     const member = members().find(value => value.name === name);
     const owned = memberText(raw,name);
     if (owned !== raw) return owned;
-    return member ? systemAlert(raw,name) : raw;
+    return member ? systemAlert(raw,name,element.closest('.o2-mrow')?.matches('.coord.needs_you')) : raw;
   }
   function leadNow(raw) {
     if (window.SwarmHive?.viewCopy?.lead?.doing) return raw;
@@ -193,6 +218,9 @@
     if (!snapshot) return raw;
     const id = element.closest('[data-o2t]')?.getAttribute('data-o2t');
     const {view,plan} = titleSources();
+    // The native synthetic threads for asks and issues have no toggle or id.
+    if (!id && element.closest('.o2-thh') && !view?.threads?.some(thread => thread.title === raw) &&
+      !plan?.threads?.some(thread => thread.title === raw) && ['Needs you','Stuck','Waiting on @coordinator'].includes(raw)) return ui(raw);
     if (!['t-asks','t-other'].includes(id) || view?.threads?.some(thread => thread.id === id) ||
       plan?.threads?.some(thread => thread.id === id)) return raw;
     return ['Needs you','Other','Tasks'].includes(raw) ? exact(raw) : raw;
@@ -352,6 +380,8 @@
   }
   function countText(raw) {
     if (raw.startsWith('Now · ') && window.SwarmHive?.viewCopy?.ui?.now) return raw;
+    const waiting = /^(\d+) waiting on @(.+)$/.exec(raw);
+    if (waiting) return phrase('{count} waiting on @{name}',{count:waiting[1],name:hiveMember(waiting[2])},raw);
     for (const [pattern,key,names] of [
       [/^(\d+) of (\d+)$/,'{done} of {total}',['done','total']],
       [/^(\d+) of (\d+) tasks done$/,'{done} of {total} tasks done',['done','total']],
@@ -359,6 +389,8 @@
       [/^(\d+) blocked$/,'{count} blocked',['count']],
       [/^(\d+) threads? open$/,'{count} threads open',['count']],
       [/^(\d+) active$/,'{count} active',['count']],
+      [/^(\d+) in review$/,'{count} in review',['count']],
+      [/^(\d+) stuck$/,'{count} stuck',['count']],
       [/^Up next · (\d+)$/,'Up next · {count}',['count']],
       [/^(\d+) posts?$/,'{count} posts',['count']],
       [/^Now · (\d+) \/ (\d+)$/,'Now · {index} / {total}',['index','total']],
@@ -424,6 +456,7 @@
   texts('.o2-mstat,.o2-mrole',memberStatus);
   texts('.o2-mts',memberMeta);
   texts('.o2-mnow',memberNow);
+  texts('.o2-live > .animate-shimmer-text,.o2-mact > .animate-shimmer-text',liveActivity);
   texts('.o2-lb > p',leadNow);
   texts('.o2-mrow.coord .o2-mauth,.o2-who',raw => raw === '@coordinator' ? '@'+exact('coordinator') : raw);
   texts('.o2-wchip > span',(raw,element) => nativeAttribute(element.parentElement,'title') === '@coordinator' && raw === 'coordinator' ? exact('coordinator') : raw);
@@ -434,11 +467,12 @@
     return member && label !== member.name && (raw === member.name || raw.endsWith('…') && member.name.startsWith(raw.slice(0,-1))) ? label : raw;
   });
   texts('.o2-goal > b,.o2-runsum',headlineFallback);
-  texts('.o2-tht > em',exact);
+  texts('.o2-tht > em',raw => raw.startsWith('Waiting on ') ? waitingLabel(raw) : ui(raw));
+  texts('.o2-tw,.o2-askon',waitingLabel);
   texts('.o2-tht > b',threadTitle);
-  texts('.o2-runt,.o2-tt,.o2-donem > b,.o2-cb > b,.o2-ask > div > b',taskText);
+  texts('.o2-runt,.o2-tt,.o2-donem > b,.o2-cb > b,.o2-ask > div > b,.o2-askb > b',taskText);
   texts('.o2-donem > span,.o2-runnote,.o2-cb > p',taskNote);
-  texts('.o2-ask > div > p',raw => systemAlert(raw));
+  texts('.o2-ask > div > p,.o2-askl',raw => systemAlert(raw,null,true));
 
   const attributeRules = [];
   const attrs = (selector,names = ['title','aria-label','placeholder'],project = exact) => attributeRules.push({selector,names,project});
@@ -477,6 +511,12 @@
   attrs('[data-testid="swarm-member-owner"]',['title'],raw => template(raw,/^Runs on ([\s\S]*)$/,'Runs on {machine}',['machine']));
   attrs('.o2-tprog',['title'],raw => template(raw,/^([\s\S]*) done$/,'{label} done',['label']));
   attrs('.o2-runnote',['title'],taskNote);
+  attrs('.o2-live,.o2-mact',['title'],liveTip);
+  attrs('.o2-crew [data-o2who]',['title'],(raw,element) => {
+    const name = element.getAttribute('data-o2who'), prefix = name+': ';
+    if (!name || !raw.startsWith(prefix) || window.SwarmHive?.viewCopy?.members?.[name]) return name ? raw : exact(raw);
+    return prefix+memberText(raw.slice(prefix.length),name);
+  });
 
   function patchText(node,project,element) {
     const previous = textRecords.get(node), raw = previous && node.data === previous.translated ? previous.original : node.data;

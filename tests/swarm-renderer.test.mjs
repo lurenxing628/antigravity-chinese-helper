@@ -418,3 +418,37 @@ test('Swarm UI projection follows native updates, protects data, refreshes and r
   await f.mutate([{type:'characterData',target:status}]);
   assert.equal(f.elements.live.textContent, 'Live', 'a disconnected observer cannot translate after uninstall');
 });
+
+test('current Hive wait groups and live tooltips keep member names, notes and thinking content intact', async () => {
+  const f = fixture();
+  const strings = {...dictionary.strings, 'swarm-ui:Waiting on @{name}':'等待 @{name}',
+    'swarm-ui:{count} waiting on @{name}':'{count} 项等待 @{name}', 'swarm-ui:{count} in review':'{count} 项检查中',
+    'swarm-ui:Latest action: {text}':'最近操作：{text}', 'swarm-ui:Thinking: {text}':'思考中：{text}',
+    'swarm-ui:Stuck':'已卡住', 'swarm-ui:Waiting for your reply in chat':'等待你的回复'};
+  const e = (tag,attrs,...children) => new Element(tag,attrs,children);
+  const group = e('b',{},'Stuck'), waiting = e('span',{class:'o2-tw'},'Waiting on @other-agent');
+  const chip = e('span',{class:'o2-pchip'},'2 waiting on @coordinator');
+  const review = e('span',{class:'o2-pchip'},'1 in review');
+  const activity = e('p',{class:'o2-runnote o2-live',title:'Latest action: Waiting for posts\nOriginal note'},
+    e('span',{class:'animate-shimmer-text'},'Waiting for posts'));
+  const thinking = e('div',{class:'o2-mnow o2-mact',title:'Thinking: Waiting for posts'},
+    e('span',{class:'animate-shimmer-text'},'Waiting for posts'));
+  const reply = e('div',{class:'o2-mnow'},'Waiting for your reply in chat');
+  f.elements.board.append(e('div',{class:'o2-thh'},e('span',{class:'o2-tht'},group)), waiting,chip,review,activity,thinking,
+    e('div',{class:'o2-mrow coord needs_you','data-open-member':'the-lead'},reply));
+  const api = f.install({strings});
+  const snap = {members:[{name:'the-lead',role:'coordinator',status:'waiting',replied:true}],messages:[]};
+  f.window.SwarmHive.update(snap);
+  await nextTurn();
+  assert.deepEqual([group,waiting,chip,review,reply].map(el => el.textContent),
+    ['已卡住','等待 @other-agent','2 项等待 @协调员','1 项检查中','等待你的回复']);
+  assert.equal(activity.textContent,'等待留言');
+  assert.equal(activity.getAttribute('title'),'最近操作：等待留言\nOriginal note');
+  assert.equal(thinking.textContent,'Waiting for posts');
+  assert.equal(thinking.getAttribute('title'),'思考中：Waiting for posts');
+  f.window.SwarmHive.update({...snap,view:{json:{threads:[{title:'Stuck'}]}}});
+  await nextTurn();
+  assert.equal(group.textContent,'Stuck');
+  api.uninstall();
+  assert.equal(activity.getAttribute('title'),'Latest action: Waiting for posts\nOriginal note');
+});

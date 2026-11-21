@@ -362,7 +362,7 @@ test('CLI text resources preserve UUID and existing addresses while making room 
   const { bytes, imageBase, text, uuid, build } = resourcesFixture(), original = Buffer.from(bytes);
   const before = inspectNativeBinary(bytes), resources = Buffer.alloc(0x4100, 0x7a);
   resources.write('中文界面\0');
-  const { binary, address, fileOffset } = appendNativeResources(bytes, resources);
+  const { binary, address, fileOffset } = appendNativeResources(bytes, resources, {reserveBudgetHeader:true});
   assert.deepEqual(bytes, original, '转换只修改助手副本');
   assert.equal(fileOffset, 0xc100); assert.equal(address, imageBase + 0x10100);
   assert.deepEqual(binary.subarray(fileOffset, fileOffset + resources.length), resources);

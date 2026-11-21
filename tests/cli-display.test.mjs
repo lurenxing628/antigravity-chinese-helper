@@ -5,19 +5,62 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { applyCliDisplayStrings, applyCliContentDisplayStrings,
-  collectCliSettingsDisplayStrings } from '../runtime/cli-display.mjs';
+  collectCliDisplayStrings, collectCliSettingsDisplayStrings } from '../runtime/cli-display.mjs';
 
-function settingsFixture() {
+test('a missing specialized renderer keeps the common string display path usable', () => {
+  const imageBase = 0x100000000, buffer = Buffer.alloc(512);
+  const name = 'google3/third_party/golang/charm_land/lipgloss/v/v2/lipgloss.Style.Render';
+  const renderer = {rva:0,fileOffset:0,size:16}, join = {rva:0x40};
+  [0x94000010,0x910003fb,0xa9007f7f,0xf90003ff].forEach((word, i) => buffer.writeUInt32LE(word,i*4));
+  buffer.write('Help',0x80);
+  const metadata = {imageBase,functions:new Map([[name,renderer],['strings.Join',join]]),
+    segments:[{name:'__TEXT',sections:[{name:'__rodata',fileOffset:0x80,address:imageBase+0x80,size:4}]}]};
+  const plan = collectCliDisplayStrings(buffer,{'Help':'帮助'},metadata);
+  assert.deepEqual(plan.sites.map(site => site.rva),[4]);
+  assert.deepEqual(plan.entries.map(entry => entry.original),['Help']);
+  assert.ok(plan.unsupported.includes('快捷键说明'));
+});
+
+test('shortcut descriptions follow their rune conversion across frame layouts', () => {
+  const imageBase = 0x100000000, buffer = Buffer.alloc(0x900);
+  const name = 'google3/third_party/jetski/cli/model/model.HelpModel.renderShortcutsTab';
+  const shortcuts = {rva:0x100,fileOffset:0x100,size:0x500}, stringRunes = {rva:0x600};
+  const metadata = {imageBase,functions:new Map([[name,shortcuts],['runtime.stringtoslicerune',stringRunes]]),
+    segments:[{name:'__TEXT',sections:[{name:'__rodata',fileOffset:0x800,address:imageBase+0x800,size:17}]}]};
+  buffer.write('Open shortcut tab',0x800);
+  for (const [call, keyLength, keyPointer, descriptionLength, descriptionPointer] of [
+    [0x35c,0xf90237e5,0xf9025be4,0xf90233e2,0xf9028fe1],
+    [0x370,0xf9023be5,0xf9025fe4,0xf90237e2,0xf90293e1],
+  ]) {
+    const start = shortcuts.fileOffset + call - 0x20;
+    const words = [0x8b0714c3,0xa9401464,keyLength,keyPointer,0xa9410861,descriptionLength,descriptionPointer,0x910cc3e0,
+      0x94000000 + (stringRunes.rva - shortcuts.rva - call) / 4];
+    buffer.fill(0,shortcuts.fileOffset,shortcuts.fileOffset + shortcuts.size);
+    words.forEach((word,index) => buffer.writeUInt32LE(word,start + index * 4));
+    const plan = collectCliDisplayStrings(buffer,{'Open shortcut tab':'打开快捷键页'},metadata);
+    assert.deepEqual(plan.sites,[{rva:shortcuts.rva + call - 0x10,fileOffset:start + 0x10,word:0xa9410861,
+      pointerRegister:1,lengthRegister:2,replayFirst:true,role:'快捷键说明'}]);
+    assert.deepEqual(plan.entries.map(entry => entry.translated),['打开快捷键页']);
+  }
+});
+
+function settingsFixture({ matched = 0x810, frameShift = 0 } = {}) {
   const imageBase = 0x100000000, buffer = Buffer.alloc(0x20000);
   const name = 'google3/third_party/jetski/cli/model/model.SettingsModel.renderFieldLines';
   const fn = {name,rva:0x100,fileOffset:0x100,size:5056};
   const words = [0x912b83fb,0x9140537b,0xa9400b61,0x912b43fb,0x9140537b,
     0xa9401b65,0xf100005f,0x9a861044,0x9a851023];
-  words.forEach((word,index) => buffer.writeUInt32LE(word,fn.fileOffset + 0x810 + index * 4));
+  const equal = {name:'runtime.memequal', rva:0x6000};
+  const equalCall = matched - 0x2c;
+  buffer.writeUInt32LE(0x94000000 + (equal.rva - fn.rva - equalCall) / 4, fn.fileOffset + equalCall);
+  buffer.writeUInt32LE(0x37000140, fn.fileOffset + equalCall + 4);
+  words[0] += frameShift * 1024;
+  words[3] += frameShift * 1024;
+  words.forEach((word,index) => buffer.writeUInt32LE(word,fn.fileOffset + matched + index * 4));
   const hintName = 'google3/third_party/jetski/cli/model/model.SettingsModel.wrapHint';
   const hint = {name:hintName,rva:0x3000,fileOffset:0x3000,size:496};
   [0xf9400b90,0xd12783f1,0xeb10023f,0x54000e09].forEach((word,index) => buffer.writeUInt32LE(word,hint.fileOffset + index * 4));
-  const metadata = {imageBase,functions:new Map([[name,fn],[hintName,hint]]),ambiguousFunctions:new Set()};
+  const metadata = {imageBase,functions:new Map([[name,fn],[hintName,hint],[equal.name,equal]]),ambiguousFunctions:new Set()};
   const dictionary = {strings:{'cli-ui:slow':'慢速','cli-ui:colorblind-friendly dark':'色盲友好深色',
     'cli-ui:My editor':'我的编辑器'}};
   return {imageBase,buffer,metadata,dictionary};
@@ -32,6 +75,17 @@ test('settings content translation is limited to recognized option display text'
   assert.equal(plan.sites[0].pointerRegister,3);
   assert.equal(plan.sites[0].lengthRegister,4);
   assert.ok(f.buffer.equals(before));
+});
+
+test('option layout follows the built-in match and preserves hints when that match changes', () => {
+  const f = settingsFixture({matched:0x818, frameShift:0x280});
+  const collect = () => collectCliSettingsDisplayStrings(f.buffer,f.dictionary,f.metadata);
+  assert.equal(collect().sites[0].rva,0x938);
+  f.buffer.writeUInt32LE(0x37000141,0x100 + 0x818 - 0x28); // different condition register
+  const plan = collect();
+  assert.deepEqual(plan.unsupported,['设置选项']);
+  assert.deepEqual(plan.sites.map(site => site.rva),[0x3000]);
+  assert.equal(plan.entries.some(entry => entry.original === 'slow'),false);
 });
 
 test('settings heap values translate without modifying their original string or other registers', {

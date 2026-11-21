@@ -7,8 +7,8 @@
   if (!document.documentElement || !document.body) return null;
   window.__antigravityChineseHelper?.uninstall?.();
 
-  const VERSION = '0.3.41';
-  let strings, normalizedStrings;
+  const VERSION = '0.3.46';
+  let strings, translationIndex;
   setStrings(dictionary);
   let stopped = false;
   let flushTask = null;
@@ -1084,7 +1084,7 @@
     queueScan();
   }
   return {
-    bind, ready,
+    bind, ready, hasClient:client => hubs.has(client),
     status:() => ({boundClients:hubs.size, pending:[...records.values()].filter(record => !manualTitles.has(record.id) && !['applied','failed'].includes(record.phase)).length,
       generated, failed, lastError, lastFailure, tracked:records.size, restored, manualTitles:manualTitles.size, storageReady:loaded, storageError,
       sideQuestionSupported:Number.isInteger(options.sideQuestionType),sideQuestions:[...records.values()].filter(isSideQuestion).length}),
@@ -1150,7 +1150,33 @@
   const startSchema = nativeGlobals.find(value => value?.kind === 'message' && value.typeName === 'exa.language_server_pb.StartCascadeRequest');
   const sideQuestionType = startSchema?.fields.find(field => field.localName === 'trajectoryType')?.enum
     ?.values.find(value => value.localName === 'SIDE_QUESTION')?.number;
-  const titles = createTitles?.(async client => { await catalog(client); return clientCache(client).titleModel; },{sideQuestionType});
+  const sidebarSelector = '[data-testid="conversation-list-sidebar"]';
+  let titles = null;
+  function bindTitleClient(client, store) {
+    if (!titles || !client || !store || titles.hasClient(client)) return;
+    // The context wrapper is scoped to a mounted selector. Keep it outside
+    // the title wrapper when a sidebar or the fallback mode appears later.
+    const users = contextOverridesEnabled ? [...clientCache(client).users] : [];
+    for (const instance of users) releaseContextClient(instance);
+    titles.bind(client, store);
+    for (const instance of users) bindContextClient(instance, client);
+  }
+  function setFallbackTitles(enabled) {
+    if (stopped || (enabled === true) === Boolean(titles)) return;
+    if (enabled === true) {
+      titles = createTitles(async client => { await catalog(client); return clientCache(client).titleModel; }, {sideQuestionType});
+      for (const instance of instances.values()) bindTitleClient(instance.client, instance.summaryStore);
+      for (const sidebar of document.querySelectorAll(sidebarSelector)) {
+        const {client, summaryStore} = bindings(sidebar);
+        bindTitleClient(client, summaryStore);
+      }
+    } else {
+      if (contextOverridesEnabled) for (const instance of instances.values()) releaseContextClient(instance);
+      titles.dispose();
+      titles = null;
+      if (contextOverridesEnabled) for (const instance of instances.values()) bindContextClient(instance, instance.client);
+    }
+  }
   const nativeQuotaReader = nativeGlobals.find(value => typeof value === 'function' && (() => {
       const source = Function.prototype.toString.call(value);
       return source.includes('retrieveUserQuotaSummary') && source.includes('Promise.resolve') && /5E3|5000/.test(source);
@@ -2120,9 +2146,7 @@
       instance.epoch++;
       instance.provider = next.provider; instance.client = next.client;
       instance.summaryStore = next.summaryStore; instance.agentRegistry = next.agentRegistry;
-      // Title hooks outlive individual model selectors; context hooks wrap them
-      // and are released first when a view disappears or the helper stops.
-      titles?.bind(next.client, next.summaryStore);
+      bindTitleClient(next.client, next.summaryStore);
       bindContextClient(instance, next.client);
       resetHistory(instance); instance.config = null;
       instance.configPending = null; instance.configAttempted = null; instance.models = null; instance.catalogSelection = null;
@@ -2145,15 +2169,20 @@
     releaseLayout(instance);
     instance.view.dispose(); instances.delete(instance.anchor);
   }
+  setFallbackTitles(runtimeOptions?.fallbackTitles);
   return {
-    selector:`${selector},[data-testid="conversation-list-sidebar"]`,
+    get selector() { return titles ? `${selector},${sidebarSelector}` : selector; },
+    setFallbackTitles,
+    titleStatus:() => titles?.status() ?? null,
     discover(element) {
       if (stopped) return;
-      // Bind from the shared sidebar as well: title protection must already
-      // work before a conversation's model selector/provider has mounted.
-      const next = bindings(element);
-      titles?.bind(next.client, next.summaryStore);
-      if (!element.matches?.(selector)) return;
+      if (!element.matches(selector)) {
+        if (titles) {
+          const {client, summaryStore} = bindings(element);
+          bindTitleClient(client, summaryStore);
+        }
+        return;
+      }
       const existing = instances.get(element);
       if (existing) rebind(existing); else mount(element);
     },
@@ -2173,9 +2202,8 @@
     dispose() {
       stopped = true; disposeSubscription(storageSubscription); disposeSubscription(nativeSubscription);
       for (const instance of instances.values()) disposeInstance(instance);
-      titles?.dispose();
+      titles?.dispose(); titles = null;
     },
-    titleStatus:() => titles?.status(),
     status() { return [...instances.values()].map(instance => ({bound:Boolean(instance.provider && instance.client), ...instance.snapshot})); },
     get size() { return instances.size; }
   };
@@ -2197,6 +2225,7 @@
     Analyzed: '已分析',
     Found: '已找到',
     Killed: '已终止',
+    Killing: '正在终止',
     Finding: '正在查找',
     Run: '运行',
     Running: '运行中',
@@ -2218,8 +2247,12 @@
     Viewed: '已查看',
     Listing: '正在列出',
     Listed: '已列出',
+    'Checking task': '正在检查任务',
     'Checked task': '已检查任务',
+    'Killing task': '正在终止任务',
     'Killed task': '已终止任务',
+    'Sending input to task': '正在向任务发送输入',
+    'Sent input to task': '已向任务发送输入',
     Creating: '正在创建',
     Created: '已创建',
     Opening: '正在打开',
@@ -2421,20 +2454,35 @@
   }
   const swarmManagedTitles = [
     {tool:'swarm',icon:'robot_2',prefix:'Listed',action:'models',pattern:/^swarm models$/,key:'tool-models',text:'协作群模型'},
+    {tool:'swarm',icon:'robot_2',prefix:'Listed',action:'models',pattern:/^suggested swarm models$/,key:'tool-suggested-models',text:'推荐的协作群模型'},
     {tool:'swarm',icon:'robot_2',prefix:'Titled',action:'title',pattern:/^swarm "(?<name>[\s\S]*)"$/,key:'tool-title',text:'协作群“{name}”'},
     {tool:'swarm',icon:'robot_2',prefix:'Spawned',action:'add',pattern:/^(?<count>\d+) workers? \((?<members>[\s\S]+)\)$/,key:'tool-workers',text:'{count} 个执行成员（{members}）'},
     {tool:'swarm',icon:'robot_2',prefix:'Spawned',action:'add',pattern:/^worker (?<member>@[\s\S]+)$/,key:'tool-worker',text:'执行成员 {member}'},
     {tool:'swarm',icon:'robot_2',prefix:'Killed',action:'kill',pattern:/^(?<count>\d+) workers? \((?<members>[\s\S]+)\)$/,key:'tool-workers',text:'{count} 个执行成员（{members}）'},
     {tool:'swarm',icon:'robot_2',prefix:'Killed',action:'kill',pattern:/^worker (?<member>@[\s\S]+)$/,key:'tool-worker',text:'执行成员 {member}'},
+    {tool:'swarm',icon:'robot_2',prefix:'Killed',action:'kill',pattern:/^(?<count>\d+) worker\(s\)$/,key:'tool-worker-count',text:'{count} 个执行成员'},
+    {tool:'swarm',icon:'robot_2',prefix:'Checked',action:'status',pattern:/^swarm status$/,key:'tool-status-bare',text:'协作群状态'},
     {tool:'swarm',icon:'robot_2',prefix:'Checked',action:'status',pattern:/^swarm status \((?<name>[\s\S]+)\)$/,key:'tool-status',text:'协作群状态（{name}）'},
+    {tool:'swarm',icon:'robot_2',prefix:'Joined',action:'join',pattern:/^swarm (?<name>[\s\S]+) as (?<member>@\S+)$/,key:'tool-join',text:'协作群 {name}（身份 {member}）'},
+    {tool:'swarm',icon:'robot_2',prefix:'Switched',action:'model',pattern:/^worker (?<member>@\S+) to (?<model>[\s\S]+)$/,key:'tool-worker-model',text:'执行成员 {member} 的模型（{model}）'},
+    {tool:'swarm',icon:'robot_2',prefix:'Switched',action:'model',pattern:/^(?<member>@\S+) to (?<model>[\s\S]+)$/,key:'tool-member-model',text:'{member} 的模型（{model}）'},
+    {tool:'swarm',icon:'robot_2',prefix:'Listed',action:'channel',pattern:/^channels$/,key:'tool-channels',text:'频道列表'},
+    ...['Created','Archived','Subscribed to','Unsubscribed from','Checked'].map(prefix => ({
+      tool:'swarm',icon:'robot_2',prefix,action:'channel',pattern:/^(?<channel>#\S+)$/,key:'tool-channel',text:'频道 {channel}'
+    })),
+    {tool:'read_board',icon:'forum',prefix:'Read',pattern:/^swarm status \(board (?<seq>#\d+)\)$/,key:'tool-read-status',text:'协作群状态（留言板 {seq}）'},
     {tool:'read_board',icon:'forum',prefix:'Read',pattern:/^(?<count>\d+) messages? from board \((?<seq>#[\s\S]+)\)$/,key:'tool-read-board',text:'{count} 条留言板消息（{seq}）'},
+    {tool:'read_board',icon:'forum',prefix:'Read',pattern:/^(?<count>\d+) messages? from (?<channel>#\S+) \((?<seq>#[\s\S]+)\)$/,key:'tool-read-channel',text:'{channel} 频道的 {count} 条消息（{seq}）'},
     {tool:'read_board',icon:'forum',prefix:'Read',pattern:/^board \((?<count>\d+) messages?\)$/,key:'tool-empty-board',text:'留言板（{count} 条消息）'},
+    {tool:'read_board',icon:'forum',prefix:'Read',pattern:/^(?<channel>#\S+) \((?<count>\d+) messages?\)$/,key:'tool-empty-channel',text:'{channel} 频道（{count} 条消息）'},
     {tool:'post_message',icon:'send',prefix:'Posted',pattern:/^(?<seq>#\d+) to board$/,key:'tool-post-board',text:'留言板消息 {seq}'},
+    {tool:'post_message',icon:'send',prefix:'Posted',pattern:/^(?<seq>#\d+) to (?<channel>#\S+)$/,key:'tool-post-channel',text:'{channel} 频道消息 {seq}'},
     {tool:'swarm_wait',icon:'timer',prefix:'Waiting',pattern:/^for board messages after (?<seq>#\d+)$/,key:'tool-wait-board',text:'{seq} 之后的留言板消息'},
     {tool:'swarm_wait',icon:'timer',prefix:'Waiting',pattern:/^for @mentions after (?<seq>#\d+)$/,key:'tool-wait-mentions',text:'{seq} 之后的 @提及'},
-    {tool:'systemMessage',icon:'forum',prefix:'Resumed',pattern:/^wait — new board messages \((?<seq>#[\s\S]+)\)$/,key:'tool-resumed-board',text:'新留言板消息（{seq}）'}
+    {tool:'systemMessage',icon:'forum',prefix:'Resumed',pattern:/^wait — new board messages? \((?<seq>#\d+(?:–#\d+)?)\)$/,key:'tool-resumed-board',text:'新留言板消息（{seq}）'}
   ];
-  const swarmManagedPrefixes = {Titled:'已命名',Spawned:'已启动',Checked:'已检查',Posted:'已发布',Waiting:'正在等待',Resumed:'已结束等待'};
+  const swarmManagedPrefixes = {Titled:'已命名',Spawned:'已启动',Checked:'已检查',Posted:'已发布',Waiting:'正在等待',Resumed:'已结束等待',
+    Joined:'已加入',Switched:'已切换',Archived:'已归档','Subscribed to':'已订阅','Unsubscribed from':'已取消订阅'};
   function swarmManagedTitle(info,tool,args) {
     if (info?.aggregationKey !== 'actions' || info.titleParts?.length !== 1 || info.titleParts[0]?.part?.case !== 'text') return null;
     const original = info.titleParts[0].part.value;
@@ -2443,38 +2491,82 @@
       const match = rule.pattern.exec(original);
       if (!match) continue;
       if (rule.action && [args?.Action,args?.action].some(action => typeof action === 'string' && action.trim() && action !== rule.action)) return null;
-      const translated = label(`swarm-ui:${rule.key}`,rule.text).replace(/\{(\w+)\}/g,(placeholder,key) => match.groups?.[key] ?? placeholder);
+      const translated = swarmCopy(rule.key,rule.text,match.groups);
       const translatedPrefix = own(swarmManagedPrefixes,rule.prefix)
         ? label(`swarm-ui:tool-prefix:${rule.prefix}`,swarmManagedPrefixes[rule.prefix]) : fixed(rule.prefix);
-      return {original,translated,prefix:rule.prefix,translatedPrefix,values:match.groups};
+      return {original,translated,prefix:rule.prefix,translatedPrefix,key:rule.key,values:match.groups};
     }
     return null;
+  }
+  const relativeAgentRoles = {'Parent Agent':'父智能体','Root Agent':'根智能体','External Agent':'外部智能体'};
+  function messageAgentName(name) {
+    if (own(relativeAgentRoles,name)) return label('message-role:'+name,relativeAgentRoles[name]);
+    if (name === '@coordinator') return '@'+label('swarm-ui:Coordinator','协调员');
+    // The native message address is either a relationship or "role (typeName)".
+    // Only its final type field belongs to the built-in type dictionary.
+    const typed = /^([\s\S]*) \(([^()]+)\)$/.exec(name);
+    if (!typed) return name;
+    const type = builtinAgentTypeLabel(typed[2]);
+    return type === typed[2] ? name : typed[1] ? `${typed[1]}（${type}）` : type;
+  }
+  function agentNoticeTitle(info) {
+    if (info?.titleParts?.length || typeof info?.title !== 'string') return null;
+    if (info.title === 'Message from Parent Agent') return label(info.title,'来自父智能体的消息');
+    const message = /^Message (from|to) ([\s\S]+)$/.exec(info.title);
+    if (!message) return null;
+    const template = message[1] === 'from'
+      ? label('Message from {agent}','来自 {agent} 的消息') : label('Message to {agent}','发给 {agent} 的消息');
+    return template.replace('{agent}',() => messageAgentName(message[2]));
   }
   function managedItemTitle(step, metadata) {
     const info = step?.result?.stepRenderInfo;
     const timer = timerTitle(info);
     if (timer) return timer;
-    if (info?.titleParts?.length !== 1 || info.titleParts[0]?.part?.case !== 'text') return null;
-    const original = info.titleParts[0].part.value;
     const tool = metadata?.toolCall?.name;
     const swarm = swarmManagedTitle(info,tool,step?.args);
     if (swarm) return swarm;
-    const subagent = tool === 'manage_subagents' && info.icon === 'robot_2' && info.aggregationKey === 'actions' &&
-      ['Found','Killed'].includes(info.titlePrefix);
-    // The bare kind label is separate from the actual AgentRef block. New
-    // snapshots can omit tool arguments, so ownership comes from this result.
-    if (subagent && original === 'subagent' &&
-      info.contentBlocks?.some(value => value.block?.case === 'agent'))
-      return {original,translated:label('Subagent','子智能体'),prefix:info.titlePrefix};
-    const expectedActions = subagent && info.titlePrefix === 'Killed' ? ['kill','kill_all'] : ['list'];
-    if (step?.args?.Action !== undefined && !expectedActions.includes(step.args.Action)) return null;
-    let match, noun;
-    if (subagent) {
-      match = /^(\d+) subagents?$/.exec(original); noun = '子智能体';
-    } else if (tool === 'manage_task' && info.icon === 'task_alt' && info.aggregationKey === 'tasks' && info.titlePrefix === 'Listed') {
-      match = /^(\d+) tasks?$/.exec(original); noun = '任务';
+    if (!info) return null;
+    const parts = info.titleParts ?? [];
+    const original = parts.length === 0 ? info.title :
+      parts.length === 1 && parts[0]?.part?.case === 'text' ? parts[0].part.value : undefined;
+    if (typeof original !== 'string') return null;
+    const prefix = info.titlePrefix;
+    if (tool === 'send_message' && info.icon === 'send' && (info.aggregationKey === 'actions' || (!parts.length && !info.aggregationKey)) &&
+      (prefix === 'Messaging' || prefix === 'Messaged')) {
+      const broadcast = /^(\d+) subagents?$/.exec(original);
+      const translated = broadcast ? `${broadcast[1]} 个${label('Subagents','子智能体')}` : messageAgentName(original);
+      return {original,translated,prefix};
     }
-    return match ? {original,translated:`${match[1]} 个${noun}`,prefix:info.titlePrefix} : null;
+    let actions, noun, count;
+    if (tool === 'manage_subagents' && info.icon === 'robot_2' && info.aggregationKey === (parts.length ? 'actions' : 'subagents')) {
+      if (prefix === 'Finding' || prefix === 'Found') actions = ['list','list_peers'];
+      else if (prefix === 'Killing' || prefix === 'Killed') actions = ['kill','kill_all'];
+      else return null;
+      count = /^(\d+) subagents?$/.exec(original);
+      // A single agent has its own reference block. The empty list has only
+      // the plural kind label, including while the search is still running.
+      if (!count && original !== 'subagents' &&
+        !(original === 'subagent' && info.contentBlocks?.some(item => item.block?.case === 'agent'))) return null;
+      // Older cards use the role itself as a single agent's plain title. The
+      // multi-agent branch also emits a Markdown roster; the empty result has
+      // a zero-count tool response. Both distinguish names matching UI copy.
+      if (!parts.length && (count ? !info.markdown?.startsWith('- ') :
+        /^(?:You have [1-9]\d* active (?:peer )?subagent\(s\)|Successfully killed [1-9]\d* subagent\(s\))/.test(step.result.result))) return null;
+      noun = original === 'subagents' ? label('Subagents','子智能体') : label('Subagent','子智能体');
+    } else if (tool === 'manage_task' && info.icon === 'task_alt' && (parts.length ? info.aggregationKey === 'tasks' : !info.aggregationKey)) {
+      if (prefix === 'Checked task') {
+        actions = ['status'];
+        noun = original; // The status report's title is the task's own name.
+      } else {
+        if (prefix !== 'Listing' && prefix !== 'Listed') return null;
+        actions = ['list'];
+        count = /^(\d+) tasks?$/.exec(original);
+        if (!count && original !== 'tasks') return null;
+        noun = label('Task','任务');
+      }
+    } else return null;
+    if ([step.args?.Action,step.args?.action].some(action => typeof action === 'string' && action.trim() && !actions.includes(action))) return null;
+    return {original,translated:count ? `${count[1]} 个${noun}` : noun,prefix};
   }
   // Replace known native literals while preserving dynamic values. UI components
   // normally use the return-tree adapters below. Ambiguous log and artifact
@@ -2551,8 +2643,6 @@
       return own(nouns,text) ? label(text,nouns[text]) : text;
     },'status-group-items');
   }
-  const renderInfoTitleEntry = nativeFunctions.find(entry => entry.source.includes('titleParts') &&
-    entry.source.includes('part.case===') && entry.source.includes('diffContext'));
   const summaryInfoEntry = nativeFunctions.find(entry => entry.source.includes('titlePrefix??""') &&
     entry.source.includes('titleParts') && entry.source.includes('case "fileDiff"') && entry.source.includes('.join(" ")'));
   if (summaryInfoEntry) install(summaryInfoEntry.key,summaryInfoEntry.original,function summaryRenderInfo(info,...args) {
@@ -2560,10 +2650,10 @@
     let next = info;
     const prefix = typeof info.titlePrefix === 'string' ? fixed(info.titlePrefix) : info.titlePrefix;
     if (prefix !== info.titlePrefix) next = {...next,titlePrefix:prefix};
-    // kZ owns native plain-title templates. Reuse its current adapter only for
-    // plain titles; structured text, file names and agent names remain data.
-    if (!info.titleParts?.length && typeof info.title === 'string' && renderInfoTitleEntry) {
-      const title = window[renderInfoTitleEntry.key](info);
+    // Format the visible summary separately from the English title used by
+    // the native browser-agent message router.
+    if (!info.titleParts?.length && typeof info.title === 'string') {
+      const title = agentNoticeTitle(info) ?? timerTitle(info)?.translated;
       if (typeof title === 'string' && title !== info.title) next = {...next,title};
     }
     return Reflect.apply(summaryInfoEntry.original,this,[next,...args]);
@@ -2675,6 +2765,7 @@
 
 
   const shimmerEntry = nativeFunctions.find(entry => entry.source.includes('"animate-shimmer-text"') && /\bchildren\s*:/.test(entry.source) && /\bactive\s*:/.test(entry.source));
+
   const loadingEntry = nativeFunctions.find(entry => entry.source.includes('"agent-loading"') &&
     entry.source.includes('loadingStateTextOverride:') && entry.source.includes('"Compacting"') && entry.source.includes('"Working"'));
   if (loadingEntry) {
@@ -2683,6 +2774,21 @@
     if (localized) install(loadingEntry.key,loadingEntry.original,function nativeLoadingStatus(...args) {
       return Reflect.apply(localized,this,args);
     },'status-loading');
+  }
+  const automationDraftCopy = 'Guide me through creating an automated task';
+  const automationDraftTag = '[/automation](slashCommand;automation) ';
+  const automationDraftPrompt = automationDraftTag + automationDraftCopy;
+  const automationDraftEntry = nativeFunctions.find(entry => ['goToHome:','draftKey:','useCallback', '='+JSON.stringify(automationDraftPrompt)]
+    .every(marker => entry.source.includes(marker)));
+  if (automationDraftEntry) {
+    let localized;
+    try {
+      localized = localizeLiterals(automationDraftEntry,[automationDraftPrompt],[],
+        () => automationDraftTag + label(automationDraftCopy,automationDraftCopy));
+    } catch { /* A changed draft builder keeps its original default. */ }
+    if (localized) install(automationDraftEntry.key,automationDraftEntry.original,function nativeAutomationDraft(...args) {
+      return Reflect.apply(localized,this,args);
+    },'default-prompt');
   }
 
   const backgroundConsumer = nativeFunctions.find(entry => entry.source.includes('`task__${') && entry.source.includes('isRunning'));
@@ -2720,6 +2826,47 @@
     },'native-accumulated-fallback',accumulatedFallbackEntry.owner ?? window);
   }
 
+  // The browser activity formatter owns the prefix, elapsed time and thinking
+  // label. The active intent may itself contain status-looking text.
+  const browserPrefix = 'Using browser', browserSeparator = ' · ';
+  function browserActivityText(text, intent) {
+    const prefix = label(browserPrefix,'正在使用浏览器');
+    if (text === browserPrefix) return prefix;
+    const native = intent ? browserPrefix + browserSeparator + intent : browserPrefix;
+    if (text === native) return prefix + text.slice(browserPrefix.length);
+    if (!text.startsWith(native)) return text;
+    const time = /^ \((\d+)s\)$/.exec(text.slice(native.length));
+    return time ? prefix + native.slice(browserPrefix.length) + `（${time[1]} 秒）` : text;
+  }
+  const browserActivityEntry = nativeFunctions.find(entry => ['statusLineText:', 'thinkingLabel:', 'latestIntentText',
+    'phaseStartedAtMs', browserPrefix].every(marker => entry.source.includes(marker)));
+  if (browserActivityEntry) install(browserActivityEntry.key,browserActivityEntry.original,function nativeBrowserActivity(input) {
+    const result = Reflect.apply(browserActivityEntry.original,this,arguments);
+    if (typeof result?.statusLineText !== 'string') return result;
+    const thinking = result.thinkingLabel;
+    if (thinking && result.statusLineText === browserPrefix + browserSeparator + thinking) {
+      const time = /^Thinking \((\d+)s\)…$/.exec(thinking);
+      const localized = time ? label('browser-thinking:timed','正在思考（{seconds} 秒）…').replace('{seconds}',() => time[1])
+        : thinking === 'Thinking…' ? label('Thinking...','正在思考…') : null;
+      if (localized) return {...result,thinkingLabel:localized,statusLineText:label(browserPrefix,'正在使用浏览器') + browserSeparator + localized};
+    }
+    const state = input.parsedActivity?.state;
+    const intent = (state?.isExecutingStep && state.activeIntent?.trim()) || input.latestIntentText;
+    const statusLineText = browserActivityText(result.statusLineText,intent);
+    return statusLineText !== result.statusLineText ? {...result,statusLineText} : result;
+  },'native-browser-activity');
+
+  // Without a store snapshot the hook builds its own prefix; everything after
+  // the separator in that branch is the browser's original intent.
+  const browserSummaryEntry = nativeFunctions.find(entry => ['faviconDataUrl:', '.useSyncExternalStore)', '.statusLineText',
+    'getSubagentStepIntents', browserPrefix].every(marker => entry.source.includes(marker)));
+  if (browserSummaryEntry) install(browserSummaryEntry.key,browserSummaryEntry.original,function nativeBrowserSummary(...args) {
+    const result = Reflect.apply(browserSummaryEntry.original,this,args);
+    const text = result?.text;
+    if (typeof text !== 'string' || !(text === browserPrefix || text.startsWith(browserPrefix + browserSeparator))) return result;
+    return {...result,text:label(browserPrefix,'正在使用浏览器') + text.slice(browserPrefix.length)};
+  },'native-browser-summary');
+
   // Keep the idle owner's fallback labels and count templates on one source
   // path. Browser activity and other supplied text can equal those labels, so
   // translate only the literals before either native display branch receives it.
@@ -2738,10 +2885,14 @@
         (_,count,noun) => `__chStatusLabel("blocked-count",${count},${noun})`);
       source = source.replace(/`\$\{([^{}]+)\} blocked`/g,
         (_,count) => `__chStatusLabel("blocked-count",${count})`);
+      source = source.replace(/`Waiting for \$\{([\w$]+)\} timers`/g,
+        (_,count) => `__chStatusLabel("waiting-timers",${count})`);
+      source = source.replace(/`Waiting for \$\{([\w$]+)\}`/g,
+        (_,timer) => `__chStatusLabel("waiting-timer",${timer})`);
       source = source.split('"accumulated items"').join('__chStatusLabel("accumulated items")');
       if (source !== originalSource) callerSource = callerSource.replace(`${idleHelperName}("direct")`,`(${source})("direct")`);
     }
-    for (const text of ['Waiting for your approval','Working'])
+    for (const text of ['Waiting for your approval','Waiting for subagent','Working'])
       callerSource = callerSource.split(JSON.stringify(text)).join(`__chStatusLabel(${JSON.stringify(text)})`);
     if (callerSource !== idleStatusEntry.source) {
       const lexicalNames = [];
@@ -2756,6 +2907,13 @@
         localized = compileFormatter(callerSource,(text,count,noun) => {
           if (text === 'accumulated items') return label(text,'累计项目');
           if (text === 'Waiting for your approval') return label(text,'等待你批准');
+          if (text === 'Waiting for subagent') return label(text,'正在等待子代理');
+          if (text === 'waiting-timers') return `正在等待 ${count} 个计时器`;
+          if (text === 'waiting-timer') {
+            if (count === 'timer') return '正在等待计时器';
+            const timed = /^([\d.]+)([smhd]) timer$/i.exec(count);
+            return timed ? `正在等待 ${timed[1]} ${({s:'秒',m:'分钟',h:'小时',d:'天'})[timed[2].toLowerCase()]}计时器` : `正在等待 ${count}`;
+          }
           if (text === 'Working') return fixed(text);
           const nouns = {'subagents/tasks':'子代理/任务',subagent:'子代理',subagents:'子代理',task:'任务',tasks:'任务'};
           const subject = own(nouns,noun) ? nouns[noun] : '';
@@ -3232,8 +3390,11 @@
       literal = 'Scratchpad'; key = 'artifact-label:Scratchpad'; fallback = '临时草稿';
     } else if (source.includes('absolutePath') && source.includes('memoryId') && source.includes('||"Rule"') && source.split('"Rule"').length === 2) {
       literal = 'Rule'; key = 'customization-name:Rule-fallback'; fallback = '规则';
-    } else if (source.includes('??"Side Question"') && source.split('"Side Question"').length === 2) {
+    } else if (source.split('"Side Question"').length === 2 && (source.includes('??"Side Question"') ||
+      (source.includes('side-question-quote-pill') && source.includes('.title||"Side Question"')))) {
       literal = 'Side Question'; key = 'side-question:default-title'; fallback = '临时问题';
+    } else if (source.includes('side-question-tool-status') && source.includes('helpToolStatusText??"Inspecting documentation, config, or issues..."')) {
+      literal = key = 'Inspecting documentation, config, or issues...'; fallback = '正在检查文档、配置或问题记录…';
     } else continue;
     const original = entry.invoke ?? entry.original, owner = entry.owner ?? window;
     let localized, prepared = false;
@@ -3264,6 +3425,27 @@
   const uiDefinitions = [];
   function ui(id, markers, rules = [], settings = {}) { uiDefinitions.push({id, markers, rules, ...settings}); }
   const seq = sequence, C = anyChild;
+  ui('composer-drive-menu', ['agy-composer-footer','onOpenDrivePlugin:','label:"Drive"','trailingComponent:'], [], {
+    element(node,props,React) {
+      const items = node.props.items;
+      if (!Array.isArray(items) || typeof node.props.onOpenChange !== 'function') return node;
+      let changed = false;
+      const groups = items.map(group => {
+        if (!Array.isArray(group) || !group.some(item => item?.label === 'Drive')) return group;
+        changed = true;
+        return group.map(item => {
+          if (item?.label !== 'Drive') return item;
+          let trailingComponent = item.trailingComponent;
+          const text = trailingComponent?.props?.children;
+          if (React.isValidElement(trailingComponent) && (text === 'Set up' || text === 'Log in')) {
+            trailingComponent = React.cloneElement(trailingComponent,{children:label(`composer-drive:${text}`,text === 'Set up' ? '设置' : '登录')});
+          }
+          return {...item,label:label('composer-drive:Drive','Google 云端硬盘'),trailingComponent};
+        });
+      });
+      return changed ? React.cloneElement(node,{items:groups}) : node;
+    }
+  });
   ui('side-question-header', ['side-question-tab-header-prefix','side-question-tab-header-title'], [], {
     text(node) {
       const slot = node.props['data-testid'],text = node.props.children;
@@ -3290,6 +3472,50 @@
       return detailTree(node,React,child => child.type === 'span' && child.props.children === 'Side Question'
         ? React.cloneElement(child,{children:label('side-question:default-title','临时问题')}) : child);
     }
+  });
+  ui('side-question-origin', ['side-question-origin','Started from','Started during','. Show in '], [], {
+    element(node,props,React) {
+      if (node.type !== 'button' || node.props['data-testid'] !== 'side-question-origin') return node;
+      const children = node.props.children;
+      if (!Array.isArray(children) || children.length !== 4) return node;
+      const [icon,prefix,source,action] = children;
+      if (![prefix,source,action].every(child => React.isValidElement(child) && child.type === 'span')) return node;
+      const originalPrefix = prefix.props.children, originalSource = source.props.children;
+      if (typeof originalSource !== 'string' || action.props.children !== 'Show') return node;
+      const prefixLabel = originalPrefix === 'Started from' ? label('Started from','源自')
+        : originalPrefix === 'Started during' ? label('Started during','发起于') : null;
+      if (prefixLabel === null) return node;
+      const sourceLabel = originalSource === 'the main conversation' ? label(originalSource,'主对话')
+        : originalSource === 'the subagent conversation' ? label(originalSource,'子代理对话') : originalSource;
+      const originalTitle = `${originalPrefix} ${originalSource}`;
+      const title = prefixLabel+sourceLabel;
+      const next = {children:[icon,React.cloneElement(prefix,{children:prefixLabel}),
+        React.cloneElement(source,{children:sourceLabel}),React.cloneElement(action,{children:label('side-question-origin:Show','查看')})]};
+      if (node.props.title === originalTitle) next.title = title;
+      const aria = node.props['aria-label'];
+      if (aria === `${originalTitle}. Show in main conversation`)
+        next['aria-label'] = `${title}。${label('Show in main conversation','在主对话中查看')}`;
+      if (aria === `${originalTitle}. Show in subagent conversation`)
+        next['aria-label'] = `${title}。${label('Show in subagent conversation','在子代理对话中查看')}`;
+      return React.cloneElement(node,next);
+    }
+  });
+  ui('side-question-toolbar', ['side-question-toolbar-button','Side Question',' help'], [], {
+    text(node) {
+      const text = node.props.children;
+      if (node.type !== 'span' || typeof text !== 'string') return null;
+      return text === 'Help' ? label('side-question:Help','帮助') : options.translate?.(text);
+    },
+    element(node,props,React) {
+      const text = node.props['aria-label'];
+      if (node.props['data-testid'] !== 'side-question-toolbar-button' || typeof text !== 'string') return node;
+      const translated = options.translate?.(text);
+      return translated ? React.cloneElement(node,{'aria-label':translated}) : node;
+    }
+  });
+  ui('side-question-inline-panel', ['side-question-panel','side-question-question','side-question-answer','Previous side question'], [], {
+    ariaLabels:{'Previous side question':'上一个临时问题','Next side question':'下一个临时问题',
+      'Copied':'已复制','Copy':'复制','Delete side question':'删除临时问题','Minimize side question':'最小化临时问题'}
   });
   function translateHomeGreeting(text, hasName) {
     if (typeof text !== 'string') return null;
@@ -3332,6 +3558,8 @@
     }
   });
   ui('sidecar-empty-state', ['emptyMessagePlural','sidecars-view','Runs show up here.'], [
+    seq(['No ',['automations','scheduled tasks'],' match “',C,'”.'],c =>
+      ['未找到与“',c[3],'”匹配的',c[1] === 'automations' ? '自动化任务' : '定时任务','。']),
     seq(['No ',C,' yet'],(children,node) => node.type === 'p' && children[1] === 'automations'
       ? label('No automations yet','暂无自动化任务')
       : node.type === 'p' && children[1] === 'scheduled tasks' ? label('No scheduled tasks yet','暂无定时任务') : children)
@@ -3343,11 +3571,247 @@
         ? React.cloneElement(node,{placeholder:label('automation-title:untitled','未命名')}) : node;
     }
   });
-  // sKc owns these schedule-only display labels. The shared U5 selector also
-  // renders machine and identity names, so its generic owner stays untouched.
+  ui('shortcut-conflict', ['shortcut-row-${','Conflict: also assigned to','aria-live'], [], {
+    text(node) {
+      const text = node.props.children;
+      if (node.type !== 'span' || typeof text !== 'string') return null;
+      const names = list => list.split(', ').map(name => options.translate?.(name) ?? name).join('、');
+      if (text.startsWith('Conflict: also assigned to ')) return `快捷键冲突：也用于 ${names(text.slice('Conflict: also assigned to '.length))}`;
+      if (!text.startsWith('Conflicts with "')) return null;
+      return text.replace(/Conflicts with "([^"]+)"(?: \((press Enter to replace|managed by application menu)\))?/g,
+        (_,list,detail) => `与“${names(list)}”冲突${detail ? (detail === 'press Enter to replace' ? '（按 Enter 替换）' : '（由应用菜单管理）') : ''}`)
+        .replace(/; (?=与“)/g,'；');
+    }
+  });
+  ui('shortcut-mouse-gestures', ['shortcut-row-${','gestures:','segments:','ariaLabel:`Shortcut'], [], {
+    element(node,props,React) {
+      const segments = node.props.segments;
+      if (!Array.isArray(segments)) return node;
+      const display = segments.map(segment => segment === 'Click' ? '点击' : segment === 'Middle Click' ? '鼠标中键点击' : segment);
+      return display.some((text,index) => text !== segments[index]) ? React.cloneElement(node,{segments:display}) : node;
+    }
+  });
+  // Keep commands, account names and user-supplied identifiers in their native nodes.
+  ui('github-cli-sign-in-hint', ['gh auth login','in a terminal','copyTestId:'], [
+    seq([C,C,C],(children,node,props,React) => {
+      const [verb,command,location] = children;
+      if (verb?.props?.children !== 'Run' || location?.props?.children !== 'in a terminal') return children;
+      return [React.cloneElement(verb,{children:'在终端中运行'}),command];
+    })
+  ]);
+  ui('github-cli-copy-command', ['Copy gh auth login command','onCopy:'], [], {
+    ariaLabels:{'Copy gh auth login command':'复制 gh auth login 命令'}
+  });
+  ui('developer-custom-flag', ['custom-flag-suggestions','Custom flag to turn on'], [], {
+    ariaLabels:{'Custom flag to turn on':'要启用的自定义功能开关'}
+  });
+  ui('developer-voice-engine', ['jetski.developer.voiceEngineAddr','Voice engine address'], [], {
+    ariaLabels:{'Voice engine address':'语音引擎地址'}
+  });
+  ui('developer-workspace-uri', ['Workspace URI query parameter','Workspace URI to switch to'], [], {
+    ariaLabels:{'Workspace URI to switch to':'要切换到的工作区 URI'}
+  });
+  ui('battle-opt-out-feedback', ['Reason for opting out',"Don't show this for 2 days"], [], {
+    ariaLabels:{'Reason for opting out':'退出原因'}
+  });
+  ui('github-policy-rule', ['availableActions:','Remove policy'], [], {
+    ariaLabels:{'Remove policy':'移除规则'}
+  });
+  ui('github-workflow-policy-rule', ['workflowsValue:','Workflow files','Workflow refs'], [], {
+    ariaLabels:{'Workflow files':'工作流文件','Workflow refs':'工作流引用','Remove policy':'移除规则'}
+  });
+  ui('github-repository-policy', ['Delete repository policy','+ Add workflow run policy'], [], {
+    ariaLabels:{'Delete repository policy':'删除仓库策略'}
+  });
+  ui('github-organization-policy', ['Delete organization policy','list like org-a'], [], {
+    ariaLabels:{'Delete organization policy':'删除组织策略'}
+  });
+  ui('billing-choice', ["role:\"radiogroup\"","Billing model"], [], {ariaLabels:{"Billing model":"计费模式"}});
+  ui('license-choice', ["role:\"radiogroup\"","Available licenses"], [], {ariaLabels:{"Available licenses":"可用许可证"}});
+  ui('workspace-folder-suggestions', ["Workspace URI query parameter","Workspace folder suggestions"], [], {ariaLabels:{"Workspace folder suggestions":"工作区文件夹建议"}});
+  ui('voice-volume', ["Voice volume","type:\"range\""], [], {ariaLabels:{"Voice volume":"语音音量"}});
+  ui('ssh-hidden-hosts', ["Hidden hosts","1 hidden host"], [], {ariaLabels:{"Hidden hosts":"隐藏的主机"}});
+  ui('browser-step-list', ["Browser steps","browser-subagent-step"], [], {ariaLabels:{"Browser steps":"浏览器操作步骤"}});
+  ui('response-actions', ["Response actions","hideDiffViews:"], [], {ariaLabels:{"Response actions":"回复操作"}});
+  ui('stop-transcription', ["Stop transcription","Transcribing audio"], [], {ariaLabels:{"Stop transcription":"停止转写"}});
+  ui('card-deck-steps', ["Previous card","Next card","card-deck-counter"], [], {ariaLabels:{"Previous card":"上一张卡片","Next card":"下一张卡片"}});
+  ui('plugin-suggestion-dismiss', ["Dismiss suggestion","suggested-action-dismiss-"], [], {ariaLabels:{"Dismiss suggestion":"关闭建议"}});
+  ui('automation-schedule-picker', ["When it runs","When something happens"], [], {ariaLabels:{"When it runs":"运行时机"}});
+  ui('cel-indexed-helpers', ["Indexed CEL helper functions","trigger-cel-optional-section"], [], {ariaLabels:{"Indexed CEL helper functions":"已索引的 CEL 辅助函数"}});
+  ui('agent-filter-toolbar', ["Filter agents","data-agy-agent-filter"], [], {ariaLabels:{"Filter agents":"筛选智能体"}});
+  ui('computer-permissions-instructions', ['computer-permissions-card','to open macOS Privacy & Security.'], [
+    seq(['Click ',C,' to open macOS Privacy & Security.'],c => ['点击“',c[1],'”以打开 macOS 的“隐私与安全性”。'])
+  ]);
+  ui('terminal-password-instructions', ['terminal-password-prompt-blocked','terminal-allow-non-corp-password'], [
+    seq(['For corp passwords (such as ',C,' or',' ',C,'), use an external SSH session',C,'. For non-corp passwords or SSH passphrases, allow the next prompt and re-run your command.'],c =>
+      ['如需输入公司密码（例如执行 ',c[1],' 或 ',c[4],' 时），请使用单独的 SSH 会话',c[6],'。如需输入其他密码或 SSH 密钥口令，请允许下一次提示，然后重新运行命令。']),
+    seq([' ','or ',C,' (',C,')'],c => ['或 ',c[2],'（',c[4],'）'])
+  ]);
+  ui('automation-create-conflicts', ['new-sidecar-name-exists',' with this name already exists on this computer.'], [
+    seq(['An ',['automation','scheduled task'],' with the ID “',C,'” already exists.'],c =>
+      ['ID 为“',c[3],'”的',c[1] === 'automation' ? '自动化任务' : '定时任务','已存在。']),
+    seq(['An ',['automation','scheduled task'],' with this name already exists on this computer. Run it remotely, or go back and rename it.'],c =>
+      ['本机已有同名',c[1] === 'automation' ? '自动化任务' : '定时任务','。请改为远程运行，或返回重命名。'])
+  ]);
+  ui('host-shortcut-settings', ['open-vscode-keybindings-btn','Inspect live bindings or record custom key chords filtered to'], [
+    seq(['Inspect live bindings or record custom key chords filtered to',' ',C,' ','commands.'],c =>
+      ['查看 ',c[2],' 命令当前使用的快捷键，或录制自定义组合键。'])
+  ]);
+  ui('automation-name-conflict', ['new-sidecar-name',' with ID ',' already exists.'], [
+    seq(['A ',C,' with ID ',C,' already exists.'],c => ['ID 为 ',c[3],' 的',c[1] === 'scheduled task' ? '定时任务' : '自动化任务','已存在。']),
+    seq(['ID: ',C],c => ['ID：',c[1]])
+  ]);
+  ui('automation-details-settings', ['"automation-settings"','"automation-schedule-value"','"automation-next-run"'], [
+    seq(['Runs',' ',C,C,' ','with',' ',C,' ','on this computer.'],(c,node,props,React) => {
+      const project = c[3];
+      const link = React.isValidElement(project) && project.props.children?.[3];
+      return [c[2],'在本机',link ? React.cloneElement(project,{children:['的 ',link,' 中']}) : null,'使用 ',c[7],' 运行。'];
+    }),
+    seq([C,' Pick a model to change it.'],c => [c[0],'请选择其他模型。'])
+  ],{
+    labels:{'No upcoming run.':'暂无后续运行。','Paused. Resume it to schedule the next run.':'已暂停。恢复后将安排下次运行。'},
+    element(node,props,React) {
+      const {testId,value} = node.props;
+      if (testId === 'automation-model-value' && typeof value === 'string' && value.endsWith(' · This computer'))
+        return React.cloneElement(node,{value:value.slice(0,-'This computer'.length)+label('This computer','本机')});
+      if (node.props.icon === 'article' && node.props.label === 'Reads' && typeof value === 'string')
+        return React.cloneElement(node,{label:label('Reads','读取'),value:value.replace(/, read-only$/,'（只读）')});
+      return node;
+    }
+  });
+  ui('automation-run-history', ['"automation-runs"','"automation-run"','"data-outcome"'], [
+    seq(['Runs',C],c => [label('Runs','运行记录'),c[1]])
+  ], {
+    labels:{'No runs yet':'暂无运行记录','Loading runs…':'正在加载运行记录…'},
+    element(node,props,React) {
+      if (node.props['data-testid'] !== 'automation-run') return node;
+      const outcome = node.props['data-outcome'];
+      const row = node.props.children;
+      if (!React.isValidElement(row)) return node;
+      const cells = row.props.children;
+      const summary = cells?.[2];
+      const text = summary?.props?.children;
+      if (typeof text !== 'string') return node;
+      const prefixes = {failed:['Failed: ','失败：'],needsInput:['Waiting for your input','等待你的输入'],running:['Running','运行中']};
+      const prefix = prefixes[outcome];
+      let display = text;
+      if (prefix && outcome === 'failed' && text.startsWith(prefix[0])) display = prefix[1]+text.slice(prefix[0].length);
+      else if (prefix && text === prefix[0]) display = prefix[1];
+      else if (prefix && text.startsWith(`${prefix[0]}: `)) display = `${prefix[1]}：${text.slice(prefix[0].length+2)}`;
+      else if ((outcome === 'unknown' && text === 'Ran') || (outcome === 'ok' && text === 'Completed')) {
+        const run = props.runs?.find(run => String(run.key) === node.key);
+        const original = props.summaries?.[run?.conversationId]?.summary?.trim();
+        if (!original || original.toLowerCase() === props.automationTitle?.trim().toLowerCase())
+          display = label(text,outcome === 'unknown' ? '已运行' : '已完成');
+      }
+      const children = cells.slice();
+      children[2] = React.cloneElement(summary,{children:display,'data-ch-keep':true});
+      return React.cloneElement(node,{children:React.cloneElement(row,{children})});
+    }
+  });
+  ui('automation-next-run-list', ['"automation-next-run"','Approximate; may start a few minutes later','automation-list'], [], {
+    labels:{Next:'下次'}
+  });
+  ui('automation-last-run-list', ['"automation-last-run"','mobileLabel:','automation-list'], [], {
+    labels:{Last:'上次'}
+  });
+  ui('create-automation', ['"new-sidecar-summary"','"new-sidecar-no-project"','"new-sidecar-add-trigger"'], [], {
+    labels:{Task:'任务',Where:'运行位置',When:'运行时间'},
+    text(node) {
+      const text = node.props.children;
+      if (node.props['data-testid'] !== 'new-sidecar-summary' || typeof text !== 'string') return null;
+      return text.replace(/^Step (\d+) of (\d+)$/,'第 $1 步，共 $2 步')
+        .replace(/^When /,'触发条件：')
+        .replace(/ · (This computer|Remote)$/,(_,place) => ` · ${label(place,place === 'Remote' ? '远程' : '本机')}`);
+    }
+  });
+  // Schedule display labels also feed the editor's shared selector.
   const scheduleWeekdayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
   const scheduleWeekdayChinese = ['星期日','星期一','星期二','星期三','星期四','星期五','星期六'];
   const scheduleWeekdayShort = ['日','一','二','三','四','五','六'];
+  function scheduleClock(text) {
+    const match = /^(\d{1,2}(?::\d{2})?) (AM|PM)$/.exec(text);
+    if (!match) return text;
+    const [,clock,period] = match;
+    return `${label('schedule-time:'+period,period === 'AM' ? '上午' : '下午')} ${clock}${clock.includes(':') ? '' : ':00'}`;
+  }
+  function scheduleWeekday(text) {
+    const day = scheduleWeekdayNames.findIndex(name => [name,`${name}s`,name.slice(0,3)].includes(text));
+    if (day !== -1) return label(scheduleWeekdayNames[day],scheduleWeekdayChinese[day]);
+    return null;
+  }
+  function scheduleDays(text) {
+    switch (text.toLowerCase()) {
+      case 'daily': return '每天';
+      case 'weekdays': return '工作日';
+      case 'weekends': return '周末';
+      default: {
+        const days = text.split(/, | and /).map(scheduleWeekday);
+        return days.every(Boolean) ? days.join('、') : null;
+      }
+    }
+  }
+  function scheduleSummary(text) {
+    if (text === 'Custom schedule') return label(text,'自定义排程');
+    const interval = /^(Every \d+ (?:minutes|hours)|Every hour(?: at :\d{2}|, \d{1,2} [AP]M to \d{1,2} [AP]M)?)(?:,? on (.+))?$/.exec(text);
+    if (interval) {
+      const [,frequency,restrictedDays] = interval;
+      const days = restrictedDays ? scheduleDays(restrictedDays) : '';
+      if (days === null) return text;
+      const display = frequency
+        .replace(/^Every (\d+) (minutes|hours)$/,(_,count,unit) => `每 ${count} ${unit === 'minutes' ? '分钟' : '小时'}`)
+        .replace(/^Every hour(?: at :(\d{2}))?$/,(_,minute) => minute ? `每小时第 ${minute} 分钟` : label('Every hour','每小时'))
+        .replace(/^Every hour, (.+) to (.+)$/,(_,start,end) => `${scheduleClock(start)} 至${scheduleClock(end)}每小时`);
+      return days ? `${days}，${display}` : display;
+    }
+    const at = /^(.+) at (\d{1,2}:\d{2} [AP]M(?:, \d{1,2}:\d{2} [AP]M)*(?: and \d{1,2}:\d{2} [AP]M)?)$/.exec(text);
+    if (!at) return text;
+    const dayOfMonth = /^Monthly on the (\d+)(?:st|nd|rd|th)$/.exec(at[1]);
+    const days = dayOfMonth ? `每月 ${dayOfMonth[1]} 日` : scheduleDays(at[1]);
+    return days ? `${days} ${at[2].split(/, | and /).map(scheduleClock).join('、')}` : text;
+  }
+  const scheduleMonths = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  function scheduleDate(text) {
+    const relative = {today:'今天',tomorrow:'明天',yesterday:'昨天'};
+    const day = text.toLowerCase();
+    if (own(relative,day)) return relative[day];
+    const date = /^([A-Z][a-z]+) (\d{1,2})(?:, (\d{4}))?$/.exec(text);
+    if (!date) return scheduleWeekday(text);
+    const month = scheduleMonths.findIndex(name => name === date[1] || name.slice(0,3) === date[1]);
+    if (month === -1) return null;
+    return `${date[3] ? `${date[3]} 年 ` : ''}${month+1} 月 ${date[2]} 日`;
+  }
+  function scheduleNextRun(text) {
+    const match = /^Next run (?:on )?(.+) around (\d{1,2}:\d{2} [AP]M)(.*)$/.exec(text);
+    if (!match) return text;
+    const date = scheduleDate(match[1]);
+    return date ? `预计下次运行：${date} ${scheduleClock(match[2])}${match[3]}` : text;
+  }
+  function scheduleRunDate(text) {
+    const match = /^(.+?)(?:,? (\d{1,2}:\d{2} [AP]M))?$/.exec(text);
+    if (!match) return text;
+    const date = scheduleDate(match[1]);
+    return date ? `${date}${match[2] ? ` ${scheduleClock(match[2])}` : ''}` : text;
+  }
+  function scheduleModelWarning(text) {
+    if (typeof text !== 'string') return text;
+    const fallback = /^(.+) is no longer available\. Runs use (.+) instead\.$/.exec(text);
+    if (fallback) return `${fallback[1]} 已不可用，任务将改用 ${fallback[2]} 运行。`;
+    const unavailable = /^(.+) is no longer available\. Runs will fail until you pick another model\.$/.exec(text);
+    return unavailable ? `${unavailable[1]} 已不可用。选择其他模型前，任务将无法运行。` : text;
+  }
+  // The original formatters keep cron parsing, dates and time zones native.
+  for (const [kind,markers,display] of [
+    ['schedule-summary',['"Custom schedule"','`Every ${','`Monthly on the ${'],scheduleSummary],
+    ['schedule-next-run',['`Next run ${',' around ${','"tomorrow"'],scheduleNextRun],
+    ['schedule-run-date',['`Today ${','`Tomorrow ${','`Yesterday ${','withTime:'],scheduleRunDate],
+    ['schedule-model-warning',[' is no longer available. Runs use ',' Runs will fail until you pick another model.'],scheduleModelWarning]
+  ]) {
+    const entry = nativeFunctions.find(entry => markers.every(marker => entry.source.includes(marker)));
+    if (entry) install(entry.key,entry.original,function nativeScheduleDisplay(...args) {
+      return display(Reflect.apply(entry.original,this,args));
+    },kind);
+  }
   function scheduleChoiceLabel(testId,value,text) {
     if (typeof text !== 'string') return text;
     if (testId === 'schedule-repeat') {
@@ -3369,8 +3833,7 @@
       if (hour > 23 || minute > 59) return text;
       const clock = `${hour % 12 || 12}:${String(minute).padStart(2,'0')}`;
       const period = hour < 12 ? 'AM' : 'PM';
-      if (text !== `${clock} ${period}`) return text;
-      return `${label('schedule-time:'+period,period === 'AM' ? '上午' : '下午')} ${clock}`;
+      return text === `${clock} ${period}` ? scheduleClock(text) : text;
     }
     if (testId === 'schedule-weekday') {
       const day = Number(value);
@@ -3442,9 +3905,17 @@
   ]);
 
   const effortLabels = {low:['Low','低'],medium:['Medium','中'],high:['High','高'],xhigh:['Extra','超高'],max:['Max','最高']};
+  const effortKeysByDisplay = new Map([
+    ['Extra High','xhigh'],
+    ...Object.entries(effortLabels).map(([effort,[name]]) => [name,effort]),
+  ]);
   function modelEffortLabel(effort) {
     const entry = effortLabels[effort];
     return entry ? label(entry[0],entry[1]) : null;
+  }
+  function displayedModelEffort(text, effort) {
+    const key = effortKeysByDisplay.get(text);
+    return key && (effort === undefined || effort === key) ? modelEffortLabel(key) : null;
   }
   function modelDisplayLabel(model) {
     const name = model?.label;
@@ -3452,6 +3923,15 @@
     const match = /^(.*?)\s*\((low|medium|high|xhigh|max)(?:\s+thinking)?\)\s*$/i.exec(name);
     return match ? `${match[1]}（${modelEffortLabel(match[2].toLowerCase())}）` : name;
   }
+  function plannerDisplayLabel(text) {
+    if (typeof text !== 'string') return null;
+    if (text === "The Orchestrator's own planner") return label(text,'编排器内置规划模型');
+    for (const [name,effort] of effortKeysByDisplay) {
+      if (text.endsWith(' '+name)) return text.slice(0,-name.length)+modelEffortLabel(effort);
+    }
+    return null;
+  }
+  const orchestratorLabel = () => label('model-mode:Orchestrator','编排器');
   // The raw model formatter also supplies aria-label. Localize only the
   // trigger's visible label and tooltip expressions, using their native models.
   const modelDisplayClass = 'min-w-0 overflow-hidden text-ellipsis whitespace-nowrap';
@@ -3460,7 +3940,7 @@
   if (modelTriggerEntry) {
     const modelName = modelTriggerEntry.source.match(new RegExp(`\\bselectedModel:\\s*(${identifier})`))?.[1];
     const configName = modelTriggerEntry.source.match(new RegExp(`\\bbestOfNConfig:\\s*(${identifier})`))?.[1];
-    const projection = modelTriggerEntry.source.match(new RegExp(`\\{label:(${identifier}),tooltipContent:(${identifier}),effortLabel:${identifier}\\}`));
+    const projection = modelTriggerEntry.source.match(new RegExp(`\\{label:(${identifier}),tooltipContent:(${identifier}),effortLabel:${identifier}(?:,plannerLabel:${identifier})?\\}`));
     const labelName = projection?.[1], tooltipName = projection?.[2];
     const display = `className:${JSON.stringify(modelDisplayClass)}},${labelName},`;
     if (modelName && configName && labelName && modelTriggerEntry.source.includes(display)) {
@@ -3474,6 +3954,7 @@
           const models = bestOfN?.isBestOfNEnabled ? bestOfN.selectedBestOfNModels ?? [] : [];
           if (models.length && text === models.map(value => value.label).join(', '))
             return models.map(modelDisplayLabel).join(', ');
+          if (text === 'Orchestrator' && model && !model.isCustom) return orchestratorLabel();
           return text === model?.label ? modelDisplayLabel(model) : text;
         });
       } catch { /* A changed model trigger keeps its original labels and Hooks. */ }
@@ -3482,11 +3963,11 @@
   ui('model-trigger-display',['model-selector-trigger','effortLabel:'],[
     seq([' ',C],(children,node) => {
       if (node.type !== 'span' || node.props.className !== 'opacity-70' || typeof children[1] !== 'string') return children;
-      const match = /^(Low|Medium|High|Extra|Max)(?: · ([\s\S]+))?$/.exec(children[1]);
-      const entry = match && Object.values(effortLabels).find(value => value[0] === match[1]);
-      if (!entry) return children;
-      const context = match[2] === undefined ? '' : ' · '+(match[2] === 'Default' ? label('Default','默认') : match[2]);
-      return [children[0],label(entry[0],entry[1])+context];
+      const [, effort, context] = /^(.+?)(?: · ([\s\S]+))?$/.exec(children[1]) ?? [];
+      const localized = displayedModelEffort(effort);
+      if (localized) return [children[0],localized+(context === undefined ? '' : ' · '+(context === 'Default' ? label('Default','默认') : context))];
+      const planner = plannerDisplayLabel(children[1]);
+      return planner ? [children[0],planner] : children;
     })
   ]);
   ui('find-bar-count',['find-bar-match-count','currentMatchIndex:','maxMatches:'],[],{
@@ -3498,22 +3979,45 @@
       return match ? match[1]+' / '+match[2] : null;
     }
   });
-  const effortOptionText = node => {
-    const entry = effortLabels[node.props['data-effort']];
-    return node.type === 'span' && node.props['data-testid'] === 'model-selector-effort-option' && node.props.children === entry?.[0]
-      ? modelEffortLabel(node.props['data-effort']) : null;
-  };
+  const effortOptionText = node => node.type === 'span' && typeof node.props['data-effort'] === 'string'
+    && ['model-selector-effort-option','orchestrator-picker-effort'].includes(node.props['data-testid'])
+    ? displayedModelEffort(node.props.children,node.props['data-effort']) : null;
   ui('model-menu-display',['model-selector-item','data-model-label','effortIndex:'],[],{
     text(node,props) {
       const effort = effortOptionText(node);
       if (effort !== null) return effort;
       const text = node.props.children;
       if (node.type !== 'span') return null;
-      if (node.props.className === 'truncate text-xs text-left' && text === props.model?.label)
+      if (/^truncate text-(xs|sm) text-left$/.test(node.props.className) && text === props.model?.label)
         return modelDisplayLabel(props.model);
-      return node.props.className === 'shrink-0 opacity-70 text-xs' && Object.values(effortLabels).some(entry => entry[0] === text)
-        ? label(text,Object.values(effortLabels).find(entry => entry[0] === text)[1]) : null;
+      if (node.props['data-testid'] === 'model-selector-orchestrator-model') return plannerDisplayLabel(text);
+      if (text === 'Orchestrator' && node.props.className === 'shrink-0 text-sm text-left') return orchestratorLabel();
+      return /^shrink-0 opacity-70 text-(xs|sm)$/.test(node.props.className) ? displayedModelEffort(text) : null;
     }
+  });
+  ui('model-availability-badge',['tagTitle','tagDescription','max-w-[200px]'],[],{
+    text(node,props) {
+      const option = props.option;
+      if (option?.tagTitle !== 'New' || option.isCustom || (option.value === undefined &&
+          option.tagDescription !== 'Offloads routine steps to a faster executor. Same quality, fewer tokens used.')) return null;
+      return (node.type === 'span' || node.type === 'div') && node.props.children === option.tagTitle
+        ? label('model-badge:New','新上线') : null;
+    }
+  });
+  const orchestratorEffortText = node => node.type === 'span' && node.props.className === 'shrink-0 opacity-70'
+    ? displayedModelEffort(node.props.children) : null;
+  ui('orchestrator-model-menu',['orchestrator-picker-row','orchestrator-picker-effort'],[],{
+    text(node,props) {
+      const effort = effortOptionText(node) ?? orchestratorEffortText(node);
+      if (effort !== null) return effort;
+      if (node.type !== 'span' || node.props.className !== 'truncate') return null;
+      const entry = props.rows?.find(row => row.kind === 'model' && row.option.label === node.props.children);
+      return entry ? modelDisplayLabel(entry.option) : null;
+    }
+  });
+  ui('orchestrator-model-setting',['orchestrator-picker-label-','orchestrator-picker-value-'],[],{
+    text:orchestratorEffortText,
+    elementProperties:['rightElement']
   });
   ui('model-effort-context',['model-selector-effort-option','model-selector-context-window-submenu'],[],{
     text:effortOptionText,
@@ -3805,7 +4309,65 @@
       ['text-[13px] font-mono mr-px mt-px ml-px','truncate font-mono text-[13px] mt-px ml-px text-muted-foreground'].includes(node.props.className)
       ? label('terminal','终端') : null;
   }});
+  const managedTaskStatuses = {
+    UNSPECIFIED:'未指定',GENERATING:'正在生成',QUEUED:'已排队',PENDING:'待处理',RUNNING:'运行中',WAITING:'等待中',
+    DONE:'已完成',INVALID:'无效',CLEARED:'已清除',CANCELED:'已取消',ERROR:'出错',INTERRUPTED:'已中断'
+  };
+  function taskStatusMarkdown(text) {
+    const header = /^\*\*Status\*\*: (\S+)(?: • \*\*Last progress\*\*: ([^\n]+) ago)?(?=\n\n|$)/.exec(text);
+    if (!header) return text;
+    const state = header[1].replace(/^CORTEX_STEP_STATUS_/, '').toUpperCase();
+    const localized = own(managedTaskStatuses,state) ? label('managed-tool:status:'+state,managedTaskStatuses[state]) : header[1];
+    let result = '**'+label('Status','状态')+'**：'+localized;
+    if (header[2]) result += label('managed-tool:last-progress',' • **最近进展**：{duration}前')
+      .replace('{duration}',() => timerDuration(header[2]));
+    const body = text.slice(header[0].length), empty = '\n\n*No log output recorded yet.*';
+    return result+(body === empty ? label('cli-ui:'+empty,'\n\n*暂无日志输出。*') : body);
+  }
+  function managedListMarkdown(tool,title,text) {
+    if (tool === 'manage_subagents' && title.prefix === 'Killed' && text === 'No active subagents to kill.')
+      return label('managed-tool:No active subagents to kill.','没有需要终止的子智能体。');
+    if (tool !== 'manage_task') return text;
+    if (title.prefix === 'Checked task') return taskStatusMarkdown(text);
+    if (title.prefix !== 'Listed') return text;
+    if (title.original === '0 tasks' && (text === 'No active tasks.' || text === 'No background tasks are currently running.'))
+      return label('managed-tool:'+text,text === 'No active tasks.' ? '暂无进行中的任务。' : '当前没有正在运行的后台任务。');
+    const summary = 'View task details', columns = '| Start Time | Task ID | Tool | Description |';
+    const start = '<details>\n<summary>', separator = '</summary>\n\n';
+    const header = start+summary+separator+columns;
+    if (!text.startsWith(header+'\n|---|---|---|---|\n')) return text;
+    return start+label('managed-tool:'+summary,'查看任务详情')+separator+
+      label('managed-tool:'+columns,'| 开始时间 | 任务 ID | 工具 | 说明 |')+text.slice(header.length);
+  }
+  function managedCardBody(info,title,tool) {
+    if (tool === 'send_message') {
+      const markdown = info.markdown;
+      if (info.contentBlocks?.length || title.prefix !== 'Messaged' || typeof markdown !== 'string' ||
+        !/^\*\*Summary:\*\* \*[\s\S]*?\*\n\*\*\*\n/.test(markdown)) return info;
+      return {...info,markdown:'**'+label('Summary','摘要')+'：**'+markdown.slice('**Summary:**'.length)};
+    }
+    const translate = text => title.key ? swarmCardMarkdown(title,text) : managedListMarkdown(tool,title,text);
+    // The native card renders its content blocks in preference to legacy markdown.
+    // Edit only the displayed copy, keeping the step and its tool result intact.
+    if (info.contentBlocks?.length) {
+      const blocks = info.contentBlocks.map(item => {
+        if (item.block?.case !== 'markdown') return item;
+        const value = translate(item.block.value);
+        return value === item.block.value ? item : {...item,block:{...item.block,value}};
+      });
+      return blocks.some((item,index) => item !== info.contentBlocks[index]) ? {...info,contentBlocks:blocks} : info;
+    }
+    if (typeof info.markdown !== 'string') return info;
+    const markdown = translate(info.markdown);
+    return markdown === info.markdown ? info : {...info,markdown};
+  }
   uiStep('generic',[],{element(node,props,React) {
+    const info = node.props.renderInfo;
+    if (info && info === props.step?.result?.stepRenderInfo && !props.toolNameOverride) {
+      const title = managedItemTitle(props.step,props.metadata);
+      const localized = title && managedCardBody(info,title,props.metadata?.toolCall?.name);
+      return localized && localized !== info ? React.cloneElement(node,{renderInfo:localized}) : node;
+    }
     if (!isStatusTitle(node)) return node;
     const title = !props.toolNameOverride && managedItemTitle(props.step,props.metadata);
     if (title && node.props.content === title.original) return React.cloneElement(node,{content:title.translated,
@@ -3824,20 +4386,51 @@
     if (!resource || resource.title || !resource.binaryContent || !React.isValidElement(title) || title.props.children !== 'Binary file') return node;
     return React.cloneElement(node,{children:[node.props.children[0],React.cloneElement(title,{children:stepLabel('Binary file')})]});
   }});
+  // The browser message resolver uses the same role normalizer for display
+  // that the native agent lookup uses for comparison. Localize its display call
+  // only, so a supplied role literally named "Browser Use" stays distinguishable.
+  const browserRoleName = nativeFunctions.find(entry => entry.source.includes('.toLowerCase()!=="browser"') &&
+    entry.source.includes(':"Browser Use"'));
+  const browserMessageRole = nativeFunctions.find(entry => entry.source.includes('resolvedRole:') &&
+    entry.source.includes('.hadBrowserSuffix') && entry.source.includes('.vetoed'));
+  if (browserRoleName && browserMessageRole) {
+    const call = new RegExp(`(?<![\\w$])${browserRoleName.key.replace(/\$/g,'\\$')}\\(`,'g');
+    const source = browserMessageRole.source.replace(call,'__chStatusLabel(');
+    if (source !== browserMessageRole.source) {
+      let localized;
+      try {
+        const displayName = localizeLiterals(browserRoleName,['Browser Use'],[],text => label(text,'浏览器操作'));
+        localized = compileFormatter(source,displayName);
+      } catch { /* Keep the native resolver when its display expression changes. */ }
+      if (localized) install(browserMessageRole.key,browserMessageRole.original,localized,'browser-message-role');
+    }
+  }
+  ui('browser-agent-message-title',['agent-status-canceled','agent-status-done','faviconDataUrl:','title:'],[],{
+    element(node,props,React) {
+      const text = props.title;
+      if (node.type !== 'span' || typeof text !== 'string' || node.props.title !== text || node.props.children !== text) return node;
+      const parts = /^(Message from|Messaging|Messaged|Canceled|Rejected|Interrupted) ([\s\S]+)$/.exec(text);
+      if (!parts) return node;
+      const [,action,role] = parts;
+      const title = action === 'Message from'
+        ? label('Message from {agent}','来自 {agent} 的消息').replace('{agent}',() => role)
+        : (action === 'Interrupted' ? label(action,'已中断') : fixed(action))+' '+role;
+      return React.cloneElement(node,{title,children:title});
+    }
+  });
   ui('render-info-title', ['titleParts','part.case===','diffContext'], [], {
     resultText(text,info) {
       const timer = timerTitle(info);
-      if (timer && text === timer.original) return timer.translated;
-      // Structured title parts can be agent names, file names or URLs. Only
-      // the native plain-title templates own these notification labels.
-      if (info?.title !== text || info?.titleParts?.length) return text;
-      if (text === 'Message from Parent Agent') return label(text,'来自父智能体的消息');
-      const message = /^Message (from|to) ([\s\S]+)$/.exec(text);
-      if (!message) return text;
-      const template = message[1] === 'from'
-        ? label('Message from {agent}','来自 {agent} 的消息') : label('Message to {agent}','发给 {agent} 的消息');
-      const agent = message[2] === '@coordinator' ? '@'+label('swarm-ui:Coordinator','协调员') : message[2];
-      return template.replace('{agent}',() => agent);
+      return timer && text === timer.original ? timer.translated : text;
+    }
+  });
+  ui('nested-step-message-title', ['block:','indentExpandedContent:','hasSupplementaryView:','renderInfo'], [], {
+    elementProperties:['title'],
+    element(node,props,React) {
+      const info = props.block?.renderInfo;
+      if (!isStatusTitle(node) || !info || node.props.content !== info.title) return node;
+      const content = agentNoticeTitle(info);
+      return content ? React.cloneElement(node,{content}) : node;
     }
   });
   ui('timer-render-info-status', ['contentBlocks.map','fallbackMarkdown','disableMath:!0'], [], {
@@ -3881,16 +4474,130 @@
       .replace('{id}',() => prefix[1])+content.slice(prefix[0].length);
     return {content,translated};
   }
+  function swarmCopy(key, fallback, values) {
+    return label('swarm-ui:'+key,fallback).replace(/\{(\w+)\}/g,(placeholder,name) => values?.[name] ?? placeholder);
+  }
+  const swarmStateLabels = {
+    working:['Working','执行中'], waiting:['Waiting','等待中'], killed:['Killed','已终止'], stopped:['stopped','已停止']
+  };
+  function swarmMemberState(state) {
+    if (own(swarmStateLabels,state)) return swarmCopy(...swarmStateLabels[state]);
+    const unknown = /^unknown \((.*)\)$/.exec(state);
+    return unknown ? swarmCopy('tool-status-unknown','未知（{state}）',{state:unknown[1]}) : state;
+  }
+  function swarmStatusBody(text) {
+    if (text === 'No swarm yet.') return swarmCopy(text,'暂无协作群。');
+    // The native status footer follows the roster. Member names, model names,
+    // host names and paths are supplied data even when they contain UI words.
+    const footer = /(?:^|\n)(\d+) agent\(s\), (\d+) waiting(?:, (\d+) stopped \(a post naming one revives it\))?(?:\nchannels: (#main, [^\n]+))?\nboard: ([^\n]+)$/.exec(text);
+    if (!footer) return text;
+    const roster = text.slice(0,footer.index).split('\n').map(line => {
+      if (!line.startsWith('- **@')) return line;
+      const roles = {worker:'执行成员',coordinator:'协调员',narrator:'讲解员',monitor:'监测员'};
+      const row = /^(.*?\*\* \()([^,)]+)(.*\).* — )(working|waiting|killed|stopped|unknown \([^)]*\))(?:, last seen (just now|(\d+) (min|h|days) ago))?(?: in (`.*`))?$/.exec(line);
+      if (!row) return line;
+      const [,name,role,details,state,age,count,unit,path] = row;
+      let result = name+(own(roles,role) ? swarmCopy(role,roles[role]) : role)+details+swarmMemberState(state);
+      if (age) result += '，'+(age === 'just now' ? swarmCopy('seen just now','刚刚在线') :
+        swarmCopy('last seen {count}{unit} ago','最后在线于 {count}{unit}前',{count,
+          unit:swarmCopy(...{min:['minutes','分钟'],h:['hours','小时'],days:['days','天']}[unit])}));
+      return path ? result+swarmCopy('tool-status-path','，位置 {path}',{path}) : result;
+    }).join('\n');
+    const [,count,waiting,stopped,channels,board] = footer;
+    let summary = swarmCopy('tool-status-counts','{count} 个智能体，{waiting} 个等待中',{count,waiting});
+    if (stopped) summary += swarmCopy('tool-status-stopped','，{count} 个已停止（在留言中点名即可唤醒）',{count:stopped});
+    if (channels) summary += '\n'+swarmCopy('tool-status-channels','频道：{channels}',{channels:
+      channels.replace(/(#[^,\s]+) \(archived\)(?=, |$)/g,(_,name) => swarmCopy('#{channel} (archived)','#{channel}（已归档）',{channel:name.slice(1)}))});
+    return roster+(footer[0].startsWith('\n') ? '\n' : '')+summary+'\n'+swarmCopy('tool-status-board','留言板：{board}',
+      {board:board === 'local' ? swarmCopy('tool-board-local','本机') : board});
+  }
+  function swarmChannelBody(title,text) {
+    const channel = title.values.channel;
+    const argument = JSON.stringify(channel.slice(1));
+    const add = 'add{channels:['+argument+']}', subscribe = 'op:"subscribe"';
+    const post = 'post_message{channel:'+argument+'}', read = 'read_board{channel:'+argument+'}';
+    if (title.prefix === 'Checked' && text === 'Nothing to change.') return swarmCopy(text,'无需更改。');
+    if (title.prefix === 'Created' && text === 'Created '+channel+'. Put workers in it with '+add+' or '+subscribe+', and post its work there with '+post+'.')
+      return swarmCopy('tool-channel-created','已创建 {channel}。用 {add} 或 {subscribe} 将执行成员加入频道，用 {post} 在其中发布任务。',{channel,add,subscribe,post});
+    if (title.prefix === 'Archived' && text === 'Archived '+channel+': no more posts there; its history stays readable with '+read+'.')
+      return swarmCopy('tool-channel-archived','已归档 {channel}。频道已停止接收新留言，仍可用 {read} 查看历史记录。',{channel,read});
+    const actor = /^(You|\S+) (?:now sees?|no longer sees?) /.exec(text)?.[1];
+    if (!actor) return text;
+    const self = actor === 'You', name = self ? label('You','你') : actor;
+    const see = self ? 'see' : 'sees';
+    if (title.prefix === 'Subscribed to' && text === actor+' now '+see+' '+channel+"'s posts from here on, but not earlier ones: "+read+' reads its history.')
+      return swarmCopy('tool-channel-subscribed','{name}将收到 {channel} 的新留言，可用 {read} 查看此前的留言。',{name,channel,read});
+    if (title.prefix === 'Unsubscribed from' && text === actor+' no longer '+see+' '+channel+"'s posts, except those that name "+(self ? 'you' : 'it')+'.')
+      return swarmCopy('tool-channel-unsubscribed','{name}仅会收到 {channel} 中点名提及自己的留言。',{name,channel});
+    return text;
+  }
+  function swarmCardMarkdown(title,text) {
+    if (title.key === 'tool-status' || title.key === 'tool-status-bare') return swarmStatusBody(text);
+    if (title.key === 'tool-channel') return swarmChannelBody(title,text);
+    if (title.key === 'tool-channels' || title.key === 'tool-read-status') {
+      const channels = title.key === 'tool-channels';
+      const header = channels ? '| channel | topic | created by | members |' : '| member | state | parked on | last post |';
+      if (!text.startsWith(header+'\n|---|---|---|---|\n')) return text;
+      const rows = text.split('\n');
+      rows[0] = swarmCopy(header,channels ? '| 频道 | 主题 | 创建者 | 成员数 |' : '| 成员 | 状态 | 等待条件 | 最后留言 |');
+      return rows.map((line,index) => {
+        if (index < 2) return line;
+        if (channels) {
+          if (index === 2 && line === '| #main | everyone | — | all |') return swarmCopy(line,'| #main | 所有人 | — | 全体成员 |');
+          return line.replace(/^\| #([^|\s]+) \(archived\) \| /,(_,channel) => '| '+swarmCopy('#{channel} (archived)','#{channel}（已归档）',{channel})+' | ');
+        }
+        return line.replace(/^(\| [^|]* \| )([^|]+)( \| )([^|]*)( \| )/,(_,member,state,separator,parked,end) => {
+          const wait = /^(.+) after (#\d+)$/.exec(parked);
+          const modes = {mentions:'@提及',anything:'任意消息'};
+          return member+swarmMemberState(state)+separator+(wait ? swarmCopy('tool-status-parked','{seq} 之后的{mode}',
+            {seq:wait[2],mode:own(modes,wait[1]) ? swarmCopy('tool-status-mode-'+wait[1],modes[wait[1]]) : wait[1]}) : parked)+end;
+        });
+      }).join('\n');
+    }
+    if (title.key === 'tool-worker-count') {
+      const suffix = ': killed on the board, so their board tools refuse from now on; each conversation there stops when its current turn ends.';
+      if (text.endsWith(suffix)) {
+        const placements = text.slice(0,-suffix.length).replace(/(^|, )(\S+) on (.+?)(?=, \S+ on |$)/g,(_,separator,member,host) =>
+          separator+swarmCopy('tool-remote-member','{member}（{host}）',{member,host:
+            host === 'another language server' ? swarmCopy('tool-other-server','其他语言服务器') : host}));
+        return swarmCopy('tool-remote-kill','已在留言板上终止 {members}。这些成员已无法使用留言板工具，各自的对话将于当前轮次结束时停止。',{members:placements});
+      }
+    }
+    if (title.key === 'tool-suggested-models') {
+      const hint = 'Suggestions only. Any served model is accepted by add; use exactly the model the user asks for. Pass all:true to list every model.';
+      if (text.endsWith('\n\n'+hint)) return text.slice(0,-hint.length)+swarmCopy(hint,'以上为推荐模型。add 支持所有可用模型，请使用用户指定的模型。传入 all:true 可列出全部模型。');
+    }
+    return text;
+  }
   function resumedSwarmNotice(step) {
     if (step.eventType) return null;
     const title = swarmManagedTitle(step.renderInfo,'systemMessage');
     if (!title) return null;
-    const content = `Board messages ${title.values.seq} arrived before waiting completed; reading the board before waiting again.`;
+    const noun = title.values.seq.includes('–') ? 'messages' : 'message';
+    const content = `Board ${noun} ${title.values.seq} arrived before waiting completed; reading the board before waiting again.`;
     const blocks = step.renderInfo.contentBlocks;
     if (blocks?.length !== 1 || blocks[0].block?.case !== 'markdown' || blocks[0].block.value !== content) return null;
-    const translated = label('swarm-ui:tool-resumed-description','留言板消息 {seq} 在等待完成前已到达；请先读取留言板，再继续等待。')
-      .replace('{seq}',() => title.values.seq);
+    const translated = swarmCopy('tool-resumed-description','留言板消息 {seq} 在等待完成前已到达；请先读取留言板，再继续等待。',title.values);
     return {title,content,translated};
+  }
+  function swarmModelSwitchNotice(step) {
+    const info = step.renderInfo, content = step.message;
+    if (step.eventType || info?.title !== 'Model switched' || info.titlePrefix || info.titleParts?.length ||
+      info.icon || info.aggregationKey || info.contentBlocks?.length !== 1 || typeof content !== 'string') return null;
+    const block = info.contentBlocks[0].block;
+    if (block?.case !== 'markdown' || block.value !== content) return null;
+    const match = /^(?:You switched to the model |(The coordinator|@[\s\S]+) switched you to the model )([\s\S]+)\. (Continue coordinating the swarm from where you left off\.|If your assignment is unfinished, carry on with it where you left off; otherwise call swarm_wait\.)$/.exec(content);
+    if (!match) return null;
+    const [,actor,model,instruction] = match;
+    const coordinating = instruction.startsWith('Continue coordinating');
+    if (actor && coordinating) return null;
+    const member = actor === 'The coordinator' ? label('swarm-ui:Coordinator','协调员') : actor;
+    const change = actor ? label('swarm-ui:model-switched-by','{member}已将你的模型切换为 {model}。')
+      : label('swarm-ui:model-switched-self','你已切换到模型 {model}。');
+    const translated = change.replace(/\{(member|model)\}/g,(_,key) => key === 'member' ? member : model) +
+      (coordinating ? label('swarm-ui:model-switch-coordinate','请接着协调协作群的工作。') :
+        label('swarm-ui:model-switch-assignment','如果任务尚未完成，请从上次停下的地方继续。如果已经完成，请调用 swarm_wait。'));
+    return {content,translated};
   }
   ui('system-message-title', ['auto_proceed_uri','renderInfo','fallbackMarkdown'], [], {
     elementProperties:['trigger'],
@@ -3909,11 +4616,14 @@
       if (resumed && node.props.content === `${resumed.title.prefix} ${resumed.title.original}`)
         return React.cloneElement(node,{content:`${resumed.title.translatedPrefix}：${resumed.title.translated}`});
       const noticeTitle = !parts.length && !info?.titlePrefix && info?.title === 'System Message' && node.props.content === info.title;
-      const notice = (bodySlot || noticeTitle) && subagentIdleNotice(step);
+      const switchTitle = info?.title === 'Model switched' && node.props.content === info.title;
+      const switched = (bodySlot || switchTitle) && swarmModelSwitchNotice(step);
+      const notice = switched || (bodySlot || noticeTitle) && subagentIdleNotice(step);
       if (notice && bodySlot) return React.cloneElement(node,{renderInfo:{...info,contentBlocks:info.contentBlocks.map(item =>
         item.block?.case === 'markdown' && item.block.value === notice.content
           ? {...item,block:{...item.block,value:notice.translated}} : item)}});
       if (notice && noticeTitle) return React.cloneElement(node,{content:label('System Message','系统消息')});
+      if (switched && switchTitle) return React.cloneElement(node,{content:label('swarm-ui:Model switched','模型已切换')});
       if (hasTitle) {
         const prefix = info.titlePrefix;
         const localized = typeof prefix === 'string' ? fixed(prefix) : prefix;
@@ -3921,7 +4631,7 @@
         // Task notifications supply their names. Project only the fixed status
         // suffix at the native plain-title slot shared with timer notifications.
         if (!parts.length && typeof info.title === 'string' && content === (prefix ? `${prefix} ${info.title}` : info.title)) {
-          const title = taskNotificationTitle(step);
+          const title = taskNotificationTitle(step) ?? agentNoticeTitle(info);
           if (title !== null) return React.cloneElement(node,{content:(prefix ? `${localized} ` : '')+title});
         }
         if (localized === prefix) return node;
@@ -4007,6 +4717,18 @@
     seq([C,' / ',C,' tokens (',C,'%)'], c => [c[0],' / ',c[2],' Token（',c[4],'%）']),
     seq([C,' / ',C,' ','tokens (',C,'%)'], c => [c[0],' / ',c[2],' Token（',c[5],'%）'])
   ];
+  // These controls sit inside native tool cards. Their surroundings can contain
+  // user commands, page titles and quoted browser text.
+  for (const id of ['browser-subagent-steps-earlier','subagent-node-children-toggle','subagents-see-more-toggle']) {
+    ui(id,[id,'"aria-expanded":'],[],{text(node) {
+      const text = node.props.children;
+      return node.props['data-testid'] === id && typeof text === 'string' ? options.translate?.(text) : null;
+    }});
+  }
+  ui('browser-steps-summary',['Loading browser steps','No browser steps recorded','Showing latest ${'],[],{text(node) {
+    return node.type === 'div' && node.props.className === 'px-2 py-1 text-xs text-muted-foreground' &&
+      typeof node.props.children === 'string' ? options.translate?.(node.props.children) : null;
+  }});
   ui('browser-step-confirmation', ['Confirmation required to execute this step','Confirm Browser Interaction'], [], {
     labels:{'Confirmation required to execute this step':'执行此步骤需要确认'},
     text(node) {
@@ -4283,6 +5005,7 @@
     write_file:['write access to this path','写入此路径'],
     read_url:['reading this URL','读取此网址'],
     execute_url:['executing actions on this URL','在此网址上执行操作'],
+    download_url:['browser downloads from this site','浏览器从此网站下载文件'],
     command:['running this command','运行此命令'],
     unsandboxed:['running this command outside the sandbox','在沙箱外运行此命令'],
     mcp:['using this MCP tool','使用此 MCP 工具'],
@@ -4292,6 +5015,8 @@
     const spec = context.permissionSpec;
     if (kind === 'question') {
       const {action,saveRule,description,verbatim} = context;
+      if (action === 'download_url' && !saveRule && text === 'Allow the browser agent to download a file?')
+        return label(text,'允许浏览器智能体下载文件？');
       const supplied = description?.trim() && ['command','unsandboxed','custom'].includes(action);
       if (supplied && verbatim && !saveRule) return text;
       const prefix = saveRule ? 'Save rule to always allow ' : 'Allow ';
@@ -4310,6 +5035,19 @@
       const plain = saveRule ? 'Yes, save rule' : 'Yes, and always allow';
       const patterned = saveRule ? `Yes, save rule for '${pattern}'` : `Yes, and always allow '${pattern}'`;
       const question = context.question;
+      if (spec.resource?.action === 'download_url' && typeof question === 'string' &&
+          question.startsWith('download_url(') && question.endsWith(')')) {
+        if (text === 'Yes, allow this download') return label(text,'是，允许此次下载');
+        const host = question.slice('download_url('.length,-1);
+        for (const [key, translation] of [
+          ['Yes, allow downloads from {host} for this run','是，本次运行允许从 {host} 下载'],
+          ['Yes, allow downloads from {host} in this conversation','是，本次对话允许从 {host} 下载'],
+          ['Yes, always allow downloads from {host}','是，始终允许从 {host} 下载']
+        ]) {
+          if (host && text === key.replace('{host}',() => host))
+            return label(key,translation).replace('{host}',() => host);
+        }
+      }
       const target = !saveRule && spec.resource?.action === 'execute_url' && typeof question === 'string' &&
         question.startsWith('execute_url(') && question.endsWith(')') ? question.slice('execute_url('.length,-1) : null;
       for (const [scope,suffix,fallback] of [
@@ -4350,9 +5088,14 @@
     return permissionDisplay('question',text,{action,saveRule,description,verbatim:display?.verbatim});
   },'native-permission-question',permissionQuestionEntry.owner ?? window);
 
-  ui('command-permission-details', ['permission-details-toggle','permission-target-editor'], [], {
+  ui('command-permission-details', ['permission-target-editor','disabledOptionIds:','permissionAction:'], [], {
     elementProperties:['headerInputSlot'],
-    text(node) {
+    text(node, props) {
+      if (props.permissionSpec?.resource?.action === 'download_url' && node.type === 'dt') {
+        const labels = {File:'文件', From:'来源', 'Redirected from':'重定向来源', Type:'类型', 'Save to':'保存位置'};
+        const text = node.props.children;
+        return own(labels,text) ? label(text,labels[text]) : null;
+      }
       if (node.type !== 'span') return null;
       const text = node.props.children;
       if (text === 'Show details' && node.props.className == null) return label(text,'显示详情');
@@ -4481,29 +5224,62 @@
     if (description !== node.props.description) next.description = description;
     return Object.keys(next).length ? React.cloneElement(node,next) : node;
   }
-  ui('builtin-swarm-command-menu', ['menu-option-label','menu-option-description','getRenderInfo'], [], {
+  function builtinSkill(path,name) {
+    if (name === 'swarm' && builtinSwarmPath(path,'skill')) return 'swarm';
+    const directory = typeof path === 'string'
+      ? /\/\.gemini\/antigravity\/builtin\/skills\/([\w-]+)(?:\/SKILL\.md)?\/?$/.exec(path)?.[1] : null;
+    if (!directory || directory !== (name === 'antigravity-guide' ? 'antigravity_guide' : name)) return null;
+    return label(`builtin-skill:${name}:name:${name}`,null) ? name : null;
+  }
+  function builtinSkillName(skill,name) {
+    if (skill === 'swarm') return swarmName(name,'skill');
+    const display = label(`builtin-skill:${skill}:name:${skill}`,skill);
+    if (name === skill) return display;
+    return name === `/${skill}` && display !== skill ? `${name}（${display}）` : name;
+  }
+  function builtinSkillDescription(skill,text) {
+    if (skill === 'swarm') return swarmDescription(text,'skill');
+    if (typeof text !== 'string') return text;
+    const original = text.trim();
+    const display = label(`builtin-skill:${skill}:description:${original}`,label(original,original));
+    return display === original ? text : display;
+  }
+  function builtinSkillCard(node,skill,React) {
+    if (!skill || !React.isValidElement(node)) return node;
+    const next = {};
+    for (const property of ['name','title']) {
+      const name = builtinSkillName(skill,node.props[property]);
+      if (name !== node.props[property]) next[property] = name;
+    }
+    const description = builtinSkillDescription(skill,node.props.description);
+    if (description !== node.props.description) next.description = description;
+    return Object.keys(next).length ? React.cloneElement(node,next) : node;
+  }
+  ui('builtin-skill-command-menu', ['menu-option-label','menu-option-description','getRenderInfo'], [], {
     element(node,props,React) {
       const item = props.item,scope = item?.item?.scopeItem,info = scope?.value?.info;
-      if (scope?.case !== 'slashCommand' || info?.name !== 'swarm' || !builtinSwarmPath(info.definitionPath,'skill')) return node;
+      const skill = scope?.case === 'slashCommand' && builtinSkill(info?.definitionPath,info?.name);
+      if (!skill) return node;
       const slot = node.props['data-testid'];
       if (slot === 'menu-option-label') {
         const child = node.props.children,text = typeof child === 'string' ? child : child?.props?.text;
-        const display = swarmName(text,'skill');
+        const display = builtinSkillName(skill,text);
         return display !== text ? React.cloneElement(node,{children:display}) : node;
       }
       if (slot !== 'menu-option-description') return node;
-      const text = item.customDescription,display = swarmDescription(text,'skill');
+      const text = item.customDescription,display = builtinSkillDescription(skill,text);
       // The native row may shorten its description around a query match. Use
       // the full display copy here; the option and its selection stay native.
       return display !== text ? React.cloneElement(node,{children:display}) : node;
     }
   });
-  ui('builtin-swarm-skill-tooltip', ['description:','openUri:',' skill`'], [], {
+  ui('builtin-skill-tooltip', ['description:','openUri:',' skill`'], [], {
     element(node,props,React) {
-      if (!builtinSwarmPath(props.path,'skill') || props.name !== 'swarm') return node;
+      const skill = builtinSkill(props.path,props.name);
+      if (!skill) return node;
       if (node.type === 'span' && node.props.children === props.name)
-        return React.cloneElement(node,{children:swarmName(props.name,'skill')});
-      const description = swarmDescription(props.description,'skill');
+        return React.cloneElement(node,{children:builtinSkillName(skill,props.name)});
+      const description = builtinSkillDescription(skill,props.description);
       return typeof node.type !== 'string' && node.props.children === props.description && description !== props.description
         ? React.cloneElement(node,{children:description}) : node;
     }
@@ -4511,20 +5287,37 @@
   ui('builtin-swarm-plugin-row', ['plugin:','onTogglePlugin:','deleteTitle:"Delete plugin"'], [], {
     result(value,props,React) { return builtinSwarmPlugin(props.plugin) ? swarmCard(value,'plugin',React) : value; }
   });
-  ui('builtin-swarm-skill-row', ['onCopyPath:','showBadge:','pluginName'], [], {
-    result(value,props,React) { return builtinSwarmPath(props.item?.path,'skill') ? swarmCard(value,'skill',React) : value; }
+  ui('builtin-skill-row', ['onCopyPath:','showBadge:','pluginName'], [], {
+    result(value,props,React) { return builtinSkillCard(value,builtinSkill(props.item?.path,props.item?.name),React); }
   });
-  ui('builtin-swarm-skill-customization-row', ['`skill-${','description:','content:','actions:'], [], {
-    result(value,props) {
-      if (!builtinSwarmPath(props.path,'skill') || !value || typeof value !== 'object') return value;
-      return {...value,name:swarmName(value.name,'skill'),description:swarmDescription(value.description,'skill')};
+  // The workspace list creates its rows through a render callback. Project
+  // built-in copy at the shared rendered row, after the callback returns it.
+  ui('builtin-skill-list-item', ['onCopyPath:','expandableContent:','line-clamp-2 mt-1','"Copy Path"'], [], {
+    text(node,props) {
+      const skill = builtinSkill(props.path,props.name);
+      if (!skill) return null;
+      const text = node.props.children;
+      if (node.type === 'span' && node.props.className?.startsWith('font-medium truncate ') && text === props.name)
+        return builtinSkillName(skill,text);
+      if (node.type === 'div' && node.props.className === 'text-sm text-muted-foreground line-clamp-2 mt-1' && text === props.description)
+        return builtinSkillDescription(skill,text);
+      return null;
     }
   });
-  ui('builtin-swarm-skill-cards', ['skills:','showPaths:','copyPath:','MarkdownRenderer:'], [], {
+  ui('builtin-skill-customization-row', ['`skill-${','description:','content:','actions:'], [], {
+    result(value,props) {
+      const skill = builtinSkill(props.path,props.name);
+      if (!skill || !value || typeof value !== 'object') return value;
+      return {...value,name:builtinSkillName(skill,value.name),description:builtinSkillDescription(skill,value.description)};
+    }
+  });
+  ui('builtin-skill-cards', ['skills:','showPaths:','copyPath:','MarkdownRenderer:'], [], {
     result(value,props,React) {
       if (!Array.isArray(value?.props?.children)) return value;
-      const children = value.props.children.map((node,index) => builtinSwarmPath(props.skills?.[index]?.path,'skill')
-        ? swarmCard(node,'skill',React) : node);
+      const children = value.props.children.map((node,index) => {
+        const item = props.skills?.[index];
+        return builtinSkillCard(node,builtinSkill(item?.path,item?.name),React);
+      });
       return children.some((node,index) => node !== value.props.children[index]) ? React.cloneElement(value,{children}) : value;
     }
   });
@@ -4705,17 +5498,27 @@
         ? React.cloneElement(node,{children:localized}) : node;
     }
   });
-  ui('builtin-agent-badge', ['conversationAgentScript:','"Agent Script"','text-xs select-none'], [], {
+  ui('builtin-agent-badge', ['conversationAgentScript','isSubagent','"Agent Script"'], [], {
     element(node,props,React) {
       const script = props.conversationAgentScript;
       const display = builtinAgentDisplay(script);
       if (!display) return node;
-      if (node.type === 'span' && node.props.className === 'text-xs select-none' && node.props.children === script.name)
+      if (node.type === 'span' && node.props.children === script.name)
         return React.cloneElement(node,{children:display.name});
       return node.type === 'div' && node.props.title === (props.isSubagent ? 'Subagent' : 'Agent Script')
         ? React.cloneElement(node,{title:display.description}) : node;
     }
   });
+  ui('composer-selected-agent', ['selected-agent-chip','. Change it in the model menu.'], [
+    seq([C,C],(children,node,props,React) => {
+      const [prefix,name] = children;
+      if (node.type !== 'span' || !React.isValidElement(prefix) || prefix.props.children !== 'Agent: ' || name !== props.agent?.name) return children;
+      return [React.cloneElement(prefix,{children:label('composer-agent:prefix','智能体：')}),builtinAgentDisplay(props.agent)?.name ?? name];
+    }),
+    seq(['Agent: ',C,'. Change it in the model menu.'],(children,node,props) =>
+      children[1] === props.agent?.name ? [label('composer-agent:prefix','智能体：'),builtinAgentDisplay(props.agent)?.name ?? children[1],
+        label(children[2],'。可在模型菜单中更改。')] : children)
+  ]);
   ui('builtin-agent-selector', ['selectedAgentScriptItem:','setSelectedAgentScriptItem:','New Agent Script'], [], {
     element(node,props,React) {
       const selected = props.selectedAgentScriptItem;
@@ -4801,6 +5604,70 @@
       return Reflect.apply(localized,this,args);
     },'native-ui-builtin-agent-tab',subagentTabEntry.owner ?? window);
   }
+  // The newer tab header reads a shared summary also used by navigation.
+  // Supply its selector with a display-only projection of the native summary.
+  const subagentHeaderEntry = nativeFunctions.find(entry => entry.source.includes('"subagent-tab-header-title"') &&
+    entry.source.includes('?.toolSummary||'));
+  const headerSummaryCall = subagentHeaderEntry?.source.match(new RegExp(`(${identifier})\\((${identifier}\\?\\.childCascadeId)\\)\\?\\.toolSummary`));
+  const agentSummaryEntry = nativeFunctions.find(entry => entry.source.includes('trajectoryMetadata?.subagentSpec') &&
+    entry.source.includes('subagentName:') && entry.source.includes('toolSummary:'));
+  if (headerSummaryCall && agentSummaryEntry) {
+    try {
+      const hook = readBinding(headerSummaryCall[1]), source = sourceOf(hook);
+      const spread = '...'+agentSummaryEntry.key+'(';
+      if (source.includes(spread) && source.includes('.summaries')) {
+        const displaySummary = compileFormatter(source.replace(spread,'...__chStatusLabel('),summary => {
+          const native = agentSummaryEntry.original(summary), spec = summary.trajectoryMetadata?.subagentSpec;
+          return spec?.typeName && !spec.role ? {...native,toolSummary:builtinAgentTypeLabel(spec.typeName)} : native;
+        });
+        const header = compileFormatter(subagentHeaderEntry.source.replace(headerSummaryCall[0],
+          '__chStatusLabel('+headerSummaryCall[2]+')?.toolSummary'),displaySummary);
+        install(subagentHeaderEntry.key,subagentHeaderEntry.original,header,'native-ui-builtin-agent-tab',subagentHeaderEntry.owner ?? window);
+      }
+    } catch { /* A changed summary provider keeps the native tab title. */ }
+  }
+  const agentSearchEntry = nativeFunctions.find(entry => entry.source.includes('trimmedQuery:') &&
+    entry.source.includes('group:"Subagents"') && entry.source.includes('subagentSpec?.role||'));
+  if (agentSearchEntry) {
+    const rawTitle = new RegExp(`title:(${identifier}\\.trajectoryMetadata\\?\\.subagentSpec\\?\\.role)\\|\\|(${identifier}\\.trajectoryMetadata\\?\\.subagentSpec\\?\\.typeName)\\|\\|"Subagent"`);
+    const filter = new RegExp(`\\.filter\\((${identifier})=>\\1\\.title\\.toLowerCase\\(\\)\\.includes\\((${identifier})\\)\\)(?=\\.slice\\(0,5\\)\\.forEach\\(\\1=>\\{${identifier}\\.push\\(\\{key:\x60subagent__)`);
+    const resultLabel = new RegExp(`(group:"Subagents",label:${identifier})\\.title`);
+    if (rawTitle.test(agentSearchEntry.source) && filter.test(agentSearchEntry.source) && resultLabel.test(agentSearchEntry.source)) {
+      const source = agentSearchEntry.source.replace(rawTitle,'$&,displayTitle:$1||__chStatusLabel($2||"Subagent")')
+        .replace(filter,'.filter($1=>$1.title.toLowerCase().includes($2)||$1.displayTitle.toLowerCase().includes($2))')
+        .replace(resultLabel,'$1.displayTitle');
+      let search;
+      try { search = compileFormatter(source,name => name === 'Subagent' ? label('Subagent','子智能体') : builtinAgentTypeLabel(name)); }
+      catch { /* Keep a changed search builder and its navigation callbacks native. */ }
+      if (search) install(agentSearchEntry.key,agentSearchEntry.original,search,'native-ui-builtin-agent-search',agentSearchEntry.owner ?? window);
+    }
+  }
+  ui('subagent-member-card-type',['coordinator-worker-card','coordinator-card-title','VIEW_SUBAGENT_FROM_CHAT'],[],{
+    element(node,props,React) {
+      if (props.title?.trim() && props.title.toLowerCase() !== 'self') return node;
+      const type = props.subtitle;
+      const original = !type || type.toLowerCase() === 'self' ? 'Subagent' : type;
+      const display = original === 'Subagent' ? label(original,'子智能体') : builtinAgentTypeLabel(original);
+      if (display === original) return node;
+      if (node.props['data-testid'] === 'coordinator-card-title' && node.props.children === original)
+        return React.cloneElement(node,{title:display,children:display});
+      return node.type === 'button' && node.props.title === 'Stop Subagent' && node.props['aria-label'] === 'Stop '+original
+        ? React.cloneElement(node,{'aria-label':label('Stop','停止')+' '+display}) : node;
+    }
+  });
+  ui('subagent-permission-type',['subagent-permission-source','firstWaitingStep','onViewSubagent'],[],{
+    element(node,props,React) {
+      const agent = props.subagent, type = agent?.subagentName;
+      if (node.props['data-testid'] !== 'subagent-permission-source' || !type ||
+        (agent.toolSummary?.trim() && agent.toolSummary.trim() !== type)) return node;
+      const original = type === 'browser' && node.props['aria-label'] === 'Open Subagent: Browser Use' ? 'Browser Use' : type;
+      const display = original === 'Browser Use' ? label(original,'浏览器操作') :
+        original === 'Subagent' ? label(original,'子智能体') : builtinAgentTypeLabel(type);
+      if (display === original || node.props['aria-label'] !== 'Open Subagent: '+original) return node;
+      return React.cloneElement(detailTree(node,React,child => child.type === 'span' && child.props.children === original
+        ? React.cloneElement(child,{children:display}) : child),{'aria-label':label('Open Subagent:','打开子智能体：')+display});
+    }
+  });
   ui('tool-error', ['Error while editing notebook','Error while running MCP tool'], [
     (children, node, props) => Array.isArray(children) && node.type === 'span' && typeof children[0] === 'string' && children[0].startsWith('Error while ')
       ? [nativeErrorText(children[0],props),...children.slice(1)] : children
@@ -4941,6 +5808,58 @@
     seq([C,' page',['','s']],c => [c[0],' 页']),seq(['Active Browser page',['','s'],':'],() => '当前浏览器页面：')
   ], {objectProperties:['view']});
   ui('overriding-projects', ['Modified in',' projects'], [seq([C,' projects'],c => [c[0],' 个项目'])]);
+  function preserveDisplayText(node,children,React) {
+    return children === node.props.children ? node : React.cloneElement(node,{children,'data-ch-keep':true});
+  }
+  const cookieDialogMessages = {
+    'browser-site-data-delete-error':seq(["Couldn't delete cookies for ",C,'. Try again.'],c => ['无法删除“',c[1],'”的 Cookie，请重试。']),
+    'browser-site-data-no-match':seq(['No sites match “',C,'”.'],c => ['没有与“',c[1],'”匹配的网站。'])
+  };
+  ui('browser-site-cookies', ['browser-site-data-dialog','browser-site-data-delete-error','browser-site-data-no-match'], [], {
+    element(node,props,React) {
+      const id = node.props['data-testid'];
+      const children = node.props.children;
+      if (node.type === 'p' && own(cookieDialogMessages,id)) {
+        return preserveDisplayText(node,cookieDialogMessages[id](children,node,props,React),React);
+      }
+      if (node.type !== 'li' || id !== 'browser-site-data-site' || !Array.isArray(children)) return node;
+      const [details,...actions] = children;
+      if (details?.type !== 'div' || !Array.isArray(details.props.children) || details.props.children.length !== 2) return node;
+      const [site,count] = details.props.children;
+      const countText = count?.type === 'span' ? count.props.children : null;
+      const countMatch = typeof countText === 'string' && /^(\d+) cookies?$/.exec(countText);
+      if (site?.type !== 'span' || site.props.children !== node.props['data-site'] || !countMatch) return node;
+      const localized = React.cloneElement(details,{children:[
+        React.cloneElement(site,{'data-ch-keep':true}),
+        React.cloneElement(count,{children:`${countMatch[1]} 个 Cookie`})
+      ]});
+      return React.cloneElement(node,{children:[localized,...actions]});
+    }
+  });
+  const browserSiteDataFeedback = [
+    seq(['Clearing cookies and site data for ',C,' may sign you out of this site.'],c => ['清除“',c[1],'”的 Cookie 和网站数据可能会让你退出该网站。']),
+    seq(['Site data cleared for ',C,'.'],c => ['已清除“',c[1],'”的网站数据。']),
+    seq(['Could not clear site data for ',C,'.'],c => ['无法清除“',c[1],'”的网站数据。'])
+  ];
+  ui('browser-site-data-feedback', ['url-security-clear-site-data','url-security-site-data-cleared','Clearing cookies and site data for '], [], {
+    element(node,props,React) {
+      if (node.type !== 'span' || !Array.isArray(node.props.children)) return node;
+      const children = browserSiteDataFeedback.reduce((text,render) => render(text,node,props,React),node.props.children);
+      return preserveDisplayText(node,children,React);
+    }
+  });
+  ui('ssh-project-dialog', ['ssh-connect-dialog','Then create the project in its window.'], [
+    seq(['Enter [user@]host[:port], or pick a host from your SSH config.',' Then create the project in its window.'],c => [
+      label(c[0],'输入 [user@]host[:port]，或从 SSH 配置中选择主机。'),'然后在该主机窗口中创建项目。'
+    ])
+  ]);
+  const coordinatorErrorMessage = seq(["Couldn't start the coordinator:",' ',C],c => ['无法启动协调员：',c[2]]);
+  ui('coordinator-start-error', ['pending-coordinator-error',"Couldn't start the coordinator:"], [], {
+    element(node,props,React) {
+      if (node.type !== 'span') return node;
+      return preserveDisplayText(node,coordinatorErrorMessage(node.props.children,node,props,React),React);
+    }
+  });
   ui('reroll-attempts', ['reroll-tooltip-info','attempt'], [seq(['attempt',['','s']],() => '次尝试')]);
   ui('best-of-count', ['Start Best-of-'], [prefix('Start Best-of-','启动 Best-of-')]);
   ui('handler-editor', ['Add New Handler to ','Handler #'], [
@@ -4977,9 +5896,13 @@
     seq(['No matching ',['projects','workspaces']],c => label('project-selector:no-matching:'+c[1],`未找到匹配的${entityLabel(c[1])}。`))
   ]);
   ui('onboarding-capabilities', ['Get Anything Done with '], [prefix('Get Anything Done with ','完成各类任务，就用 ')]);
-  ui('import-project', ['Successfully imported project:',' from AI Studio'], [
-    seq(['Successfully imported project:',' ',C,' from AI Studio'],c => ['已从 AI Studio 成功导入项目：',c[2]])
-  ]);
+  const importedProjectMessage = seq(['Successfully imported project:',' ',C,' from AI Studio'],c => ['已从 AI Studio 成功导入项目：',c[2]]);
+  ui('import-project', ['Successfully imported project:',' from AI Studio'], [], {
+    element(node,props,React) {
+      if (node.type !== 'p') return node;
+      return preserveDisplayText(node,importedProjectMessage(node.props.children,node,props,React),React);
+    }
+  });
   ui('delete-task', ['delete-sidecar-modal','? This action cannot be undone.'], [
     seq(['Are you sure you want to delete ',C,'? This action cannot be undone.'],c => ['确定删除 ',c[1],' 吗？此操作无法撤销。'])
   ]);
@@ -5193,6 +6116,8 @@
     'modern-web-guidance-plugin','google_maps_platform','flutter','data-agent-kit-plugin','google-cloud-developer'
   ].map(id => `antigravity-plugins-official/plugin/${id}`));
   const detailEntry = nativeFunctions.find(entry => entry.source.includes('plugin-detail-tabpanel') && entry.source.includes('catalogId:'));
+  const detailMetadataEntry = nativeFunctions.find(entry => ['installedPlugin:','catalogEntry:','pluginPreview:','"plugin-detail-footer"']
+    .every(marker => entry.source.includes(marker)));
   const detailSourceEntry = nativeFunctions.find(entry => entry.source.includes('depotPath') && entry.source.includes('http://cs/'));
   const detailHeaderEntry = nativeFunctions.find(entry => ['titleId:','badges:','subtitle:','description:','"h1"']
     .every(marker => entry.source.includes(marker)));
@@ -5232,18 +6157,19 @@
       ? React.cloneElement(node,{chMarketplaceId:id}) : node;
   }
   let detailRenderScope = null;
-  if (detailEntry && detailSourceEntry) {
-    // esb selects the first available installed plugin before its preview.
-    // Capture that existing return value while esb renders, without changing a
-    // Hook result or reading any account/authentication payload. A forged
-    // catalogId must not relabel an unrelated installed plugin.
-    for (const entry of nativeFunctions.filter(entry => entry.source.includes('return{plugin:') &&
-      entry.source.includes('.installedPlugins)') && entry.source.includes('isLoadingPlugins') && entry.source.includes('refetch:'))) {
-      install(entry.key,entry.original,function nativeDetailPluginSource(...args) {
-        const result = Reflect.apply(entry.original,this,args);
-        if (detailRenderScope && result?.plugin) detailRenderScope.installed.push(result.plugin);
-        return result;
-      },'native-plugin-detail-source',entry.owner ?? window);
+  if (detailEntry && (detailMetadataEntry || detailSourceEntry)) {
+    // Older details expose the catalog source in their header and the selected
+    // installed plugin through a native lookup. Current details pass both to
+    // their metadata footer, which already uses the final selected values.
+    if (!detailMetadataEntry) {
+      for (const entry of nativeFunctions.filter(entry => entry.source.includes('return{plugin:') &&
+        entry.source.includes('.installedPlugins)') && entry.source.includes('isLoadingPlugins') && entry.source.includes('refetch:'))) {
+        install(entry.key,entry.original,function nativeDetailPluginSource(...args) {
+          const result = Reflect.apply(entry.original,this,args);
+          if (detailRenderScope && result?.plugin) detailRenderScope.installed.push(result.plugin);
+          return result;
+        },'native-plugin-detail-source',entry.owner ?? window);
+      }
     }
     const React = reactFor(detailEntry.source);
     if (React) install(detailEntry.key,detailEntry.original,function nativePluginDetail(...args) {
@@ -5252,8 +6178,9 @@
       let value;
       try { value = Reflect.apply(detailEntry.original,this,args); }
       finally { detailRenderScope = previous; }
-      let catalog;
+      let catalog,metadata;
       detailTree(value,React,node => {
+        if (nativeComponent(node,detailMetadataEntry)) metadata = node.props;
         if (nativeComponent(node,detailSourceEntry)) catalog = node.props.entry;
         // The shared native header owns its source element in subtitle rather
         // than children. Read only that known display slot, never plugin data.
@@ -5261,7 +6188,9 @@
         if (React.isValidElement(subtitle) && nativeComponent(subtitle,detailSourceEntry)) catalog = subtitle.props.entry;
         return node;
       });
-      const id = catalog?.id,installed = scope.installed[0];
+      if (metadata) catalog = metadata.catalogEntry;
+      const installed = metadata ? metadata.installedPlugin : scope.installed[0];
+      const source = catalog ?? installed?.installedFrom,id = source?.id;
       if (builtinSwarmPlugin(installed)) return detailTree(value,React,node => {
         if (nativeComponent(node,detailHeaderEntry)) node = swarmCard(node,'plugin',React);
         else if (node.type === 'h1' && node.props.children === (installed.displayName || installed.name))
@@ -5271,8 +6200,8 @@
         return detailOwners.some(owner => nativeComponent(node,owner.entry))
           ? React.cloneElement(node,{chBuiltinSwarm:true}) : node;
       });
-      if (catalog?.marketplace !== 'antigravity-plugins-official' || !officialPluginIds.has(id) ||
-        (installed && (installed.installedFrom?.id !== id || installed.installedFrom?.marketplace !== catalog.marketplace))) return value;
+      if (source?.marketplace !== 'antigravity-plugins-official' || !officialPluginIds.has(id) ||
+        (installed && (installed.installedFrom?.id !== id || installed.installedFrom?.marketplace !== source.marketplace))) return value;
       return detailTree(value,React,node => {
         if (nativeComponent(node,detailHeaderEntry)) {
           const changes = {};
@@ -5330,6 +6259,11 @@
             const description = detailLabel(id,`${kind === 'skills' ? 'skill' : kind === 'agents' ? 'agent' : 'rule'}-description`,node.props.description);
             if (description !== node.props.description) node = OwnerReact.cloneElement(node,{description});
           }
+          if (kind === 'skills' && typeof node.props.title === 'string') {
+            const title = node.props.title,name = title.startsWith('/') ? title.slice(1) : title;
+            const display = detailLabel(id,'skill-name',name);
+            if (display !== name) node = OwnerReact.cloneElement(node,{title:title === name ? display : `${title}（${display}）`});
+          }
           if (kind === 'sidecars') {
             if (nativeComponent(node,sidecarModalEntry)) return OwnerReact.cloneElement(node,{chMarketplaceId:id});
             const changes = {};
@@ -5375,6 +6309,15 @@
   const breadcrumbStoreEntry = nativeFunctions.find(entry => entry.key === breadcrumbStoreName);
   const breadcrumbLookupName = breadcrumbSelector?.source.match(new RegExp(`return\\s+(${identifier})\\(`))?.[1];
   const breadcrumbLookupEntry = nativeFunctions.find(entry => entry.key === breadcrumbLookupName);
+  const breadcrumbCatalogEntry = nativeFunctions.find(entry => ['.getCachedCatalogEntry(','.fetchCatalogEntry(','return{catalogEntry:']
+    .every(marker => entry.source.includes(marker)));
+  if (detailBreadcrumbEntry && breadcrumbCatalogEntry) {
+    install(breadcrumbCatalogEntry.key,breadcrumbCatalogEntry.original,function nativeBreadcrumbCatalog(...args) {
+      const value = Reflect.apply(breadcrumbCatalogEntry.original,this,args);
+      if (detailRenderScope?.breadcrumb && value?.catalogEntry) detailRenderScope.breadcrumb.catalog = value.catalogEntry;
+      return value;
+    },'native-plugin-breadcrumb-source',breadcrumbCatalogEntry.owner ?? window);
+  }
   if (detailBreadcrumbEntry && breadcrumbNameEntry && breadcrumbStoreEntry && breadcrumbLookupEntry) {
     install(breadcrumbStoreEntry.key,breadcrumbStoreEntry.original,function nativeBreadcrumbStore(...args) {
       const value = Reflect.apply(breadcrumbStoreEntry.original,this,args);
@@ -5400,6 +6343,9 @@
       installed = Reflect.apply(breadcrumbLookupEntry.original,undefined,[scope.breadcrumb.path,scope.breadcrumb.provider.getState().installedPlugins]);
       if (installed?.installedFrom?.marketplace === 'antigravity-plugins-official') id = installed.installedFrom.id;
     }
+    const catalog = scope.breadcrumb.catalog;
+    if (!id && !installed && pathname.startsWith('/customizations/plugins/') && catalog?.marketplace === 'antigravity-plugins-official')
+      id = catalog.id;
     const builtin = builtinSwarmPlugin(installed);
     if ((!builtin && !officialPluginIds.has(id)) || !Array.isArray(value) || value[0]?.name !== 'Customizations' ||
       typeof value[1]?.name !== 'string' || value[0].onRename || value[1].onRename) return value;
@@ -5745,6 +6691,13 @@
         ? React.cloneElement(node,{children:label('mcp-config:default-description','请填写安装此 MCP 服务器所需的配置项。')}) : node;
     }
   });
+  ui('mcp-catalog-empty-search', ['Search for MCP servers to add to your configuration','No MCP servers found for'], [
+    seq(['No MCP servers found for "',C,'"'], (children,node) => {
+      if (node.type !== 'div' || typeof children[1] !== 'string') return children;
+      const display = options.translate?.(children.join(''));
+      return display ? [display] : children;
+    })
+  ]);
   ui('resource-provider-connect', ['needsConnect:','Connect your account to browse '], [
     seq(['Add ',C,' resources'],(c,node,props,React) => node.type === 'span' && c[1] === props.displayName
       ? [label('Add','添加'),' ',React.createElement('span',{'data-ch-keep':true},c[1]),' ',label('Resources','资源')] : c),
@@ -5754,6 +6707,12 @@
   ui('chief-of-staff-canvas-label', ['cos-canvas-label','display only'], [], {
     labels:{'Canvas · written by your Chief of Staff · display only':'画布 · 由你的 Chief of Staff 编写 · 仅供查看',
       'Canvas page · display only':'画布页面 · 仅供查看'}
+  });
+  ui('chief-of-staff-canvas-title', ['cos-canvas-iframe','Chief of Staff canvas'], [], {
+    element(node,props,React) {
+      return node.props.dataTestId === 'cos-canvas-iframe' && node.props.title === 'Chief of Staff canvas'
+        ? React.cloneElement(node,{title:label('Chief of Staff canvas','Chief of Staff 画布')}) : node;
+    }
   });
   // The native memo selects supplied error messages/parts before this literal
   // fallback. Change that source branch while sharing the existing UI owner.
@@ -5785,12 +6744,39 @@
   ]);
 
   // Native project placeholders share their display slots with real names.
-  ui('standalone-section-label',['sectionId:','"outside-of-project"?"Standalone"'],[],{
+  for (const field of ['sectionId','projectId']) ui('standalone-'+field,[field+':','"outside-of-project"?"Standalone"'],[],{
     element(node,props,React) {
       if (node.type !== 'span' || node.props.className !== 'truncate' || typeof node.props.children !== 'string') return node;
-      return props.sectionId === 'outside-of-project'
+      return props[field] === 'outside-of-project'
         ? React.cloneElement(node,{children:label('section:outside-of-project','项目外')})
         : React.cloneElement(node,{'data-ch-keep':true});
+    }
+  });
+  ui('voice-turn-speaker',['live-turn-speaker','"You"'],[],{
+    text(node,props) {
+      return props.who !== 'agent' && node.type === 'span' && node.props.children === 'You' ? '你' : null;
+    }
+  });
+  ui('download-agent-badge',['webview-download-agent-badge','webview-download-filename'],[],{
+    text(node) {
+      return node.props['data-testid'] === 'webview-download-agent-badge' && node.props.children === 'Agent' ? '智能体' : null;
+    }
+  });
+  ui('connector-repair-action',['composer-connector-row','composer-connector-sign-in','"Fix"'],[],{
+    text(node) {
+      return typeof node.type !== 'string' && node.props.variant === 'secondary' && node.props.size === 'xs' &&
+        node.props.tabIndex === -1 && node.props.children === 'Fix' ? '修复' : null;
+    }
+  });
+  ui('agent-pane-layout',['data-agy-layout-bar','data-agy-pane-bar'],[],{
+    labels:{Layout:'布局'}
+  });
+  ui('agent-tile-actions',['agy-tile-takeover','agy-tile-handback'],[],{
+    element(node,props,React) {
+      const action = node.props['aria-label'];
+      const display = action === 'Pause' ? '暂停' : action === 'Resume' ? '继续' : null;
+      if (node.type !== 'button' || !display) return node;
+      return React.cloneElement(node,{'aria-label':display,children:node.props.children === action ? display : node.props.children});
     }
   });
   ui('change-hover-defaults',['Change details unavailable','unresolvedCommentCount','codeReviewScore'],[],{
@@ -6881,6 +7867,9 @@ const navigatorGroupEntry = nativeFunctions.find(entry => entry.source.includes(
       for (const definition of definitions) {
         for (const [original,fallback] of Object.entries(definition.attributes ?? {}))
           if (next.type === 'button' && next.props.title === original) next = React.cloneElement(next,{title:label(original,fallback)});
+        const aria = next.props['aria-label'];
+        if (typeof aria === 'string' && own(definition.ariaLabels ?? {},aria))
+          next = React.cloneElement(next,{'aria-label':label(`aria-label:${aria}`,label(aria,definition.ariaLabels[aria]))});
         if (definition.optionLabels) for (const property of ['primaryOption','secondaryOption','collapsableOption']) {
           const option = next.props[property];
           if (!option || typeof option.label !== 'string') continue;
@@ -7039,6 +8028,9 @@ const navigatorGroupEntry = nativeFunctions.find(entry => entry.source.includes(
   const pendingAttributes = new Map();
   const nativeMenuHooks = [];
   const originalLang = document.documentElement.getAttribute('lang');
+  // The PDF SDK renders selectable document text and reader-authored comments
+  // as ordinary DOM nodes. Keep those and marker IDs/names verbatim.
+  const pdfContent = '.pdf-sdk-root :is([data-testid="pdf-text-layer"],.floating-comment-card,.scrollbar-markers-popover-title,.scrollbar-markers-popover-subtitle[title])';
   const textExcluded = 'script,style,noscript,pre,code,kbd,samp,svg,canvas,iframe,webview,input,textarea,[contenteditable]:not([contenteditable="false"]),.monaco-editor,.xterm,.cm-editor,[data-ch-keep]';
   const authored = '[role="article"],[data-testid="user-input-step"],[data-testid="turn-cards-container"],[data-testid="side-question-question"],[data-testid="side-question-answer"],[aria-label="User message"],[aria-label="Agent response"],.leading-relaxed.select-text';
   const named = '[data-testid="conversation-row-sidebar"],[data-testid="project-header"],[data-testid="breadcrumb-segment"],[data-testid="settings-nav-item-Account"],[data-testid="automation-name"],[data-testid="side-question-row"] .agy-hover-label,[data-testid="side-question-tab-header-name"]';
@@ -7046,14 +8038,16 @@ const navigatorGroupEntry = nativeFunctions.find(entry => entry.source.includes(
   // Changing them after its width measurements makes the native animation flicker.
   // Its slots are empty-valued spans; named slots also belong to ordinary controls.
   const liveStatus = '[data-testid="agent-loading"],[data-testid="tool-group-collapsible"],.animate-shimmer-text,span[data-slot=""],[data-slot-in],[data-slot-out],span[class~="!text-clip"]';
-  const hardExcluded = `${liveStatus},script,style,svg,iframe,webview,pre,code,.monaco-editor,.xterm,.cm-editor,[data-ch-keep],[data-testid="project-header"],[data-testid="breadcrumb-segment"],[data-testid="settings-nav-item-Account"]`;
+  const hardExcluded = `${liveStatus},${pdfContent},script,style,svg,iframe,webview,pre,code,.monaco-editor,.xterm,.cm-editor,[data-ch-keep],[data-testid="project-header"],[data-testid="breadcrumb-segment"],[data-testid="settings-nav-item-Account"]`;
   const projectPlaceholders = new Set(['No Project','Select Project','Select Workspace','New Workspace']);
-  const generatedControl = '[data-testid="cleared-step-notice"],[data-testid="worked-for-collapsible"],[data-testid="thinking-collapsible-trigger"],[data-testid="turn-cards-container"] .files-changed-header,[data-testid="side-question-question"] > span.shrink-0,[data-testid="side-question-answer"] > span.animate-pulse,[data-testid="side-question-answer"] button[aria-expanded]:is([aria-label="Thinking..."],[aria-label="Thought Process"],[aria-label^="Thought for "]) > span';
+  const selectionActionLabel = 'button:is([data-testid="selection-quote-button"],[data-testid="selection-btw-button"]) > span:first-child';
+  const sideQuestionPanelLabel = '[data-testid="side-question-question"] > span.shrink-0';
+  const generatedControl = '[data-testid="cleared-step-notice"],[data-testid="worked-for-collapsible"],[data-testid="thinking-collapsible-trigger"],[data-testid="turn-cards-container"] .files-changed-header,[data-testid="side-question-answer"] > span.animate-pulse,[data-testid="side-question-answer"] button[aria-expanded]:is([aria-label="Thinking..."],[aria-label="Thought Process"],[aria-label^="Thought for "]) > span,[data-testid="side-question-followup-thinking"],[data-testid="side-question-waiting-status"] > span,'+sideQuestionPanelLabel+','+selectionActionLabel;
   const inputStatusControl = 'div.select-none:has(> [data-screenshot-volatile])';
   const permissionScopeLabels = {once:'Allow once',session:'Allow for this session',always:'Always allow',decline:'Decline'};
   // The app also reads aria-label as an operation key (e.g. Cancel on blur).
-  // Preserve that contract and translate only display text and display attributes.
-  const attrs = ['title', 'placeholder', 'data-placeholder', 'aria-placeholder', 'alt', 'data-tooltip'];
+  // Only translate accessible names on controls with an identified UI label.
+  const attrs = ['aria-label', 'title', 'placeholder', 'data-placeholder', 'aria-placeholder', 'alt', 'data-tooltip'];
   const attrSelector = attrs.map(a => `[${a}]`).join(',');
   const protectedCandidates = `${generatedControl},button,${attrSelector},p,form,${inputStatusControl}`;
   const observation = {subtree:true, childList:true, characterData:true, attributes:true, attributeFilter:[...attrs,'data-context-window','data-cascade-id']};
@@ -7076,37 +8070,168 @@ const navigatorGroupEntry = nativeFunctions.find(entry => entry.source.includes(
     return Boolean(status && [...status.childNodes].some(node => node.nodeType === Node.TEXT_NODE && sourceText(node).trim() === 'Waiting for user input'));
   }
   function textAllowed(el) {
-    if (!el || inLiveStatus(el) || el.closest(textExcluded) || el.closest(named)) return false;
+    if (!el || inLiveStatus(el) || el.closest(textExcluded) || el.closest(named) || el.closest(pdfContent)) return false;
     if (el.closest(authored)) return Boolean(el.closest(generatedControl)) || parentMessageButton(el) || isComputerUseControl(el) || isInputStatus(el);
     // Tool output, terminal panes and diffs contain user files and commands.
     if (el.closest('[data-testid*="terminal-output"],[data-testid*="diff-content"],[data-testid*="file-content"]')) return false;
     return true;
   }
   function attrAllowed(el, attr) {
-    if (inLiveStatus(el)) return false;
+    if (inLiveStatus(el) || el.closest(pdfContent)) return false;
     if (el.closest('script,style,svg,iframe,webview,pre,code,.monaco-editor,.xterm,.cm-editor,[data-ch-keep]')) return false;
     if (el.closest('[data-testid="project-header"],[data-testid="breadcrumb-segment"],[data-testid="settings-nav-item-Account"]')) return false;
     if (el.closest('[data-testid="conversation-row-sidebar"]') && el.tagName==='A') return false;
     if (el.closest(authored) && !el.matches('button,[role="button"]')) return false;
     if (el.closest('[contenteditable]:not([contenteditable="false"])') && !['data-placeholder','aria-placeholder'].includes(attr)) return false;
+    if (attr === 'aria-label') {
+      const id = ariaControlId(el);
+      return fixedAriaControls.has(id) || compoundAriaRules.has(id) || translationIndex.ariaControls.has(id) || Boolean(el.closest('.pdf-sdk-root'));
+    }
     return true;
   }
   function computerUseAppName(text) {
     return /^Allow Computer Use to use ["“](.+)["”]\?$/.exec(text)?.[1] ?? null;
   }
+  // These controls construct their accessible names from fixed interface text.
+  // Other aria-label values can contain filenames, answers, or operation keys.
+  const fixedAriaControls = new Set(`
+    media-modal-video-center-toggle media-modal-video-hold-2x media-modal-zoom-controls pill-comment-edit
+    browser-url-input browser-autocomplete-dropdown browser-history-delete-item preview-url-bar-open-new-tab
+    mention-menu-searching-row selection-code-search-button url-security-close url-security-back
+    webview-downloads-close builtin-browser-back builtin-browser-forward builtin-browser-reload
+    webview-url-bar-draft-reopen webview-url-bar-draft-discard webview-url-bar-inspect-button webview-url-bar-screenshot
+    webview-url-bar-open-external settings-error-messages-copy-button gcp-project-combobox-trigger setup-script-copy-button
+    browser-site-data-list voice-picker-close settings-upload-debug-bundle-button ssh-connect-host-input
+    code-block-preview-toggle media-overflow-menu agent-embed-open-button comments-modal-close
+    user-message-content ask-question-collapse-button ask-question-dismiss-button mcp-app-open-in-side-pane
+    side-question-insert-to-main palette-delete-button onboarding-back lsp-peek-references-panel
+    lsp-peek-references-close terminal-password-warning context-provider-hover-card-copy subagent-expand
+    subagent-stop plugin-detail-footer csv-filter-input csv-filter-clear
+    file-tree-filter-input file-tree-filter-clear file-diff-accordion-toggle rename-conversation-input
+    group-name-input conversation-telemetry-switch conversation-kebab conversation-archive-button
+    conversation-pin-button side-question-popout side-question-reply-input side-question-reply-send
+    side-question-resize-handle side-question-tab-stop side-question-tab-delete side-question-tab-promote
+    workspace-mismatch-menu jj-worktree-selector-trigger voice-mic-warning-dismiss
+    voice-speed-panel voice-speed-slider voice-call-controls voice-call-end
+    send-button-loading send-button queued-messages-expand-button queued-messages-card
+    live-docked marketplace-bundles-banner plugins-create-with-prompt add-mcp-button
+    marketplace-footer plugins-tabs overview-panel-customize-trigger coordinator-icon-picker
+    coordinator-name-input coordinator-goal-input coordinator-settings-name open-in-cider
+    conversation-navigator permission-target-editor plugins-visibility-trigger project-location-toggle
+    new-coordinator-button automations-status-dot new-tab-search-input voice-dock
+    voice-dock-input voice-dock-send voice-dock-compose app-icon-new-conversation-button
+    titlebar-more-actions toggle-overview-panel voice-start-button side-panel-new-tab-button
+    sidebar-toggle sidebar-search-button toggle-maximize-pane toggle-aux-sidebar
+    mobile-search-conversations mobile-toggle-aux-sidebar
+    trigger-cel-tokens trigger-cel-functions cloud-trigger-detail-kebab sidecar-detail-close
+    automation-untrusted-warning automation-error cloud-trigger-kebab new-sidecar-name
+    new-sidecar-remove-trigger new-sidecar-steps cloud-trigger-renew-all-credentials instance-selector-set-up
+    webview-url-bar-downloads conversations-palette-filter-trigger hover-card-status-item-copy model-selector-effort-info
+  `.trim().split(/\s+/));
+  // Only some parameters are themselves fixed UI labels. Other fields (file
+  // names, commands, comments) go verbatim through the scoped dictionary.
+  const compoundAriaRules = new Map([
+    ['url-security-indicator', [/^([\s\S]+)\. View site information$/, m => `${interfaceLabel(m[1])}。查看网站信息`]],
+    ['inline-keybinding-recorder', [/^Recording shortcut for ([\s\S]+)\. Press keys to bind, Enter to save, Escape to cancel\.$/, m => `正在录制“${interfaceLabel(m[1])}”的快捷键。按下要绑定的组合键，按 Enter 保存，按 Escape 取消。`]],
+    ['hover-card-status-item-copy', [/^Copy ([\s\S]+)$/, m => `复制${interfaceLabel(m[1])}`]],
+    ['skills-rules-filter', [/^Filter skills and rules: ([\s\S]+)$/, m => `筛选技能和规则：${interfaceLabel(m[1])}`]],
+    ['voice-mic-warning-switch', [/^([\s\S]+)\. Switch mic$/, m => `${translate(m[1]) ?? m[1]}。切换麦克风`]],
+    ['sidecar-new-button', [/^Add ([\s\S]+)$/, m => `添加${interfaceLabel(m[1])}`]],
+    ['settings-app-version-caption', [/^Version [\w.+-]+$/, m => translate(m[0])]],
+    ['comment-group-count', [/^\d+ comments?$/, m => translate(m[0])]],
+    ['shortcut-row', [/^(?:(Shortcut|Remove shortcut) (.+?) for (.+)|Add shortcut for (.+)|Reset (.+) to default)$/, m => {
+      if (m[5]) return `将“${interfaceLabel(m[5])}”的快捷键重置为默认值`;
+      if (m[4]) return `为“${interfaceLabel(m[4])}”添加快捷键`;
+      return m[1] === 'Shortcut' ? `“${interfaceLabel(m[3])}”的快捷键：${m[2]}` : `移除“${interfaceLabel(m[3])}”的快捷键 ${m[2]}`;
+    }]],
+    ['step-plan-chip', [/^((?:\d+\/\d+ steps)?(?: · \d+ (?:failed|skipped))*)\. (Hide|Show) plan$/, m => {
+      const counts = m[1].replace(/(\d+)\/(\d+) steps/, '已完成 $1/$2 步')
+        .replace(/(\d+) failed/, '$1 步失败').replace(/(\d+) skipped/, '已跳过 $1 步');
+      return (counts ? counts + '。' : '') + (m[2] === 'Show' ? '显示计划' : '收起计划');
+    }]],
+    ['model-selector-trigger', [/^Select model, current: /, (_, value) => translate(value)]],
+    ['project-selector-trigger', [/^Select project, current: /, (_, value) => translate(value)]],
+    ['permissions-selector-trigger', [/^Agent permissions preset(?: selector, current)?: ([^,]+)(?:, ([\s\S]+))?$/, m =>
+      `智能体权限预设：${interfaceLabel(m[1])}${m[2] ? '，' + interfaceLabel(m[2]) : ''}`]],
+  ]);
+
+  function ariaControlId(el) {
+    const id = el.getAttribute('data-testid') || '';
+    for (const prefix of ['voice-picker-dot','trigger-remove-filter','resource-connect']) {
+      if (id.startsWith(prefix + '-')) return prefix;
+    }
+    if (!id && el.matches('button') && el.closest('[data-testid^="shortcut-row-"]')) return 'shortcut-row';
+    return id;
+  }
+  function translateControlAria(id, value) {
+    if (fixedAriaControls.has(id)) {
+      const fixed = strings['aria-label:' + value] ?? strings[value];
+      if (typeof fixed === 'string' && fixed !== value) return fixed;
+    }
+    const rule = compoundAriaRules.get(id);
+    const match = rule?.[0].exec(value);
+    return match ? rule[1](match, value) : desktopTemplate(value, 'aria:' + id + ':');
+  }
   function normalizeTranslationKey(value) {
     return value.trim().replace(/\s+/g, ' ').replace(/[‘’]/g, "'").replace(/[“”]/g, '"');
   }
+  // Compile the desktop display templates when the dictionary changes. Match the
+  // original whitespace and interpolate in a single pass so names stay verbatim.
   function setStrings(next) {
     strings = next.strings || next;
-    normalizedStrings = new Map(Object.entries(strings).map(([key, value]) => [normalizeTranslationKey(key), value]));
+    const exact = new Map(), templates = new Map(), ariaControls = new Set();
+    const escape = part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    for (const [key, text] of Object.entries(strings)) {
+      const pdf = key.startsWith('pdf-template:');
+      const aria = key.startsWith('aria-template:') ? /^aria-template:([\w,-]+):/.exec(key) : null;
+      if (!pdf && !aria && !key.startsWith('desktop-template:')) {
+        exact.set(normalizeTranslationKey(key), text);
+        continue;
+      }
+      if (typeof text !== 'string') continue;
+      const source = key.slice(aria ? aria[0].length : key.indexOf(':') + 1);
+      const parts = source.split(/(\{[a-z]+\})/g);
+      if (parts.length === 1) continue;
+      const fields = new Set();
+      const pattern = parts.map((part, index) => {
+        if (index % 2 === 0) return escape(part);
+        const name = part.slice(1, -1);
+        if (fields.has(name)) return '\\k<' + name + '>';
+        fields.add(name);
+        const value = ['port', 'count', 'remaining', 'total', 'attempt', 'page'].includes(name) ? '\\d+'
+          : name === 'size' ? '\\d+(?:\\.\\d+)?' : '[\\s\\S]+?';
+        return '(?<' + name + '>' + value + ')';
+      }).join('');
+      const lead = /^[A-Za-z]+\b/.exec(parts[0])?.[0] || '';
+      const rule = {pattern:new RegExp('^' + pattern + '$'), text};
+      const scopes = aria ? aria[1].split(',').map(id => {
+        ariaControls.add(id);
+        return 'aria:' + id + ':';
+      }) : [pdf ? 'pdf:' : ''];
+      for (const scope of scopes) {
+        const prefix = scope + lead;
+        if (!templates.has(prefix)) templates.set(prefix, []);
+        templates.get(prefix).push(rule);
+      }
+    }
+    translationIndex = {exact, templates, ariaControls};
+  }
+  function desktopTemplate(value, scope = '') {
+    const first = /^[A-Za-z]+\b/.exec(value)?.[0];
+    for (const prefix of first ? [first, ''] : ['']) {
+      for (const rule of translationIndex.templates.get(scope + prefix) ?? []) {
+        const match = rule.pattern.exec(value);
+        if (match) return rule.text.replace(/\{([a-z]+)\}/g, (token, name) => match.groups[name] ?? token);
+      }
+    }
+    return null;
   }
   function duration(value) {
     return value.replace(/\b(\d+)\s*(days?|hours?|minutes?|seconds?|d|h|m|s)\b/g, (_,n,unit) => `${n}${({d:'天',day:'天',days:'天',h:'小时',hour:'小时',hours:'小时',m:'分钟',minute:'分钟',minutes:'分钟',s:'秒',second:'秒',seconds:'秒'})[unit]}`).replace(/,\s*|\s+and\s+/g,' ');
   }
   function interfaceLabel(value) {
     return Object.prototype.hasOwnProperty.call(strings, value)
-      ? strings[value] : normalizedStrings.get(normalizeTranslationKey(value)) || value;
+      ? strings[value] : translationIndex.exact.get(normalizeTranslationKey(value)) || value;
   }
   function contextSegmentLabel(value) {
     let match = /^System Prompt: ([\s\S]+)$/.exec(value);
@@ -7117,15 +8242,22 @@ const navigatorGroupEntry = nativeFunctions.find(entry => entry.source.includes(
     if (match) return `步骤 #${match[1]}${match[2] === undefined ? '' : `：${match[2]}`}（${interfaceLabel(match[3])}）`;
     return interfaceLabel(value);
   }
+  function pdfLabel(value) {
+    const match = /^([\s\S]+) annotation on page (\d+)$/.exec(value);
+    if (match) return `第 ${match[2]} 页的${strings['pdf-annotation:' + match[1]] ?? match[1]}批注`;
+    return strings['pdf:' + value] ?? desktopTemplate(value, 'pdf:');
+  }
   function translate(raw, scope = '') {
     const originalValue = raw.trim();
     const value = originalValue.replace(/\s+/g, ' ');
     if (!value) return null;
     // Prefer the original key; normalize quotes only for dictionary lookup so
     // model names and other dynamic values retain their original punctuation.
-    let translated = Object.prototype.hasOwnProperty.call(strings, value)
-      ? strings[value] : normalizedStrings.get(normalizeTranslationKey(value));
-    const appName = computerUseAppName(value);
+    let translated = scope === 'pdf' ? pdfLabel(originalValue) : null;
+    translated ??= Object.prototype.hasOwnProperty.call(strings, value)
+      ? strings[value] : translationIndex.exact.get(normalizeTranslationKey(value));
+    if (!translated) translated = desktopTemplate(originalValue);
+    const appName = computerUseAppName(originalValue);
     if (!translated && appName !== null) translated = `是否允许电脑操作功能使用“${appName}”？`;
     if (!translated) {
       const dynamic = [
@@ -7246,6 +8378,7 @@ const navigatorGroupEntry = nativeFunctions.find(entry => entry.source.includes(
         [/^Configure ([\s\S]+)$/, m => `配置 ${m[1]}`],
         [/^The ([\s\S]+) MCP server requires configuration parameters before it can be started\.$/, m => `启动 ${m[1]} MCP 服务器前需要设置配置参数。`],
         [/^(Restarted|Deleted) "([\s\S]+)"\.$/, m => `已${m[1] === 'Restarted' ? '重启' : '删除'}“${m[2]}”。`],
+        [/^Failed to (update|delete) "([\s\S]+)"$/, m => `${m[1] === 'update' ? '更新' : '删除'}“${m[2]}”失败。`],
         [/^Failed to (update|save|delete) "([\s\S]+)"$/, m => `${({update:'更新',save:'保存',delete:'删除'})[m[1]]}“${m[2]}”失败`],
         [/^No MCP servers found for "([\s\S]*)"$/, m => `未找到与“${m[1]}”匹配的 MCP 服务器`],
         [/^No plugins found for "([\s\S]*)"\.$/, m => `未找到与“${m[1]}”匹配的插件。`],
@@ -7351,6 +8484,20 @@ const navigatorGroupEntry = nativeFunctions.find(entry => entry.source.includes(
       return next;
     });
   }
+  function preserveTerminalMouseEncoding(prototype) {
+    // Antigravity restores an xterm tab from this addon's snapshot. Its bundled
+    // serializer saves mouse tracking but omits the encoding used by onData.
+    const key = '_serializeModes';
+    const original = prototype[key];
+    function serializeModes(terminal) {
+      const modes = original.apply(this, arguments);
+      const encoding = terminal._core?.coreMouseService?.activeEncoding;
+      const enable = encoding === 'SGR' ? '\x1b[?1006h' : encoding === 'SGR_PIXELS' ? '\x1b[?1016h' : '';
+      return enable && !modes.includes(enable) ? modes + enable : modes;
+    }
+    prototype[key] = serializeModes;
+    nativeMenuHooks.push({owner:prototype, key, original, wrapper:serializeModes, kind:'terminal-snapshot'});
+  }
   function installNativeMenuHooks() {
     // JavaScript confirmation dialogs never enter the page DOM. Reuse the same
     // dictionary and preserve the native call, decision and uninstall behavior.
@@ -7369,6 +8516,11 @@ const navigatorGroupEntry = nativeFunctions.find(entry => entry.source.includes(
       const descriptor=Object.getOwnPropertyDescriptor(window,key);
       if(!descriptor?.writable || typeof descriptor.value!=='function')continue;
       const original=descriptor.value;
+      if (typeof original.prototype?._serializeModes === 'function' &&
+          typeof original.prototype._serializeBufferByRange === 'function') {
+        preserveTerminalMouseEncoding(original.prototype);
+        continue;
+      }
       const source=Function.prototype.toString.call(original);
       if(source.includes('window.electronNative') && /\.showContextMenu(?:\?\.)?\(/.test(source)) {
         const wrapper=function(items,...args){return original.call(this,translatedMenu(items),...args);};
@@ -7401,14 +8553,19 @@ const navigatorGroupEntry = nativeFunctions.find(entry => entry.source.includes(
     if(node.parentElement.closest('[data-testid="project-selector-trigger"]') && !projectPlaceholders.has(node.data.trim())) return;
     const previous = texts.get(node);
     if (previous && node.data === previous.translated) return;
-    // Localize the displayed scope label while retaining the native option value.
-    const option = node.parentElement;
-    const label = option.tagName === 'OPTION' && isComputerUseControl(option)
-      ? permissionScopeLabels[option.value] : null;
-    const translated = translate(label ?? node.data);
+    const el = node.parentElement;
+    let label = node.data;
+    if (el.tagName === 'OPTION' && isComputerUseControl(el)) label = permissionScopeLabels[el.value] ?? label;
+    if (label === 'Side Question' && el.matches(selectionActionLabel+','+sideQuestionPanelLabel)) label = 'side-question:default-title';
+    if ((label === 'Help' || label === 'Help:') && el.matches(sideQuestionPanelLabel)) label = 'side-question:'+label;
+    const translated = translate(label, el.closest('.pdf-sdk-root') ? 'pdf' : '');
     if (!translated) { texts.delete(node); return; }
     texts.set(node, {original:node.data, translated});
     node.data = translated;
+  }
+  function translateAttribute(el, name, value, scope) {
+    if (name !== 'aria-label') return translate(value, scope);
+    return el.closest('.pdf-sdk-root') ? translate(value, 'pdf') : translateControlAria(ariaControlId(el), value);
   }
   function patchAttributes(el, names = attrs) {
     let record = attributes.get(el);
@@ -7428,7 +8585,7 @@ const navigatorGroupEntry = nativeFunctions.find(entry => entry.source.includes(
           if (parent.tagName === 'DIV' && title === 'Open side-by-side view') { scope = 'fork-title'; break; }
         }
       }
-      const translated = translate(current,scope);
+      const translated = translateAttribute(el, attr, current, scope);
       if (!translated) { record?.delete(attr); continue; }
       if (!record) { record=new Map();attributes.set(el,record); }
       record.set(attr, {original:current, translated});
@@ -7568,7 +8725,7 @@ const navigatorGroupEntry = nativeFunctions.find(entry => entry.source.includes(
     }
     for(const el of document.querySelectorAll(attrSelector))for(const attr of attrs){
       const s=el.getAttribute(attr)?.trim();
-      if(s && attrAllowed(el,attr) && s.length>2 && s.length<240 && /^[A-Z][A-Za-z ,.'’():!?&+\-]+$/.test(s) && !translate(s))unknown.add(s);
+      if(s && attrAllowed(el,attr) && s.length>2 && s.length<240 && /^[A-Z][A-Za-z ,.'’():!?&+\-]+$/.test(s) && !translateAttribute(el,attr,s))unknown.add(s);
     }
     return [...unknown].sort();
   }
@@ -7576,6 +8733,7 @@ const navigatorGroupEntry = nativeFunctions.find(entry => entry.source.includes(
     version:VERSION,
     contextOverridesEnabled:runtimeOptions?.contextOverridesEnabled === true,
     status:()=>({version:VERSION,active:!stopped,textNodes:texts.size,attributes:[...attributes.values()].reduce((n,m)=>n+m.size,0),batches,entries:Object.keys(strings).length,nativeMenuAdapters:nativeMenuHooks.filter(h=>h.kind==='menu').length,defaultPromptAdapters:nativeMenuHooks.filter(h=>h.kind==='default-prompt').length,statusAdapters:statusFormatters?.count??0,contextUsage:contextRings.status(),chineseTitles:contextRings.titleStatus()}),
+    setFallbackTitles:contextRings.setFallbackTitles,
     collectUnknown,
     refresh(next) { clearPending();restore();setStrings(next);statusFormatters?.setStrings(strings);pendingRoots.add(document.body);flush();return api.status(); },
     uninstall() {

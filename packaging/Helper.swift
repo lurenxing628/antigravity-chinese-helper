@@ -5,8 +5,11 @@ import Foundation
 final class HelperDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem!
     private let statusLine = NSMenuItem(title: "正在启动汉化…", action: nil, keyEquivalent: "")
+    private let titleModeLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let launchNoticeLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let toggleItem = NSMenuItem(title: "暂停汉化并恢复英文", action: #selector(toggleTranslation), keyEquivalent: "")
     private let launchItem = NSMenuItem(title: "通过助手启动 Antigravity", action: #selector(launchAntigravity), keyEquivalent: "")
+    private let restartItem = NSMenuItem(title: "重新启动并汉化", action: #selector(restartUnconnectedAntigravity), keyEquivalent: "")
     private var runner: Process?
     private var runnerLog: FileHandle?
     private var timer: Timer?
@@ -15,7 +18,15 @@ final class HelperDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidatio
     private var stopping = false
     private var launching = false
     private var lastError: String?
+    private var launchNotice: (message: String, pid: pid_t?)?
+    private var restartingPID: pid_t?
+    private var desktopRun: AntigravityRun?
     private let shutdownGracePeriod: TimeInterval = 10
+    private let antigravityURL = URL(fileURLWithPath: "/Applications/Antigravity.app", isDirectory: true)
+
+    private var canLaunchAntigravity: Bool {
+        wantsTranslation && !stopping && !isQuitting && !launching && restartingPID == nil
+    }
 
     private var homeFolder: URL { supportFolder.appendingPathComponent("application", isDirectory: true) }
     private var runtimeFolder: URL { homeFolder.appendingPathComponent("runtime", isDirectory: true) }
@@ -33,9 +44,18 @@ final class HelperDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         let menu = NSMenu()
         statusLine.isEnabled = false
         menu.addItem(statusLine)
+        titleModeLine.isEnabled = false
+        titleModeLine.isHidden = true
+        menu.addItem(titleModeLine)
+        launchNoticeLine.isEnabled = false
+        launchNoticeLine.isHidden = true
+        menu.addItem(launchNoticeLine)
         menu.addItem(NSMenuItem.separator())
         launchItem.target = self
         menu.addItem(launchItem)
+        restartItem.target = self
+        restartItem.isHidden = true
+        menu.addItem(restartItem)
         menu.addItem(item("重新加载词库", action: #selector(reloadTranslations)))
         toggleItem.target = self
         menu.addItem(toggleItem)
@@ -78,7 +98,10 @@ final class HelperDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidatio
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem === launchItem {
-            return wantsTranslation && !stopping && !isQuitting && !launching
+            return canLaunchAntigravity
+        }
+        if menuItem === restartItem {
+            return canLaunchAntigravity && !restartItem.isHidden
         }
         return menuItem.isEnabled
     }
@@ -87,8 +110,8 @@ final class HelperDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         NodeRuntime.executable(workingDirectory: runtimeFolder)
     }
 
-    private func startRunner() {
-        guard runner?.isRunning != true, !stopping, !isQuitting else { return }
+    private func startRunner(retryAttempt: Int = 0) {
+        guard wantsTranslation, runner?.isRunning != true, !stopping, !isQuitting else { return }
         runner = nil
         try? runnerLog?.close()
         runnerLog = nil
@@ -118,16 +141,10 @@ final class HelperDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             runnerLog = try HelperLog.open(at: logURL)
             process.standardOutput = runnerLog
             process.standardError = runnerLog
+            let startedAt = ProcessInfo.processInfo.systemUptime
             process.terminationHandler = { [weak self] finished in
                 DispatchQueue.main.async {
-                    guard let self = self, self.runner === finished else { return }
-                    self.runner = nil
-                    try? self.runnerLog?.close()
-                    self.runnerLog = nil
-                    if self.wantsTranslation && !self.isQuitting && !self.stopping {
-                        self.lastError = "运行已结束（\(finished.terminationStatus)），点“重新加载词库”重试"
-                    }
-                    self.refreshStatus()
+                    self?.runnerExited(finished, startedAt: startedAt, retryAttempt: retryAttempt)
                 }
             }
             try process.run()
@@ -138,6 +155,31 @@ final class HelperDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             lastError = "启动失败：\(error.localizedDescription)"
             try? runnerLog?.close()
             runnerLog = nil
+        }
+        refreshStatus()
+    }
+
+    private func runnerExited(_ finished: Process, startedAt: TimeInterval, retryAttempt: Int) {
+        guard runner === finished else { return }
+        try? runnerLog?.close()
+        runnerLog = nil
+        let delays = [2, 5, 15]
+        let nextAttempt = ProcessInfo.processInfo.systemUptime - startedAt >= 60 ? 0 : retryAttempt
+        let crashed = finished.terminationReason == .uncaughtSignal || finished.terminationStatus != 0
+        if wantsTranslation, !stopping, !isQuitting, crashed, nextAttempt < delays.count {
+            let delay = delays[nextAttempt]
+            lastError = "汉化后台意外退出（\(finished.terminationStatus)），\(delay) 秒后自动重试"
+            DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(delay)) { [weak self] in
+                // Manual restart replaces this process. Pausing clears it.
+                guard let self = self, self.runner === finished else { return }
+                self.startRunner(retryAttempt: nextAttempt + 1)
+            }
+        } else {
+            runner = nil
+            if wantsTranslation, !stopping, !isQuitting {
+                lastError = crashed ? "汉化后台连续退出，请检查 helper.log 后点“重新加载词库”重试"
+                                    : "汉化后台已停止，点“重新加载词库”恢复"
+            }
         }
         refreshStatus()
     }
@@ -173,9 +215,12 @@ final class HelperDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidatio
     private func refreshStatus() {
         defer { statusItem.button?.toolTip = "Antigravity 汉化助手：\(statusLine.title)" }
         toggleItem.title = wantsTranslation ? "暂停汉化并恢复英文" : "恢复汉化"
-        toggleItem.isEnabled = !stopping && !launching
+        toggleItem.isEnabled = !stopping && !launching && restartingPID == nil
         launchItem.title = launching ? "正在启动 Antigravity…" : "通过助手启动 Antigravity"
-        launchItem.isEnabled = wantsTranslation && !stopping && !isQuitting && !launching
+        launchItem.isEnabled = canLaunchAntigravity
+        restartItem.isHidden = true
+        titleModeLine.isHidden = true
+        launchNoticeLine.isHidden = true
         if stopping {
             return
         }
@@ -187,17 +232,124 @@ final class HelperDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidatio
             statusLine.title = error
             return
         }
+        if restartingPID != nil {
+            statusLine.title = "正在正常退出 Antigravity，以便重新启动汉化…"
+            return
+        }
         guard runner?.isRunning == true else {
             statusLine.title = "汉化助手尚未运行"
             return
         }
-        let path = supportFolder.appendingPathComponent("status.json")
-        guard let data = try? Data(contentsOf: path),
-              let value = try? JSONDecoder().decode(RunnerStatus.self, from: data) else {
-            statusLine.title = launching ? "正在通过助手启动 Antigravity…" : "正在连接 Antigravity…"
+        if launching {
+            statusLine.title = "正在通过助手启动 Antigravity…"
             return
         }
-        statusLine.title = launching ? "正在通过助手启动 Antigravity…" : value.menuTitle
+        guard let value = readRunnerStatus() else {
+            statusLine.title = "正在连接 Antigravity…"
+            return
+        }
+        statusLine.title = value.menuTitle
+        let runningApp = runningAntigravity()
+        let pid = runningApp?.processIdentifier
+        if let previous = launchNotice?.pid, previous != pid {
+            launchNotice = nil
+        } else if let pid {
+            launchNotice?.pid = pid
+        }
+        if let notice = launchNotice?.message {
+            launchNoticeLine.title = notice
+            launchNoticeLine.isHidden = false
+        }
+        guard let app = runningApp else { return }
+        if let titleMode = value.titleModeDescription {
+            titleModeLine.title = titleMode
+            titleModeLine.isHidden = false
+        }
+        let now = Date()
+        guard canRestart(app, status: value, now: now) else { return }
+        restartItem.isHidden = false
+        if let failure = desktopRun?.restartFailure {
+            statusLine.title = failure
+        } else if desktopRun?.needsAutomaticRestart(status: value, now: now) == true {
+            restartAntigravity(app)
+        } else {
+            statusLine.title = "Antigravity 已打开 · 等待连接本机调试接口"
+        }
+    }
+
+    private func readRunnerStatus() -> RunnerStatus? {
+        let path = supportFolder.appendingPathComponent("status.json")
+        guard let runner, runner.isRunning, let data = try? Data(contentsOf: path),
+              let status = try? JSONDecoder().decode(RunnerStatus.self, from: data),
+              status.pid == runner.processIdentifier else { return nil }
+        return status
+    }
+
+    private func runningAntigravity() -> NSRunningApplication? {
+        NSRunningApplication.runningApplications(withBundleIdentifier: AntigravityLaunchState.bundleIdentifier).first {
+            !$0.isTerminated && $0.bundleURL?.standardizedFileURL.path == antigravityURL.path
+        }
+    }
+
+    private func observeDesktopRun(_ app: NSRunningApplication) {
+        let pid = app.processIdentifier
+        guard let launchDate = AntigravityRun.launchDate(of: pid) else { desktopRun = nil; return }
+        if let run = desktopRun, run.pid == pid, run.launchDate == launchDate,
+           run.debugPortRequested != nil || run.restartFailure != nil { return }
+        desktopRun = AntigravityRun(pid: pid, launchDate: launchDate, debugPortRequested: AntigravityRun.debugPortRequested(by: pid))
+    }
+
+    private func canRestart(_ app: NSRunningApplication, status: RunnerStatus, now: Date) -> Bool {
+        guard canLaunchAntigravity, status.isWaitingForApp else { return false }
+        observeDesktopRun(app)
+        if status.discoveredAt == nil { return true } // Older runners reported only the waiting state.
+        guard let launchDate = desktopRun?.launchDate else { return false }
+        return status.discoveryDate(since: launchDate, now: now) != nil
+    }
+
+    @objc private func restartUnconnectedAntigravity() {
+        guard let app = runningAntigravity(), let status = readRunnerStatus(), canRestart(app, status: status, now: Date()) else {
+            refreshStatus()
+            return
+        }
+        restartAntigravity(app)
+    }
+
+    private func restartAntigravity(_ app: NSRunningApplication) {
+        guard canLaunchAntigravity, !app.isTerminated else { return }
+        logRecovery("请求 Desktop 正常退出（PID \(app.processIdentifier)）")
+        let pid = app.processIdentifier
+        desktopRun?.restartFailure = nil
+        guard app.terminate() else {
+            logRecovery("Desktop 拒绝退出")
+            desktopRun?.restartFailure = "Antigravity 未接受退出请求 · 可在菜单中重试"
+            refreshStatus()
+            return
+        }
+        restartingPID = pid
+        refreshStatus()
+        waitForAntigravityExit(until: .now() + 20)
+    }
+
+    private func waitForAntigravityExit(until deadline: DispatchTime) {
+        guard !isQuitting, wantsTranslation, let pid = restartingPID else { return }
+        // LaunchServices may keep this object's isTerminated false after the PID exits.
+        if AntigravityRun.hasExited(pid: pid, launchedAt: desktopRun?.launchDate) {
+            logRecovery("Desktop 已退出，准备重新启动")
+            restartingPID = nil
+            launchAntigravity()
+            return
+        }
+        guard DispatchTime.now() < deadline else {
+            logRecovery("等待 Desktop 退出超时")
+            restartingPID = nil
+            desktopRun?.restartFailure = "Antigravity 仍在运行 · 可在菜单中重试"
+            refreshStatus()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            self?.waitForAntigravityExit(until: deadline)
+        }
     }
 
     private struct LaunchReply: Decodable {
@@ -205,9 +357,14 @@ final class HelperDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidatio
         let message: String
     }
 
+    private func logRecovery(_ message: String) {
+        try? runnerLog?.write(contentsOf: Data("[Desktop] \(message)\n".utf8))
+    }
+
     @objc private func launchAntigravity() {
-        guard wantsTranslation, !stopping, !isQuitting, !launching else { return }
+        guard canLaunchAntigravity else { return }
         launching = true
+        launchNotice = nil
         if runner?.isRunning != true { startRunner() }
         refreshStatus()
         waitForLaunchRunner(until: Date().addingTimeInterval(5))
@@ -260,7 +417,8 @@ final class HelperDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidatio
                     if process.terminationStatus != 0 {
                         self.finishLaunch(message: errorText.isEmpty ? "启动 Antigravity 失败。" : errorText, failed: true)
                     } else if let reply = try? JSONDecoder().decode(LaunchReply.self, from: data) {
-                        self.finishLaunch(message: reply.launched ? nil : reply.message, failed: false)
+                        self.logRecovery(reply.launched ? "已启动汉化 Desktop" : "本次没有启动新 Desktop：\(reply.message)")
+                        self.finishLaunch(message: reply.message, failed: false)
                     } else {
                         self.finishLaunch(message: "无法读取 Antigravity 启动结果。", failed: true)
                     }
@@ -275,12 +433,16 @@ final class HelperDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidatio
 
     private func finishLaunch(message: String?, failed: Bool) {
         launching = false
+        if failed, let message { logRecovery("启动失败：\(message)") }
+        if !failed, let message, !message.isEmpty {
+            launchNotice = (message, runningAntigravity()?.processIdentifier)
+        }
         refreshStatus()
-        guard !isQuitting, let message = message, !message.isEmpty else { return }
+        guard failed, !isQuitting, let message = message, !message.isEmpty else { return }
         let alert = NSAlert()
-        alert.messageText = failed ? "无法启动 Antigravity" : "Antigravity 启动提示"
+        alert.messageText = "无法启动 Antigravity"
         alert.informativeText = message
-        alert.alertStyle = failed ? .warning : .informational
+        alert.alertStyle = .warning
         alert.addButton(withTitle: "好")
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
@@ -310,7 +472,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidatio
     }
 
     @objc private func toggleTranslation() {
-        guard !stopping else { return }
+        guard !stopping, !launching, restartingPID == nil else { return }
         wantsTranslation.toggle()
         if wantsTranslation {
             startRunner()

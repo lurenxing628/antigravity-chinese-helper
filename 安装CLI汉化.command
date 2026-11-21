@@ -19,12 +19,11 @@ for entry in agy-zh agyzh agyz; do
 done
 
 runtime_files=(
-    cli.mjs cli-context.mjs context-policy.mjs cli-localization.mjs cli-display.mjs
-    cli-notice-localization.mjs cli-status-localization.mjs cli-title-localization.mjs
-    cli-hud.mjs cli-hud-render.mjs cli-hud-metrics.mjs
-    native-copy.mjs backend-metadata.mjs backend-layout.mjs
+    "$source_dir"/runtime/cli*.mjs(:t)
+    context-policy.mjs
+    native-copy.mjs native-title.mjs native-strings.mjs backend-metadata.mjs backend-layout.mjs
     backend-runtime.mjs backend-hook.js backend-mach.c cli-launch.c
-    translations.json
+    translations.json cli-release-notes.zh-CN.json
 )
 for file in "${runtime_files[@]}"; do
     if [[ ! -f "$source_dir/runtime/$file" ]]; then
@@ -37,6 +36,8 @@ mkdir -p "$runtime_dir" "$bin_dir"
 for file in "${runtime_files[@]}"; do
     /bin/cp "$source_dir/runtime/$file" "$runtime_dir/$file"
 done
+# The launcher includes cli-*.mjs files in its build-cache inputs.
+/bin/rm -f "$runtime_dir/cli-title-localization.mjs"
 
 temporary_launcher=$(/usr/bin/mktemp "$bin_dir/.agy-zh.XXXXXX")
 trap '/bin/rm -f "$temporary_launcher"' EXIT
